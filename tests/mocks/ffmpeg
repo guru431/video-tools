@@ -13,6 +13,9 @@
 LOG_FILE="${MOCK_FFMPEG_LOG:-/tmp/mock_ffmpeg_calls.txt}"
 ENCODERS="${MOCK_FFMPEG_ENCODERS:-}"
 FAIL="${MOCK_FFMPEG_FAIL:-0}"
+BITRATE="${MOCK_FFMPEG_BITRATE:-2000}"
+DURATION="${MOCK_FFMPEG_DURATION:-00:01:00.00}"
+AUDIO_CODEC="${MOCK_FFMPEG_AUDIO_CODEC:-aac}"
 
 # Записать полный вызов в лог
 echo "$@" >> "$LOG_FILE"
@@ -33,6 +36,20 @@ fi
 if [[ "$*" == *"-version"* ]]; then
     echo "ffmpeg version 6.0 (mock)"
     exit 0
+fi
+
+# При наличии -i — всегда выводить медиа-информацию в stderr
+# (как реальный ffmpeg при любом вызове с -i)
+if [[ "$*" == *" -i "* ]] || [[ "$*" == "-i "* ]]; then
+    cat << MEDIAEOF >&2
+ffmpeg version 6.0 (mock)
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'input.mp4':
+  Metadata:
+    encoder         : Lavf58.76.100
+  Duration: ${DURATION}, start: 0.000000, bitrate: ${BITRATE} kb/s
+    Stream #0:0(und): Video: h264 (High), yuv420p, 1920x1080, 1808 kb/s, 30 fps, 30 tbr, 15360 tbn
+    Stream #0:1(und): Audio: ${AUDIO_CODEC}, 48000 Hz, stereo, fltp, 192 kb/s
+MEDIAEOF
 fi
 
 # Имитация прогресса для -progress

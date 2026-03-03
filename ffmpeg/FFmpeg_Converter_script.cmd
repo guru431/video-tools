@@ -252,12 +252,15 @@ if "%merge_files%"=="yes" (
 		:: --- I. Извлечение аудио без перекодирования ---
 		if "%extract_audio_copy%"=="yes" (
 			set "audio_ext=mka"
-			for /f "tokens=*" %%c in ('"%ffmpeg% -v quiet -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "!full_path!" 2>&1"') do (
-				if "%%c"=="aac"    set "audio_ext=m4a"
-				if "%%c"=="mp3"    set "audio_ext=mp3"
-				if "%%c"=="opus"   set "audio_ext=opus"
-				if "%%c"=="vorbis" set "audio_ext=ogg"
-				if "%%c"=="flac"   set "audio_ext=flac"
+			set "audio_line="
+			for /f "delims=" %%c in ('%ffmpeg% -i "!full_path!" 2^>^&1 ^| find "Audio:"') do set "audio_line=%%c"
+			if not "!audio_line!"=="" (
+				if not "!audio_line:Audio: aac=!"=="!audio_line!" set "audio_ext=m4a"
+				if not "!audio_line:Audio: mp3=!"=="!audio_line!" set "audio_ext=mp3"
+				if not "!audio_line:Audio: opus=!"=="!audio_line!" set "audio_ext=opus"
+				if not "!audio_line:Audio: vorbis=!"=="!audio_line!" set "audio_ext=ogg"
+				if not "!audio_line:Audio: flac=!"=="!audio_line!" set "audio_ext=flac"
+				if not "!audio_line:Audio: pcm_=!"=="!audio_line!" set "audio_ext=wav"
 			)
 			set "out_audio=%folder_destination%!file_path!!file_name!.!audio_ext!"
 			if not exist "!out_audio!" (

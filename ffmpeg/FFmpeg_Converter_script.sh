@@ -4,16 +4,6 @@
 # FFmpeg Converter Script (Bash)
 # ============================================================
 
-# --- Определение ffprobe рядом с ffmpeg ---
-ffprobe_dir="$(dirname "$ffmpeg")"
-if [ "$ffprobe_dir" != "." ] && [ -x "$ffprobe_dir/ffprobe" ]; then
-	ffprobe="$ffprobe_dir/ffprobe"
-elif [ "$ffprobe_dir" != "." ] && [ -f "$ffprobe_dir/ffprobe.exe" ]; then
-	ffprobe="$ffprobe_dir/ffprobe.exe"
-else
-	ffprobe="ffprobe"
-fi
-
 # --- E1. Проверка окружения ---
 if [ ! -d "$folder_sources" ]; then
 	echo -e "\n[ОШИБКА] Папка источника не найдена: $folder_sources\n"
@@ -309,7 +299,7 @@ encode_file() {
 	# --- I. Извлечение аудио без перекодирования ---
 	if [ "$extract_audio_copy" = "yes" ]; then
 		local codec ext out_audio
-		codec=$("$ffprobe" -v quiet -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$full_path" 2>/dev/null)
+		codec=$("$ffmpeg" -i "$full_path" 2>&1 | grep -i 'Audio:' | head -1 | sed 's/.*Audio: \([a-z0-9_]*\).*/\1/')
 		case "$codec" in
 			aac)    ext="m4a"  ;;
 			mp3)    ext="mp3"  ;;
@@ -365,14 +355,9 @@ encode_file() {
 		return
 	fi
 
-	# E4. Получение битрейта через ffprobe
+	# E4. Получение битрейта
 	local src_bitrate=""
-	if command -v "$ffprobe" &> /dev/null; then
-		src_bitrate=$("$ffprobe" -v quiet -show_entries format=bit_rate -of default=noprint_wrappers=1:nokey=1 "$full_path" 2>/dev/null)
-		if [ -n "$src_bitrate" ]; then src_bitrate=$((src_bitrate / 1000)); fi
-	else
-		src_bitrate=$("$ffmpeg" -i "$full_path" 2>&1 | grep -i 'bitrate:' | head -1 | grep -o 'bitrate: [0-9]*' | sed 's/bitrate: //')
-	fi
+	src_bitrate=$("$ffmpeg" -i "$full_path" 2>&1 | grep -i 'bitrate:' | head -1 | grep -o 'bitrate: [0-9]*' | sed 's/bitrate: //')
 
 	local set_video_bitrate_final=""
 	if [ "$video_bitrate_status" = "+" ] && [ "$video_quality_status" != "+" ]; then
@@ -393,18 +378,10 @@ encode_file() {
 
 	# --- J1. Получение длительности (для прогресс-бара и split) ---
 	local file_duration=0
-	if command -v "$ffprobe" &> /dev/null; then
-		local dur_raw
-		dur_raw=$("$ffprobe" -v quiet -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$full_path" 2>/dev/null)
-		if [ -n "$dur_raw" ]; then
-			file_duration=$(awk "BEGIN {printf \"%d\", $dur_raw}")
-		fi
-	else
-		local dur_str=$("$ffmpeg" -i "$full_path" 2>&1 | grep -i Duration: | grep -o '[0-9][0-9]*:[0-9][0-9]*:[0-9][0-9]*')
-		if [ -n "$dur_str" ]; then
-			IFS=':' read -r x y z <<< "$dur_str"
-			file_duration=$((${x#0}*3600+${y#0}*60+${z#0}))
-		fi
+	local dur_str=$("$ffmpeg" -i "$full_path" 2>&1 | grep -i Duration: | grep -o '[0-9][0-9]*:[0-9][0-9]*:[0-9][0-9]*')
+	if [ -n "$dur_str" ]; then
+		IFS=':' read -r x y z <<< "$dur_str"
+		file_duration=$((${x#0}*3600+${y#0}*60+${z#0}))
 	fi
 
 	# Видео-фильтры

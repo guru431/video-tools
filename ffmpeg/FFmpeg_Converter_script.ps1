@@ -2,14 +2,6 @@
 # FFmpeg Converter Script (PowerShell)
 # ============================================================
 
-# --- Определение ffprobe рядом с ffmpeg ---
-$_ffmpegDir = Split-Path $ffmpeg -Parent
-if ($_ffmpegDir -and (Test-Path (Join-Path $_ffmpegDir "ffprobe.exe"))) {
-	$ffprobe = Join-Path $_ffmpegDir "ffprobe.exe"
-} else {
-	$ffprobe = "ffprobe"
-}
-
 # --- E1. Проверка окружения ---
 if (!(Test-Path $folder_sources)) {
 	Write-Host "`n[ОШИБКА] Папка источника не найдена: $folder_sources`n"
@@ -321,7 +313,8 @@ function Encode-File {
 
 	# --- I. Извлечение аудио без перекодирования ---
 	if ($extract_audio_copy -eq "yes") {
-		$codec = & $ffprobe -v quiet -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 $full_path 2>&1
+		$audioLine = (& $ffmpeg -i $full_path 2>&1 | Out-String) -split "`n" | Where-Object { $_ -match 'Audio:' } | Select-Object -First 1
+		$codec = if ($audioLine -match 'Audio:\s+(\w+)') { $Matches[1] } else { '' }
 		$ext = switch -Regex ($codec) {
 			'^aac$'    { 'm4a'  }
 			'^mp3$'    { 'mp3'  }
@@ -383,17 +376,10 @@ function Encode-File {
 		return
 	}
 
-	# E4. Получение битрейта через ffprobe
+	# E4. Получение битрейта
 	$src_bitrate = $null
-	try {
-		$probe_out = & $ffprobe -v quiet -show_entries format=bit_rate -of default=noprint_wrappers=1:nokey=1 $full_path 2>&1
-		if ($probe_out -match '^\d+$') {
-			$src_bitrate = [int]([long]$probe_out / 1000)
-		}
-	} catch {
-		$bitrate_match = [regex]::Match((& $ffmpeg -i $full_path 2>&1 | Out-String), "bitrate:\s+(\d+)\s*kb/s")
-		if ($bitrate_match.Success) { $src_bitrate = [int]$bitrate_match.Groups[1].Value }
-	}
+	$bitrate_match = [regex]::Match((& $ffmpeg -i $full_path 2>&1 | Out-String), "bitrate:\s+(\d+)\s*kb/s")
+	if ($bitrate_match.Success) { $src_bitrate = [int]$bitrate_match.Groups[1].Value }
 
 	$set_video_bitrate_final = @()
 	if ($video_bitrate_status -eq "+" -and $video_quality_status -ne "+") {
@@ -416,14 +402,9 @@ function Encode-File {
 
 	# --- J1. Получение длительности (для прогресс-бара и split) ---
 	$fileDuration = 0
-	try {
-		$dur_probe = & $ffprobe -v quiet -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 $full_path 2>&1
-		$fileDuration = [double]$dur_probe
-	} catch {
-		$dur_match = [regex]::Match((& $ffmpeg -i $full_path 2>&1 | Out-String), "Duration:\s+(\d+):(\d+):(\d+)")
-		if ($dur_match.Success) {
-			$fileDuration = [int]$dur_match.Groups[1].Value * 3600 + [int]$dur_match.Groups[2].Value * 60 + [int]$dur_match.Groups[3].Value
-		}
+	$dur_match = [regex]::Match((& $ffmpeg -i $full_path 2>&1 | Out-String), "Duration:\s+(\d+):(\d+):(\d+)")
+	if ($dur_match.Success) {
+		$fileDuration = [int]$dur_match.Groups[1].Value * 3600 + [int]$dur_match.Groups[2].Value * 60 + [int]$dur_match.Groups[3].Value
 	}
 
 	# Видео/аудио фильтры для текущего файла

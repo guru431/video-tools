@@ -1,0 +1,33 @@
+#!/bin/bash
+# ============================================================
+# Mock ffprobe — возвращает фиктивные данные о медиафайле
+# ============================================================
+
+# Если запрашивают -show_entries format= — проверяем формат вывода
+if [[ "$*" == *"-show_entries"* ]] && [[ "$*" == *"format="* ]]; then
+    # noprint_wrappers=1:nokey=1 -> только значение
+    if [[ "$*" == *"noprint_wrappers=1"* ]] || [[ "$*" == *"nokey=1"* ]]; then
+        if [[ "$*" == *"bit_rate"* ]]; then echo "2000000"; fi
+        if [[ "$*" == *"duration"* ]]; then echo "60.000000"; fi
+        exit 0
+    fi
+    # формат по умолчанию (ini)
+    echo "[FORMAT]"
+    echo "duration=60.000000"
+    echo "bit_rate=2000000"
+    echo "[/FORMAT]"
+    exit 0
+fi
+
+# Дефолтный вывод в стиле ffprobe stderr (текстовый)
+cat << 'EOF'
+ffprobe version 6.0 (mock)
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'input.mp4':
+  Metadata:
+    encoder         : Lavf58.76.100
+  Duration: 00:01:00.00, start: 0.000000, bitrate: 2000 kb/s
+    Stream #0:0(und): Video: h264 (High), yuv420p, 1920x1080, 1808 kb/s, 30 fps, 30 tbr, 15360 tbn
+    Stream #0:1(und): Audio: aac, 48000 Hz, stereo, fltp, 192 kb/s
+EOF
+
+exit 0

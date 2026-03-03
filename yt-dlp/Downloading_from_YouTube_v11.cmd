@@ -124,14 +124,16 @@ if %quality%==92 (
 )
 
 :: avc1_best (по умолчанию)
+:: Примечание: избегаем ext!=webm — символ ! съедается delayed expansion.
+:: Используем ext=m4a с fallback на bestaudio (эквивалентно для YouTube).
 if %fmt%==0 (
-    if %quality%==0 set "save_settings=-f bestaudio[ext!=webm]"
-    if %quality%==1 set "save_settings=-f "bestaudio[ext!=webm]+bestvideo[height<=360][vcodec^=avc1]""
-    if %quality%==2 set "save_settings=-f "bestaudio[ext!=webm]+bestvideo[height<=480][vcodec^=avc1]""
-    if %quality%==3 set "save_settings=-f "bestaudio[ext!=webm]+bestvideo[height<=720][vcodec^=avc1]""
-    if %quality%==4 set "save_settings=-f "bestaudio[ext!=webm]+bestvideo[height<=1080][vcodec^=avc1]""
-    if %quality%==5 set "save_settings=-f "bestaudio[ext!=webm]+bestvideo[height<=1440][vcodec^=avc1]""
-    if %quality%==6 set "save_settings=-f "bestaudio[ext!=webm]+bestvideo[height<=2160][vcodec^=avc1]""
+    if %quality%==0 set "save_settings=-f bestaudio[ext=m4a]/bestaudio"
+    if %quality%==1 set "save_settings=-f "bestaudio[ext=m4a]+bestvideo[height<=360][vcodec^=avc1]/bestaudio+bestvideo[height<=360][vcodec^=avc1]""
+    if %quality%==2 set "save_settings=-f "bestaudio[ext=m4a]+bestvideo[height<=480][vcodec^=avc1]/bestaudio+bestvideo[height<=480][vcodec^=avc1]""
+    if %quality%==3 set "save_settings=-f "bestaudio[ext=m4a]+bestvideo[height<=720][vcodec^=avc1]/bestaudio+bestvideo[height<=720][vcodec^=avc1]""
+    if %quality%==4 set "save_settings=-f "bestaudio[ext=m4a]+bestvideo[height<=1080][vcodec^=avc1]/bestaudio+bestvideo[height<=1080][vcodec^=avc1]""
+    if %quality%==5 set "save_settings=-f "bestaudio[ext=m4a]+bestvideo[height<=1440][vcodec^=avc1]/bestaudio+bestvideo[height<=1440][vcodec^=avc1]""
+    if %quality%==6 set "save_settings=-f "bestaudio[ext=m4a]+bestvideo[height<=2160][vcodec^=avc1]/bestaudio+bestvideo[height<=2160][vcodec^=avc1]""
 )
 :: avc1_https
 if %fmt%==1 (

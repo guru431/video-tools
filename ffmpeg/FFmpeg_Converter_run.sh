@@ -8,8 +8,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONFIG_FILE="${SCRIPT_DIR}/config.ini"
 
 # --- Авто-определение ffmpeg рядом со скриптом ---
-if [ -x "$SCRIPT_DIR/ffmpeg" ] || [ -f "$SCRIPT_DIR/ffmpeg.exe" ]; then
+if [ -x "$SCRIPT_DIR/ffmpeg" ]; then
 	ffmpeg="$SCRIPT_DIR/ffmpeg"
+elif [ -f "$SCRIPT_DIR/ffmpeg.exe" ]; then
+	ffmpeg="$SCRIPT_DIR/ffmpeg.exe"
 else
 	ffmpeg="ffmpeg"
 fi

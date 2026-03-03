@@ -1,0 +1,76 @@
+#!/bin/bash
+# ============================================================
+# Mock ffmpeg — перехватывает аргументы, имитирует работу
+#
+# Переменные окружения для управления поведением:
+#   MOCK_FFMPEG_ENCODERS=nvenc  — вернуть "nvenc" при -encoders
+#   MOCK_FFMPEG_ENCODERS=qsv   — вернуть "qsv" при -encoders
+#   MOCK_FFMPEG_ENCODERS=       — пустой список (по умолчанию)
+#   MOCK_FFMPEG_FAIL=1         — вернуть exit code 1
+#   MOCK_FFMPEG_LOG=           — путь к файлу лога (по умолчанию /tmp/mock_ffmpeg_calls.txt)
+# ============================================================
+
+LOG_FILE="${MOCK_FFMPEG_LOG:-/tmp/mock_ffmpeg_calls.txt}"
+ENCODERS="${MOCK_FFMPEG_ENCODERS:-}"
+FAIL="${MOCK_FFMPEG_FAIL:-0}"
+
+# Записать полный вызов в лог
+echo "$@" >> "$LOG_FILE"
+
+# Если -encoders — вернуть список кодеков
+if [[ "$*" == *"-encoders"* ]]; then
+    echo "Encoders:"
+    echo " V..... libx264"
+    echo " V..... libx265"
+    echo " V..... libsvtav1"
+    if [ -n "$ENCODERS" ]; then
+        echo " V..... ${ENCODERS}_example"
+    fi
+    exit 0
+fi
+
+# Если -version — вернуть версию
+if [[ "$*" == *"-version"* ]]; then
+    echo "ffmpeg version 6.0 (mock)"
+    exit 0
+fi
+
+# Имитация прогресса для -progress
+PROGRESS_FILE=""
+PREV_ARG=""
+for arg in "$@"; do
+    if [ "$PREV_ARG" = "-progress" ]; then
+        PROGRESS_FILE="$arg"
+        break
+    fi
+    PREV_ARG="$arg"
+done
+
+if [ -n "$PROGRESS_FILE" ] && [ "$PROGRESS_FILE" != "pipe:1" ]; then
+    {
+        echo "frame=25"
+        echo "fps=25.0"
+        echo "stream_0_0_q=28.0"
+        echo "bitrate=500.0kbits/s"
+        echo "total_size=62500"
+        echo "out_time_us=1000000"
+        echo "out_time=00:00:01.000000"
+        echo "dup_frames=0"
+        echo "drop_frames=0"
+        echo "speed=1.0x"
+        echo "progress=end"
+    } > "$PROGRESS_FILE"
+fi
+
+# Создать выходной файл (если указан -i и выходной аргумент)
+# Последний аргумент не начинающийся с - = выходной файл
+LAST_ARG=""
+for arg in "$@"; do
+    [[ "$arg" != -* ]] && LAST_ARG="$arg"
+done
+if [ -n "$LAST_ARG" ] && [[ "$LAST_ARG" != *"pipe:"* ]]; then
+    touch "$LAST_ARG" 2>/dev/null || true
+fi
+
+[ "$FAIL" = "1" ] && exit 1
+exit 0

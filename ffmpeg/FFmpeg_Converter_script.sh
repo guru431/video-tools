@@ -6,8 +6,10 @@
 
 # --- Определение ffprobe рядом с ffmpeg ---
 ffprobe_dir="$(dirname "$ffmpeg")"
-if [ "$ffprobe_dir" != "." ] && { [ -x "$ffprobe_dir/ffprobe" ] || [ -f "$ffprobe_dir/ffprobe.exe" ]; }; then
+if [ "$ffprobe_dir" != "." ] && [ -x "$ffprobe_dir/ffprobe" ]; then
 	ffprobe="$ffprobe_dir/ffprobe"
+elif [ "$ffprobe_dir" != "." ] && [ -f "$ffprobe_dir/ffprobe.exe" ]; then
+	ffprobe="$ffprobe_dir/ffprobe.exe"
 else
 	ffprobe="ffprobe"
 fi
@@ -28,7 +30,7 @@ if [ ! -d "$folder_destination" ]; then
 	fi
 fi
 
-if ! command -v $ffmpeg &> /dev/null; then
+if ! command -v "$ffmpeg" &> /dev/null; then
 	echo -e "\n[ОШИБКА] ffmpeg не найден: $ffmpeg\n"
 	read -p "Нажмите [Enter], чтобы выйти..."
 	exit 1
@@ -82,7 +84,7 @@ hw_decode_args=""
 if [ "$hw_accel_status" = "+" ]; then
 	case "$hw_accel_value" in
 		nvidia)
-			if $ffmpeg -encoders 2>/dev/null | grep -q nvenc; then
+			if "$ffmpeg" -encoders 2>/dev/null | grep -q nvenc; then
 				use_hw_accel="yes"
 				hw_accel_type="nvidia"
 				hw_decode_args="-hwaccel cuda -hwaccel_output_format cuda"
@@ -96,7 +98,7 @@ if [ "$hw_accel_status" = "+" ]; then
 			fi
 			;;
 		intel)
-			if $ffmpeg -encoders 2>/dev/null | grep -q qsv; then
+			if "$ffmpeg" -encoders 2>/dev/null | grep -q qsv; then
 				use_hw_accel="yes"
 				hw_accel_type="intel"
 				hw_decode_args="-hwaccel qsv -hwaccel_output_format qsv"
@@ -307,7 +309,7 @@ encode_file() {
 	# --- I. Извлечение аудио без перекодирования ---
 	if [ "$extract_audio_copy" = "yes" ]; then
 		local codec ext out_audio
-		codec=$($ffprobe -v quiet -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$full_path" 2>/dev/null)
+		codec=$("$ffprobe" -v quiet -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$full_path" 2>/dev/null)
 		case "$codec" in
 			aac)    ext="m4a"  ;;
 			mp3)    ext="mp3"  ;;
@@ -323,7 +325,7 @@ encode_file() {
 			return
 		fi
 		log_msg "INFO" "Извлечение аудио: $(basename "$full_path")"
-		$ffmpeg -hide_banner -strict -2 -i "$full_path" -vn -c:a copy "$out_audio" -y
+		"$ffmpeg" -hide_banner -strict -2 -i "$full_path" -vn -c:a copy "$out_audio" -y
 		if [ $? -ne 0 ]; then
 			log_msg "FAIL" "$(basename "$full_path")"
 			rm -f "$out_audio"
@@ -342,7 +344,7 @@ encode_file() {
 		if [ ! -d "${folder_destination}${file_path}${file_name}" ]; then
 			mkdir -p "$folder_destination$file_path$file_name"
 			log_msg "INFO" "Извлечение кадров: $full_path"
-			$ffmpeg -hide_banner -strict -2 -i "$full_path" -r 1/1 "$folder_destination$file_path$file_name/${file_name}_%05d.png"
+			"$ffmpeg" -hide_banner -strict -2 -i "$full_path" -r 1/1 "$folder_destination$file_path$file_name/${file_name}_%05d.png"
 		fi
 		return
 	fi
@@ -350,7 +352,7 @@ encode_file() {
 	local current_format_out="$format_files_out"
 	if [ -f "${folder_destination}${file_path}${file_name}.${current_format_out}" ]; then
 		# E3. Проверка валидности существующего файла
-		if $ffmpeg -v error -i "${folder_destination}${file_path}${file_name}.${current_format_out}" -f null - 2>/dev/null; then
+		if "$ffmpeg" -v error -i "${folder_destination}${file_path}${file_name}.${current_format_out}" -f null - 2>/dev/null; then
 			echo "skip" > "$results_dir/r_$$_$(date +%s%N 2>/dev/null || date +%s)_$RANDOM"
 			return
 		else
@@ -365,11 +367,11 @@ encode_file() {
 
 	# E4. Получение битрейта через ffprobe
 	local src_bitrate=""
-	if command -v $ffprobe &> /dev/null; then
-		src_bitrate=$($ffprobe -v quiet -show_entries format=bit_rate -of default=noprint_wrappers=1:nokey=1 "$full_path" 2>/dev/null)
+	if command -v "$ffprobe" &> /dev/null; then
+		src_bitrate=$("$ffprobe" -v quiet -show_entries format=bit_rate -of default=noprint_wrappers=1:nokey=1 "$full_path" 2>/dev/null)
 		if [ -n "$src_bitrate" ]; then src_bitrate=$((src_bitrate / 1000)); fi
 	else
-		src_bitrate=$(${ffmpeg} -i "$full_path" 2>&1 | grep -i 'bitrate:' | head -1 | grep -oP 'bitrate: \K[0-9]+')
+		src_bitrate=$("$ffmpeg" -i "$full_path" 2>&1 | grep -i 'bitrate:' | head -1 | grep -o 'bitrate: [0-9]*' | sed 's/bitrate: //')
 	fi
 
 	local set_video_bitrate_final=""
@@ -391,14 +393,14 @@ encode_file() {
 
 	# --- J1. Получение длительности (для прогресс-бара и split) ---
 	local file_duration=0
-	if command -v $ffprobe &> /dev/null; then
+	if command -v "$ffprobe" &> /dev/null; then
 		local dur_raw
-		dur_raw=$($ffprobe -v quiet -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$full_path" 2>/dev/null)
+		dur_raw=$("$ffprobe" -v quiet -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$full_path" 2>/dev/null)
 		if [ -n "$dur_raw" ]; then
 			file_duration=$(awk "BEGIN {printf \"%d\", $dur_raw}")
 		fi
 	else
-		local dur_str=$($ffmpeg -i "$full_path" 2>&1 | grep -i Duration: | grep -oP '\d+:\d+:\d+')
+		local dur_str=$("$ffmpeg" -i "$full_path" 2>&1 | grep -i Duration: | grep -o '[0-9][0-9]*:[0-9][0-9]*:[0-9][0-9]*')
 		if [ -n "$dur_str" ]; then
 			IFS=':' read -r x y z <<< "$dur_str"
 			file_duration=$((${x#0}*3600+${y#0}*60+${z#0}))
@@ -416,15 +418,15 @@ encode_file() {
 
 		if [ "$split_by_silence" = "yes" ]; then
 			echo -e "\n\nЖдите! Идёт поиск пауз в файле:\n$full_path\n"
-			local search_silence=$($ffmpeg -i "$full_path" -nostats -af "silencedetect=n=${silence_threshold}:d=${silence_duration}" -f null - 2>&1 | grep -i silence_)
+			local search_silence=$("$ffmpeg" -i "$full_path" -nostats -af "silencedetect=n=${silence_threshold}:d=${silence_duration}" -f null - 2>&1 | grep -i silence_)
 			split_points=()
 			local silence_start_val=""
 			while IFS= read -r line; do
 				if [[ "$line" == *"silence_start"* ]]; then
-					silence_start_val=$(echo "$line" | grep -oP 'silence_start: \K[0-9.]+')
+					silence_start_val=$(echo "$line" | grep -o 'silence_start: [0-9.]*' | sed 's/silence_start: //')
 				fi
 				if [[ "$line" == *"silence_end"* ]]; then
-					local silence_end_val=$(echo "$line" | grep -oP 'silence_end: \K[0-9.]+')
+					local silence_end_val=$(echo "$line" | grep -o 'silence_end: [0-9.]*' | sed 's/silence_end: //')
 					split_points+=($(awk "BEGIN {printf \"%d\", ($silence_start_val+$silence_end_val)/2}"))
 				fi
 			done <<< "$search_silence"
@@ -512,12 +514,15 @@ encode_file() {
 		# Финализация фильтров
 		if [ -n "$current_vf_chain" ]; then vf_args="-vf $current_vf_chain"; else vf_args=""; fi
 		if [ -n "$current_af_chain" ]; then af_args="-af $current_af_chain"; else af_args=""; fi
+		# copy_codecs несовместим с фильтрами
+		if [ "$copy_codecs" = "yes" ]; then vf_args=""; af_args=""; fi
 
 		local out_file="${folder_destination}${file_path}${file_name}${pref}.${current_format_out}"
 
 		# D7. Dry-run
 		if [ "$dry_run" = "yes" ]; then
-			echo "[DRY-RUN] $ffmpeg -hide_banner -strict -2 $hw_decode_args -i \"$full_path\" ${subtitles_params[*]} $convert_settings $thread_args $vf_args $af_args -ss $b $current_set_length \"$out_file\""
+			local dry_seek=""; if [ "$b" -gt 0 ] 2>/dev/null; then dry_seek="-ss $b"; fi
+			echo "[DRY-RUN] $ffmpeg -hide_banner -strict -2 $hw_decode_args -i \"$full_path\" ${subtitles_params[*]} $convert_settings $thread_args $vf_args $af_args $dry_seek $current_set_length \"$out_file\""
 		else
 			log_msg "INFO" "Кодирование: $(basename "$full_path") -> $(basename "$out_file")"
 			local encode_start=$(date +%s)
@@ -527,10 +532,13 @@ encode_file() {
 			progress_file=$(mktemp)
 			err_file=$(mktemp)
 
-			$ffmpeg -hide_banner -strict -2 $hw_decode_args \
+			local seek_arg=""
+			if [ "$b" -gt 0 ] 2>/dev/null; then seek_arg="-ss $b"; fi
+
+			"$ffmpeg" -hide_banner -strict -2 $hw_decode_args \
 				-i "$full_path" "${subtitles_params[@]}" \
 				$convert_settings $thread_args $vf_args $af_args \
-				-ss $b $current_set_length \
+				$seek_arg $current_set_length \
 				-progress "$progress_file" -nostats \
 				"$out_file" -y 2>"$err_file" &
 			local ffmpeg_pid=$!
@@ -591,7 +599,7 @@ if [ "$merge_files" = "yes" ]; then
 		full_path=$(mktemp)
 		find "$folder_sources" \( $format_files_in_pattern \) -printf "file '%p'\n" > "$full_path"
 		log_msg "INFO" "Объединение файлов -> ${folder_destination}/${fname}"
-		$ffmpeg -hide_banner -strict -2 -f concat -safe 0 -i "$full_path" -c copy -map 0 "$folder_destination/$fname"
+		"$ffmpeg" -hide_banner -strict -2 -f concat -safe 0 -i "$full_path" -c copy -map 0 "$folder_destination/$fname"
 		if [ $? -ne 0 ]; then
 			log_msg "FAIL" "Объединение файлов"
 			echo "fail" > "$results_dir/r_merge"

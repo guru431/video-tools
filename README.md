@@ -112,6 +112,27 @@ ffmpeg/ffprobe автоматически определяются рядом с
 - **GUI:** WinForms (PowerShell) + сборка в EXE через ps2exe
 - **Кодировка:** UTF-8 + BOM для .ps1, UTF-8 без BOM для .sh, chcp 65001 для .cmd
 
+### Тестирование
+
+Проект покрыт автоматическими тестами на Bash без внешних зависимостей.
+
+```bash
+bash tests/run_tests.sh           # все тесты (194 шт.)
+bash tests/run_tests.sh ffmpeg    # только ffmpeg (125 тестов)
+bash tests/run_tests.sh yt-dlp    # только yt-dlp (69 тестов)
+```
+
+**Подробное описание системы тестирования:** [tests/TESTING.md](tests/TESTING.md)
+
+| Компонент | Назначение |
+|-----------|------------|
+| `tests/lib/framework.sh` | Assert-функции, счётчики, форматированный вывод |
+| `tests/mocks/ffmpeg` | Mock ffmpeg: лог вызовов, NVENC/QSV-эмуляция, прогресс |
+| `tests/mocks/ffprobe` | Mock ffprobe: фиктивные данные о медиафайле |
+| `tests/mocks/yt-dlp` | Mock yt-dlp: лог вызовов, имитация загрузки |
+| `tests/ffmpeg/` | 7 тест-файлов: config, аудио, видео, фильтры, GPU, интеграция |
+| `tests/yt-dlp/` | 4 тест-файла: config, пресеты форматов, cookies, интеграция |
+
 ### Общие оставшиеся задачи
 
 | # | Проект | Задача | Описание |

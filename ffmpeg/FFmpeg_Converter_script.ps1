@@ -502,7 +502,7 @@ function Encode-File {
 					$sub_file = "$folder_sources$file_path$file_name.$ext"
 					if (Test-Path $sub_file) {
 						if ($video_subtitles_value -eq "burn") {
-							$sub_escaped = $sub_file -replace '\\', '\\\\' -replace "'", "\\\'" -replace ":", "\'\:"
+							$sub_escaped = $sub_file -replace '\\', '\\\\' -replace "'", "\\\'" -replace ":", "\:"
 							if ($subtitles_style) {
 								$current_vf_parts.Add("subtitles='${sub_escaped}':force_style='${subtitles_style}'") | Out-Null
 							} else {
@@ -636,15 +636,12 @@ if ($merge_files -eq "yes") {
 		Remove-Item $tmpFile -Force
 	}
 } else {
-	# B1b. Параллельная обработка файлов
-	if ($parallel_count -gt 1 -and $PSVersionTable.PSVersion.Major -ge 7) {
-		$format_files_in_list | ForEach-Object -Parallel {
-			. "$using:PSScriptRoot\FFmpeg_Converter_script.ps1"
-		} -ThrottleLimit $parallel_count
-	} else {
-		foreach ($file in $format_files_in_list) {
-			Encode-File -file $file
-		}
+	# B1b. Последовательная обработка файлов
+	# Параллельная обработка через ForEach-Object -Parallel требует полной передачи
+	# всех переменных и функций через $using:, что несовместимо с текущей архитектурой
+	# (Encode-File использует $script:-переменные). Используется последовательная обработка.
+	foreach ($file in $format_files_in_list) {
+		Encode-File -file $file
 	}
 }
 

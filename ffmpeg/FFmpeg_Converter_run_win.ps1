@@ -14,6 +14,11 @@ public class TrustAllCertsPolicy : ICertificatePolicy {
 [System.Net.ServicePointManager]::CertificatePolicy = New-Object TrustAllCertsPolicy
 [System.Net.ServicePointManager]::SecurityProtocol  = [Net.SecurityProtocolType]::Tls12
 
+# --- Фallback для $PSScriptRoot при запуске из ps2exe-экзешника ---
+if ([string]::IsNullOrEmpty($PSScriptRoot)) {
+    $PSScriptRoot = Split-Path -Parent ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
+}
+
 # --- Чтение config.ini ---
 $configFile = Join-Path $PSScriptRoot "config.ini"
 function Read-Config {

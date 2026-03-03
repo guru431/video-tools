@@ -1,0 +1,25 @@
+#!/bin/bash
+# ============================================================
+# Mock yt-dlp — записывает аргументы, имитирует скачивание
+#
+# Переменные окружения:
+#   MOCK_YTDLP_LOG=  — путь к файлу лога (по умолчанию /tmp/mock_ytdlp_calls.txt)
+#   MOCK_YTDLP_FAIL=1 — вернуть exit code 1
+# ============================================================
+
+LOG_FILE="${MOCK_YTDLP_LOG:-/tmp/mock_ytdlp_calls.txt}"
+FAIL="${MOCK_YTDLP_FAIL:-0}"
+
+echo "$@" >> "$LOG_FILE"
+
+# Если --version
+if [[ "$*" == *"--version"* ]]; then
+    echo "2024.11.18 (mock)"
+    exit 0
+fi
+
+# Имитация успешного скачивания
+echo "[download] Simulated download complete (mock yt-dlp)"
+
+[ "$FAIL" = "1" ] && exit 1
+exit 0

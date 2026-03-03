@@ -79,20 +79,28 @@ set "hw_accel_type="
 set "hw_decode_args="
 if "!hw_accel_status!"=="+" (
 	if "!hw_accel_value!"=="nvidia" (
-		set "use_hw_accel=yes"
-		set "hw_accel_type=nvidia"
-		set "hw_decode_args=-hwaccel cuda -hwaccel_output_format cuda"
-		if "!set_video_codec!"=="libx264" set "set_video_codec=h264_nvenc"
-		if "!set_video_codec!"=="libx265" set "set_video_codec=hevc_nvenc"
-		if "!set_video_codec!"=="libsvtav1" set "set_video_codec=av1_nvenc"
+		set "encoder_check="
+		for /f "tokens=*" %%i in ('%ffmpeg% -encoders 2^>^&1 ^| findstr /i "nvenc"') do set "encoder_check=%%i"
+		if defined encoder_check (
+			set "use_hw_accel=yes"
+			set "hw_accel_type=nvidia"
+			set "hw_decode_args=-hwaccel cuda -hwaccel_output_format cuda"
+			if "!set_video_codec!"=="libx264" set "set_video_codec=h264_nvenc"
+			if "!set_video_codec!"=="libx265" set "set_video_codec=hevc_nvenc"
+			if "!set_video_codec!"=="libsvtav1" set "set_video_codec=av1_nvenc"
+		) else (echo [WARN] NVIDIA NVENC encoder not available, using software encoding)
 	)
 	if "!hw_accel_value!"=="intel" (
-		set "use_hw_accel=yes"
-		set "hw_accel_type=intel"
-		set "hw_decode_args=-hwaccel qsv -hwaccel_output_format qsv"
-		if "!set_video_codec!"=="libx264" set "set_video_codec=h264_qsv"
-		if "!set_video_codec!"=="libx265" set "set_video_codec=hevc_qsv"
-		if "!set_video_codec!"=="libsvtav1" set "set_video_codec=av1_qsv"
+		set "encoder_check="
+		for /f "tokens=*" %%i in ('%ffmpeg% -encoders 2^>^&1 ^| findstr /i "qsv"') do set "encoder_check=%%i"
+		if defined encoder_check (
+			set "use_hw_accel=yes"
+			set "hw_accel_type=intel"
+			set "hw_decode_args=-hwaccel qsv -hwaccel_output_format qsv"
+			if "!set_video_codec!"=="libx264" set "set_video_codec=h264_qsv"
+			if "!set_video_codec!"=="libx265" set "set_video_codec=hevc_qsv"
+			if "!set_video_codec!"=="libsvtav1" set "set_video_codec=av1_qsv"
+		) else (echo [WARN] Intel QSV encoder not available, using software encoding)
 	)
 )
 
@@ -182,6 +190,8 @@ if "%audio_only%"=="yes" (
 
 :: D6. Скорость воспроизведения (аудио)
 set "af_chain="
+:: NOTE: atempo supports range 0.5-2.0; cascade for values outside this range
+:: is not implemented in CMD (no float math). Use .sh or .ps1 for speeds >2.0 or <0.5
 if "!playback_speed_status!"=="+" if not "!playback_speed_value!"=="1.0" (
 	set "af_chain=atempo=!playback_speed_value!"
 )
@@ -391,15 +401,18 @@ if "%merge_files%"=="yes" (
 					:: Финализация фильтров
 					if defined current_vf (set "vf_args=-vf !current_vf!")
 					if defined current_af (set "af_args=-af !current_af!")
+					:: copy_codecs несовместим с фильтрами
+					if "%copy_codecs%"=="yes" (set "vf_args=" & set "af_args=")
 
 					set "out_file=%folder_destination%!file_path!!file_name!!pref!.!current_format_out!"
 
 					:: D7. Dry-run
+					if %%b==0 (set "seek_arg=") else (set "seek_arg=-ss %%b")
 					if "%dry_run%"=="yes" (
-						echo [DRY-RUN] %ffmpeg% -hide_banner -strict -2 !hw_decode_args! -i "!full_path!" !subtitles_params! !convert_settings! !thread_args! !vf_args! !af_args! -ss %%b !current_set_length! "!out_file!"
+						echo [DRY-RUN] %ffmpeg% -hide_banner -strict -2 !hw_decode_args! -i "!full_path!" !subtitles_params! !convert_settings! !thread_args! !vf_args! !af_args! !seek_arg! !current_set_length! "!out_file!"
 					) else (
 						echo [INFO] Кодирование: !full_path!
-						%ffmpeg% -hide_banner -strict -2 !hw_decode_args! -i "!full_path!" !subtitles_params! !convert_settings! !thread_args! !vf_args! !af_args! -ss %%b !current_set_length! "!out_file!" -y
+						%ffmpeg% -hide_banner -strict -2 !hw_decode_args! -i "!full_path!" !subtitles_params! !convert_settings! !thread_args! !vf_args! !af_args! !seek_arg! !current_set_length! "!out_file!" -y
 						if errorlevel 1 (
 							echo [FAIL] !full_path!
 							if exist "!out_file!" del "!out_file!"

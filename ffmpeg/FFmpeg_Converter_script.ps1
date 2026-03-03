@@ -524,6 +524,8 @@ function Encode-File {
 		if ($current_vf_parts.Count -gt 0) { $vf_args = @("-vf", ($current_vf_parts -join ",")) }
 		$af_args = @()
 		if ($current_af_parts.Count -gt 0) { $af_args = @("-af", ($current_af_parts -join ",")) }
+		# copy_codecs несовместим с фильтрами
+		if ($copy_codecs -eq "yes") { $vf_args = @(); $af_args = @() }
 
 		$out_file = "$out_base$pref.$current_format_out"
 

@@ -69,6 +69,9 @@ FFMPEG_TESTS=(
     "$TESTS_DIR/ffmpeg/test_05_filters.sh"
     "$TESTS_DIR/ffmpeg/test_06_gpu.sh"
     "$TESTS_DIR/ffmpeg/test_07_integration.sh"
+    "$TESTS_DIR/ffmpeg/test_08_ps1_audio_video.sh"
+    "$TESTS_DIR/ffmpeg/test_09_ps1_filters_gpu.sh"
+    "$TESTS_DIR/ffmpeg/test_10_cmd.sh"
 )
 
 YTDLP_TESTS=(
@@ -76,6 +79,8 @@ YTDLP_TESTS=(
     "$TESTS_DIR/yt-dlp/test_02_format_args.sh"
     "$TESTS_DIR/yt-dlp/test_03_cookie_args.sh"
     "$TESTS_DIR/yt-dlp/test_04_integration.sh"
+    "$TESTS_DIR/yt-dlp/test_05_cmd.sh"
+    "$TESTS_DIR/yt-dlp/test_06_ps1.sh"
 )
 
 # ── Баннер ───────────────────────────────────────────────────────────────────

@@ -222,7 +222,8 @@ if exist "%~dp0deno.exe" set "deno_arg=--js-runtimes deno:%~dp0deno.exe"
 
 %dlp% --no-check-certificate %proxy_arg% %cookie_arg% %deno_arg% -c -i -w --windows-filenames --compat-options filename-sanitization -o "%folder%\%subfolder%\%%(title)s.%%(ext)s" %save_settings% "%url%"
 
-if %errorlevel%==0 (
+set "dl_errorlevel=%errorlevel%"
+if %dl_errorlevel%==0 (
     set "final_message=Загрузка завершена успешно!"
     set "col=02"
 ) else (
@@ -232,7 +233,7 @@ if %errorlevel%==0 (
 
 :: ── AI-перевод (если выбран) ─────────────────────────────────────────────
 if not "%translate_lang%"=="" (
-    if %errorlevel%==0 (
+    if %dl_errorlevel%==0 (
         echo.
         echo ─────────────────────────────────────────
         echo Получение AI-перевода ^(%translate_lang%^)...

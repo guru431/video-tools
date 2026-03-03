@@ -14,6 +14,83 @@ public class TrustAllCertsPolicy : ICertificatePolicy {
 [System.Net.ServicePointManager]::CertificatePolicy = New-Object TrustAllCertsPolicy
 [System.Net.ServicePointManager]::SecurityProtocol  = [Net.SecurityProtocolType]::Tls12
 
+# --- Чтение config.ini ---
+$configFile = Join-Path $PSScriptRoot "config.ini"
+function Read-Config {
+    param([string]$Key, [string]$Section, [string]$Default = "")
+    if (-not (Test-Path $configFile)) { return $Default }
+    $inSection = $false
+    foreach ($line in (Get-Content $configFile -Encoding UTF8)) {
+        $line = $line.Trim()
+        if ([string]::IsNullOrEmpty($line) -or $line.StartsWith("#")) { continue }
+        if ($line -match '^\[([^\]]+)\]$') {
+            $inSection = ($Matches[1] -eq $Section)
+            continue
+        }
+        if ($inSection -and $line -match "^${Key}\s*=\s*(.*)") {
+            $val = $Matches[1] -replace '\s*#.*', ''
+            return $val.Trim()
+        }
+    }
+    return $Default
+}
+# Парсинг флага +val/-val: возвращает @{enabled=$true/$false; value="val"}
+function Parse-Flag {
+    param([string]$Raw)
+    if (-not $Raw) { return @{ enabled = $false; value = "" } }
+    $first = $Raw[0]
+    $rest = $Raw.Substring(1)
+    switch ($first) {
+        '+' { return @{ enabled = $true;  value = $rest } }
+        '-' { return @{ enabled = $false; value = $rest } }
+        default { return @{ enabled = $true; value = $Raw } }
+    }
+}
+
+# Загрузка дефолтов из config.ini
+$_cfg_source      = Read-Config "source"      "folders" "m:\ffmpeg\0"
+$_cfg_destination = Read-Config "destination"  "folders" "m:\ffmpeg\1"
+if (-not [System.IO.Path]::IsPathRooted($_cfg_source))     { $_cfg_source     = Join-Path $PSScriptRoot $_cfg_source }
+if (-not [System.IO.Path]::IsPathRooted($_cfg_destination)) { $_cfg_destination = Join-Path $PSScriptRoot $_cfg_destination }
+
+$_cfg_audio_only         = Read-Config "audio_only"         "options" "no"
+$_cfg_merge_files        = Read-Config "merge_files"        "options" "no"
+$_cfg_create_frame       = Read-Config "create_frame"       "options" "no"
+$_cfg_copy_codecs        = Read-Config "copy_codecs"        "options" "no"
+$_cfg_extract_audio_copy = Read-Config "extract_audio_copy" "options" "no"
+
+$_cfg_audio_codec    = Parse-Flag (Read-Config "codec"         "audio" "+aac")
+$_cfg_audio_channels = Parse-Flag (Read-Config "channels"      "audio" "+2")
+$_cfg_audio_bitrate  = Parse-Flag (Read-Config "bitrate"       "audio" "+128")
+$_cfg_audio_sample   = Parse-Flag (Read-Config "sampling_rate" "audio" "+44100")
+$_cfg_audio_norm     = Parse-Flag (Read-Config "normalize"     "audio" "-loudnorm")
+
+$_cfg_video_codec      = Parse-Flag (Read-Config "codec"            "video" "+libx264")
+$_cfg_video_resolution = Parse-Flag (Read-Config "resolution"       "video" "+1280x720")
+$_cfg_video_bitrate    = Parse-Flag (Read-Config "bitrate"          "video" "+2000")
+$_cfg_video_framerate  = Parse-Flag (Read-Config "framerate"        "video" "+25")
+$_cfg_video_rotation   = Parse-Flag (Read-Config "rotation"         "video" "-2")
+$_cfg_video_subtitles  = Parse-Flag (Read-Config "subtitles"        "video" "-burn")
+$_cfg_video_quality    = Parse-Flag (Read-Config "quality"          "video" "-23")
+$_cfg_keep_aspect      = Parse-Flag (Read-Config "keep_aspect_ratio" "video" "+yes")
+$_cfg_container        = Parse-Flag (Read-Config "container"        "video" "-mp4")
+
+$_cfg_threads  = Parse-Flag (Read-Config "threads"        "performance" "+4")
+$_cfg_hw_accel = Parse-Flag (Read-Config "hw_accel"       "gpu"         "-nvidia")
+$_cfg_speed    = Parse-Flag (Read-Config "playback_speed" "speed"       "-1.0")
+
+$_cfg_start    = Parse-Flag (Read-Config "start"  "split" "-01-00-00")
+$_cfg_length   = Parse-Flag (Read-Config "length" "split" "-00-05-00")
+$_cfg_split_silence    = Read-Config "split_by_silence"  "split" "no"
+$_cfg_silence_duration = Read-Config "silence_duration"  "split" "2.0"
+$_cfg_silence_thresh   = Read-Config "silence_threshold" "split" "-30dB"
+
+$_cfg_save_ext     = Read-Config "save_old_extension" "other" "no"
+$_cfg_formats      = Read-Config "format_files_in"    "other" "3gp,avi,flv,mp4,mpg,mpeg,wmv,mov,asf,mkv,m4v,webm,mts,vob,m4b,mp3,wma,ogg,m4a,aac"
+$_cfg_sub_style    = Read-Config "subtitles_style"    "other" "FontName=Arial:FontSize=24:PrimaryColour=&HFFFFFF&"
+$_cfg_dry_run      = Read-Config "dry_run"            "other" "no"
+$_cfg_log          = Read-Config "enable_log"         "other" "no"
+
 # Main Form
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Video Converter (ffmpeg)"
@@ -72,7 +149,8 @@ $btnCheckFfmpeg.Add_Click({
         $dlUrl     = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
         $script:ffmpegUpdateUrl = $dlUrl
 
-        if ($script:ffmpegCurrentVersion -and $script:ffmpegCurrentVersion -eq $latestVer) {
+        $currentShort = if ($script:ffmpegCurrentVersion) { ($script:ffmpegCurrentVersion -split '-')[0] } else { "" }
+        if ($currentShort -and $currentShort -eq $latestVer) {
             $lnkFfmpegUpdate.Links.Clear()
             $lnkFfmpegUpdate.Text      = "актуально ($latestVer)"
             $lnkFfmpegUpdate.ForeColor = [System.Drawing.Color]::Gray
@@ -115,7 +193,7 @@ $yPos += 18
 $textInputFolder = New-Object System.Windows.Forms.TextBox
 $textInputFolder.Location = New-Object System.Drawing.Point($xPos0, $yPos)
 $textInputFolder.Size = New-Object System.Drawing.Size(690, 22)
-$textInputFolder.Text = "m:\ffmpeg\0"
+$textInputFolder.Text = $_cfg_source
 $mainContainer.Controls.Add($textInputFolder)
 
 $buttonInputBrowse = New-Object System.Windows.Forms.Button
@@ -143,7 +221,7 @@ $yPos += 18
 $textOutputFolder = New-Object System.Windows.Forms.TextBox
 $textOutputFolder.Location = New-Object System.Drawing.Point($xPos0, $yPos)
 $textOutputFolder.Size = New-Object System.Drawing.Size(690, 22)
-$textOutputFolder.Text = "m:\ffmpeg\1"
+$textOutputFolder.Text = $_cfg_destination
 $mainContainer.Controls.Add($textOutputFolder)
 
 $buttonOutputBrowse = New-Object System.Windows.Forms.Button
@@ -172,21 +250,21 @@ $checkSaveAudio = New-Object System.Windows.Forms.CheckBox
 $checkSaveAudio.Location = New-Object System.Drawing.Point(8, 18)
 $checkSaveAudio.Size = New-Object System.Drawing.Size(185, 20)
 $checkSaveAudio.Text = "Сохранить только аудио"
-$checkSaveAudio.Checked = $false
+$checkSaveAudio.Checked = ($_cfg_audio_only -eq "yes")
 $groupOptions.Controls.Add($checkSaveAudio)
 
 $checkMergeFiles = New-Object System.Windows.Forms.CheckBox
 $checkMergeFiles.Location = New-Object System.Drawing.Point(208, 18)
 $checkMergeFiles.Size = New-Object System.Drawing.Size(160, 20)
 $checkMergeFiles.Text = "Объединить файлы"
-$checkMergeFiles.Checked = $false
+$checkMergeFiles.Checked = ($_cfg_merge_files -eq "yes")
 $groupOptions.Controls.Add($checkMergeFiles)
 
 $checkCreateFrames = New-Object System.Windows.Forms.CheckBox
 $checkCreateFrames.Location = New-Object System.Drawing.Point(388, 18)
 $checkCreateFrames.Size = New-Object System.Drawing.Size(185, 20)
 $checkCreateFrames.Text = "Разбить видео на кадры"
-$checkCreateFrames.Checked = $false
+$checkCreateFrames.Checked = ($_cfg_create_frame -eq "yes")
 $groupOptions.Controls.Add($checkCreateFrames)
 
 # Row 2: CopyCodecs | Multithreads + textThreads
@@ -194,20 +272,20 @@ $checkCopyCodecs = New-Object System.Windows.Forms.CheckBox
 $checkCopyCodecs.Location = New-Object System.Drawing.Point(8, 40)
 $checkCopyCodecs.Size = New-Object System.Drawing.Size(185, 20)
 $checkCopyCodecs.Text = "Без перекодирования"
-$checkCopyCodecs.Checked = $false
+$checkCopyCodecs.Checked = ($_cfg_copy_codecs -eq "yes")
 $groupOptions.Controls.Add($checkCopyCodecs)
 
 $checkMultithreads = New-Object System.Windows.Forms.CheckBox
 $checkMultithreads.Location = New-Object System.Drawing.Point(208, 40)
 $checkMultithreads.Size = New-Object System.Drawing.Size(120, 20)
 $checkMultithreads.Text = "Потоки ffmpeg:"
-$checkMultithreads.Checked = $true
+$checkMultithreads.Checked = $_cfg_threads.enabled
 $groupOptions.Controls.Add($checkMultithreads)
 
 $textThreads = New-Object System.Windows.Forms.TextBox
 $textThreads.Location = New-Object System.Drawing.Point(333, 40)
 $textThreads.Size = New-Object System.Drawing.Size(35, 20)
-$textThreads.Text = "4"
+$textThreads.Text = $_cfg_threads.value
 $groupOptions.Controls.Add($textThreads)
 
 # Row 2 продолжение: ExtractAudioCopy (справа от Multithreads)
@@ -215,7 +293,7 @@ $checkExtractAudioCopy = New-Object System.Windows.Forms.CheckBox
 $checkExtractAudioCopy.Location = New-Object System.Drawing.Point(388, 40)
 $checkExtractAudioCopy.Size = New-Object System.Drawing.Size(270, 20)
 $checkExtractAudioCopy.Text = "Извлечь аудио (без перекодирования)"
-$checkExtractAudioCopy.Checked = $false
+$checkExtractAudioCopy.Checked = ($_cfg_extract_audio_copy -eq "yes")
 $groupOptions.Controls.Add($checkExtractAudioCopy)
 
 # Row 3: DryRun | Log | KeepAspect
@@ -223,21 +301,21 @@ $checkDryRun = New-Object System.Windows.Forms.CheckBox
 $checkDryRun.Location = New-Object System.Drawing.Point(8, 62)
 $checkDryRun.Size = New-Object System.Drawing.Size(165, 20)
 $checkDryRun.Text = "Предпросмотр команд"
-$checkDryRun.Checked = $false
+$checkDryRun.Checked = ($_cfg_dry_run -eq "yes")
 $groupOptions.Controls.Add($checkDryRun)
 
 $checkLog = New-Object System.Windows.Forms.CheckBox
 $checkLog.Location = New-Object System.Drawing.Point(208, 62)
 $checkLog.Size = New-Object System.Drawing.Size(120, 20)
 $checkLog.Text = "Логирование"
-$checkLog.Checked = $false
+$checkLog.Checked = ($_cfg_log -eq "yes")
 $groupOptions.Controls.Add($checkLog)
 
 $checkKeepAspect = New-Object System.Windows.Forms.CheckBox
 $checkKeepAspect.Location = New-Object System.Drawing.Point(388, 62)
 $checkKeepAspect.Size = New-Object System.Drawing.Size(175, 20)
 $checkKeepAspect.Text = "Сохранять пропорции"
-$checkKeepAspect.Checked = $true
+$checkKeepAspect.Checked = ($_cfg_keep_aspect.enabled -and $_cfg_keep_aspect.value -eq "yes")
 $groupOptions.Controls.Add($checkKeepAspect)
 
 # Row 4: GPU Acceleration
@@ -252,7 +330,7 @@ $comboHWAccel.Location = New-Object System.Drawing.Point(100, 84)
 $comboHWAccel.Size = New-Object System.Drawing.Size(140, 21)
 $comboHWAccel.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
 $comboHWAccel.Items.AddRange(@("Без ускорения", "NVIDIA (NVENC)", "Intel (QSV)"))
-$comboHWAccel.SelectedIndex = 0
+$comboHWAccel.SelectedIndex = if ($_cfg_hw_accel.enabled) { switch ($_cfg_hw_accel.value) { "nvidia" { 1 } "intel" { 2 } default { 0 } } } else { 0 }
 $groupOptions.Controls.Add($comboHWAccel)
 
 # GPU Preset (hidden by default)
@@ -357,14 +435,15 @@ $groupEncoding.Controls.Add($labelAudioCodec)
 $checkAudioCodec = New-Object System.Windows.Forms.CheckBox
 $checkAudioCodec.Location = New-Object System.Drawing.Point(130, 18)
 $checkAudioCodec.Size = New-Object System.Drawing.Size(18, 18)
-$checkAudioCodec.Checked = $true
+$checkAudioCodec.Checked = $_cfg_audio_codec.enabled
 $groupEncoding.Controls.Add($checkAudioCodec)
 
 $comboAudioCodec = New-Object System.Windows.Forms.ComboBox
 $comboAudioCodec.Location = New-Object System.Drawing.Point(150, 18)
 $comboAudioCodec.Size = New-Object System.Drawing.Size(105, 21)
 $comboAudioCodec.Items.AddRange(@("aac", "libmp3lame"))
-$comboAudioCodec.SelectedIndex = 0
+$_acIdx = $comboAudioCodec.Items.IndexOf($_cfg_audio_codec.value)
+$comboAudioCodec.SelectedIndex = if ($_acIdx -ge 0) { $_acIdx } else { 0 }
 $groupEncoding.Controls.Add($comboAudioCodec)
 
 # Audio Channels
@@ -377,14 +456,14 @@ $groupEncoding.Controls.Add($labelAudioChannels)
 $checkAudioChannels = New-Object System.Windows.Forms.CheckBox
 $checkAudioChannels.Location = New-Object System.Drawing.Point(130, 40)
 $checkAudioChannels.Size = New-Object System.Drawing.Size(18, 18)
-$checkAudioChannels.Checked = $true
+$checkAudioChannels.Checked = $_cfg_audio_channels.enabled
 $groupEncoding.Controls.Add($checkAudioChannels)
 
 $comboAudioChannels = New-Object System.Windows.Forms.ComboBox
 $comboAudioChannels.Location = New-Object System.Drawing.Point(150, 40)
 $comboAudioChannels.Size = New-Object System.Drawing.Size(105, 21)
 $comboAudioChannels.Items.AddRange(@("1 - Mono", "2 - Stereo"))
-$comboAudioChannels.SelectedIndex = 1
+$comboAudioChannels.SelectedIndex = if ($_cfg_audio_channels.value -eq "1") { 0 } else { 1 }
 $groupEncoding.Controls.Add($comboAudioChannels)
 
 # Audio Bitrate
@@ -397,13 +476,13 @@ $groupEncoding.Controls.Add($labelAudioBitrate)
 $checkAudioBitrate = New-Object System.Windows.Forms.CheckBox
 $checkAudioBitrate.Location = New-Object System.Drawing.Point(130, 62)
 $checkAudioBitrate.Size = New-Object System.Drawing.Size(18, 18)
-$checkAudioBitrate.Checked = $true
+$checkAudioBitrate.Checked = $_cfg_audio_bitrate.enabled
 $groupEncoding.Controls.Add($checkAudioBitrate)
 
 $textAudioBitrate = New-Object System.Windows.Forms.TextBox
 $textAudioBitrate.Location = New-Object System.Drawing.Point(150, 62)
 $textAudioBitrate.Size = New-Object System.Drawing.Size(105, 20)
-$textAudioBitrate.Text = "128"
+$textAudioBitrate.Text = $_cfg_audio_bitrate.value
 $groupEncoding.Controls.Add($textAudioBitrate)
 
 # Audio Sampling Rate
@@ -416,13 +495,13 @@ $groupEncoding.Controls.Add($labelAudioSampleRate)
 $checkAudioSampleRate = New-Object System.Windows.Forms.CheckBox
 $checkAudioSampleRate.Location = New-Object System.Drawing.Point(130, 84)
 $checkAudioSampleRate.Size = New-Object System.Drawing.Size(18, 18)
-$checkAudioSampleRate.Checked = $true
+$checkAudioSampleRate.Checked = $_cfg_audio_sample.enabled
 $groupEncoding.Controls.Add($checkAudioSampleRate)
 
 $textAudioSampleRate = New-Object System.Windows.Forms.TextBox
 $textAudioSampleRate.Location = New-Object System.Drawing.Point(150, 84)
 $textAudioSampleRate.Size = New-Object System.Drawing.Size(105, 20)
-$textAudioSampleRate.Text = "44100"
+$textAudioSampleRate.Text = $_cfg_audio_sample.value
 $groupEncoding.Controls.Add($textAudioSampleRate)
 
 # Audio Normalize
@@ -435,14 +514,15 @@ $groupEncoding.Controls.Add($labelAudioNorm)
 $checkAudioNorm = New-Object System.Windows.Forms.CheckBox
 $checkAudioNorm.Location = New-Object System.Drawing.Point(130, 106)
 $checkAudioNorm.Size = New-Object System.Drawing.Size(18, 18)
-$checkAudioNorm.Checked = $false
+$checkAudioNorm.Checked = $_cfg_audio_norm.enabled
 $groupEncoding.Controls.Add($checkAudioNorm)
 
 $comboAudioNorm = New-Object System.Windows.Forms.ComboBox
 $comboAudioNorm.Location = New-Object System.Drawing.Point(150, 106)
 $comboAudioNorm.Size = New-Object System.Drawing.Size(105, 21)
 $comboAudioNorm.Items.AddRange(@("loudnorm", "dynaudnorm"))
-$comboAudioNorm.SelectedIndex = 0
+$_anIdx = $comboAudioNorm.Items.IndexOf($_cfg_audio_norm.value)
+$comboAudioNorm.SelectedIndex = if ($_anIdx -ge 0) { $_anIdx } else { 0 }
 $groupEncoding.Controls.Add($comboAudioNorm)
 
 # --- Video column (x=380) ---
@@ -457,14 +537,15 @@ $groupEncoding.Controls.Add($labelVideoCodec)
 $checkVideoCodec = New-Object System.Windows.Forms.CheckBox
 $checkVideoCodec.Location = New-Object System.Drawing.Point(492, 18)
 $checkVideoCodec.Size = New-Object System.Drawing.Size(18, 18)
-$checkVideoCodec.Checked = $true
+$checkVideoCodec.Checked = $_cfg_video_codec.enabled
 $groupEncoding.Controls.Add($checkVideoCodec)
 
 $comboVideoCodec = New-Object System.Windows.Forms.ComboBox
 $comboVideoCodec.Location = New-Object System.Drawing.Point(512, 18)
 $comboVideoCodec.Size = New-Object System.Drawing.Size(130, 21)
 $comboVideoCodec.Items.AddRange(@("libx264", "libx265", "libsvtav1", "h264_nvenc", "hevc_nvenc", "av1_nvenc", "h264_qsv"))
-$comboVideoCodec.SelectedIndex = 0
+$_vcIdx = $comboVideoCodec.Items.IndexOf($_cfg_video_codec.value)
+$comboVideoCodec.SelectedIndex = if ($_vcIdx -ge 0) { $_vcIdx } else { 0 }
 $groupEncoding.Controls.Add($comboVideoCodec)
 
 # Video Resolution
@@ -477,14 +558,15 @@ $groupEncoding.Controls.Add($labelVideoResolution)
 $checkVideoResolution = New-Object System.Windows.Forms.CheckBox
 $checkVideoResolution.Location = New-Object System.Drawing.Point(492, 40)
 $checkVideoResolution.Size = New-Object System.Drawing.Size(18, 18)
-$checkVideoResolution.Checked = $true
+$checkVideoResolution.Checked = $_cfg_video_resolution.enabled
 $groupEncoding.Controls.Add($checkVideoResolution)
 
 $comboVideoResolution = New-Object System.Windows.Forms.ComboBox
 $comboVideoResolution.Location = New-Object System.Drawing.Point(512, 40)
 $comboVideoResolution.Size = New-Object System.Drawing.Size(130, 21)
 $comboVideoResolution.Items.AddRange(@("1920x1080", "1280x720", "854x480", "640x360", "1440x1080", "960x720", "640x480", "480x360"))
-$comboVideoResolution.SelectedIndex = 1
+$_vrIdx = $comboVideoResolution.Items.IndexOf($_cfg_video_resolution.value)
+$comboVideoResolution.SelectedIndex = if ($_vrIdx -ge 0) { $_vrIdx } else { 1 }
 $groupEncoding.Controls.Add($comboVideoResolution)
 
 # Video Bitrate
@@ -497,13 +579,13 @@ $groupEncoding.Controls.Add($labelVideoBitrate)
 $checkVideoBitrate = New-Object System.Windows.Forms.CheckBox
 $checkVideoBitrate.Location = New-Object System.Drawing.Point(492, 62)
 $checkVideoBitrate.Size = New-Object System.Drawing.Size(18, 18)
-$checkVideoBitrate.Checked = $true
+$checkVideoBitrate.Checked = $_cfg_video_bitrate.enabled
 $groupEncoding.Controls.Add($checkVideoBitrate)
 
 $textVideoBitrate = New-Object System.Windows.Forms.TextBox
 $textVideoBitrate.Location = New-Object System.Drawing.Point(512, 62)
 $textVideoBitrate.Size = New-Object System.Drawing.Size(130, 20)
-$textVideoBitrate.Text = "2000"
+$textVideoBitrate.Text = $_cfg_video_bitrate.value
 $groupEncoding.Controls.Add($textVideoBitrate)
 
 # Frame Rate
@@ -516,13 +598,13 @@ $groupEncoding.Controls.Add($labelFrameRate)
 $checkFrameRate = New-Object System.Windows.Forms.CheckBox
 $checkFrameRate.Location = New-Object System.Drawing.Point(492, 84)
 $checkFrameRate.Size = New-Object System.Drawing.Size(18, 18)
-$checkFrameRate.Checked = $true
+$checkFrameRate.Checked = $_cfg_video_framerate.enabled
 $groupEncoding.Controls.Add($checkFrameRate)
 
 $textFrameRate = New-Object System.Windows.Forms.TextBox
 $textFrameRate.Location = New-Object System.Drawing.Point(512, 84)
 $textFrameRate.Size = New-Object System.Drawing.Size(130, 20)
-$textFrameRate.Text = "25"
+$textFrameRate.Text = $_cfg_video_framerate.value
 $groupEncoding.Controls.Add($textFrameRate)
 
 # Video Quality (CRF/CQ)
@@ -535,13 +617,13 @@ $groupEncoding.Controls.Add($labelVideoQuality)
 $checkVideoQuality = New-Object System.Windows.Forms.CheckBox
 $checkVideoQuality.Location = New-Object System.Drawing.Point(492, 106)
 $checkVideoQuality.Size = New-Object System.Drawing.Size(18, 18)
-$checkVideoQuality.Checked = $false
+$checkVideoQuality.Checked = $_cfg_video_quality.enabled
 $groupEncoding.Controls.Add($checkVideoQuality)
 
 $textVideoQuality = New-Object System.Windows.Forms.TextBox
 $textVideoQuality.Location = New-Object System.Drawing.Point(512, 106)
 $textVideoQuality.Size = New-Object System.Drawing.Size(130, 20)
-$textVideoQuality.Text = "23"
+$textVideoQuality.Text = $_cfg_video_quality.value
 $groupEncoding.Controls.Add($textVideoQuality)
 
 # Video Rotation
@@ -554,14 +636,14 @@ $groupEncoding.Controls.Add($labelVideoRotation)
 $checkVideoRotation = New-Object System.Windows.Forms.CheckBox
 $checkVideoRotation.Location = New-Object System.Drawing.Point(492, 128)
 $checkVideoRotation.Size = New-Object System.Drawing.Size(18, 18)
-$checkVideoRotation.Checked = $false
+$checkVideoRotation.Checked = $_cfg_video_rotation.enabled
 $groupEncoding.Controls.Add($checkVideoRotation)
 
 $comboVideoRotation = New-Object System.Windows.Forms.ComboBox
 $comboVideoRotation.Location = New-Object System.Drawing.Point(512, 128)
 $comboVideoRotation.Size = New-Object System.Drawing.Size(160, 21)
 $comboVideoRotation.Items.AddRange(@("1 - По часовой", "2 - Против часовой"))
-$comboVideoRotation.SelectedIndex = 1
+$comboVideoRotation.SelectedIndex = if ($_cfg_video_rotation.value -eq "1") { 0 } else { 1 }
 $groupEncoding.Controls.Add($comboVideoRotation)
 
 # Video Subtitles
@@ -574,14 +656,14 @@ $groupEncoding.Controls.Add($labelVideoSubtitles)
 $checkVideoSubtitles = New-Object System.Windows.Forms.CheckBox
 $checkVideoSubtitles.Location = New-Object System.Drawing.Point(492, 150)
 $checkVideoSubtitles.Size = New-Object System.Drawing.Size(18, 18)
-$checkVideoSubtitles.Checked = $false
+$checkVideoSubtitles.Checked = $_cfg_video_subtitles.enabled
 $groupEncoding.Controls.Add($checkVideoSubtitles)
 
 $comboSubtitlesMode = New-Object System.Windows.Forms.ComboBox
 $comboSubtitlesMode.Location = New-Object System.Drawing.Point(512, 150)
 $comboSubtitlesMode.Size = New-Object System.Drawing.Size(160, 21)
 $comboSubtitlesMode.Items.AddRange(@("burn - На видео", "meta - Дорожкой"))
-$comboSubtitlesMode.SelectedIndex = 0
+$comboSubtitlesMode.SelectedIndex = if ($_cfg_video_subtitles.value -eq "meta") { 1 } else { 0 }
 $groupEncoding.Controls.Add($comboSubtitlesMode)
 
 # Output Container
@@ -594,14 +676,15 @@ $groupEncoding.Controls.Add($labelContainer)
 $checkContainer = New-Object System.Windows.Forms.CheckBox
 $checkContainer.Location = New-Object System.Drawing.Point(492, 172)
 $checkContainer.Size = New-Object System.Drawing.Size(18, 18)
-$checkContainer.Checked = $false
+$checkContainer.Checked = $_cfg_container.enabled
 $groupEncoding.Controls.Add($checkContainer)
 
 $comboContainer = New-Object System.Windows.Forms.ComboBox
 $comboContainer.Location = New-Object System.Drawing.Point(512, 172)
 $comboContainer.Size = New-Object System.Drawing.Size(130, 21)
 $comboContainer.Items.AddRange(@("mp4", "mkv", "webm", "avi", "ts"))
-$comboContainer.SelectedIndex = 0
+$_cntIdx = $comboContainer.Items.IndexOf($_cfg_container.value)
+$comboContainer.SelectedIndex = if ($_cntIdx -ge 0) { $_cntIdx } else { 0 }
 $groupEncoding.Controls.Add($comboContainer)
 
 # ========== Playback Speed Section ==========
@@ -616,13 +699,13 @@ $checkSpeed = New-Object System.Windows.Forms.CheckBox
 $checkSpeed.Location = New-Object System.Drawing.Point(8, 14)
 $checkSpeed.Size = New-Object System.Drawing.Size(80, 18)
 $checkSpeed.Text = "Скорость:"
-$checkSpeed.Checked = $false
+$checkSpeed.Checked = $_cfg_speed.enabled
 $groupSpeed.Controls.Add($checkSpeed)
 
 $textSpeed = New-Object System.Windows.Forms.TextBox
 $textSpeed.Location = New-Object System.Drawing.Point(92, 14)
 $textSpeed.Size = New-Object System.Drawing.Size(55, 20)
-$textSpeed.Text = "1.0"
+$textSpeed.Text = $_cfg_speed.value
 $groupSpeed.Controls.Add($textSpeed)
 
 $labelSpeedInfo = New-Object System.Windows.Forms.Label
@@ -650,13 +733,13 @@ $groupSplit.Controls.Add($labelStartTime)
 $checkStartTime = New-Object System.Windows.Forms.CheckBox
 $checkStartTime.Location = New-Object System.Drawing.Point(140, 18)
 $checkStartTime.Size = New-Object System.Drawing.Size(18, 18)
-$checkStartTime.Checked = $false
+$checkStartTime.Checked = $_cfg_start.enabled
 $groupSplit.Controls.Add($checkStartTime)
 
 $textStartTime = New-Object System.Windows.Forms.TextBox
 $textStartTime.Location = New-Object System.Drawing.Point(160, 18)
 $textStartTime.Size = New-Object System.Drawing.Size(80, 20)
-$textStartTime.Text = "01-00-00"
+$textStartTime.Text = $_cfg_start.value
 $groupSplit.Controls.Add($textStartTime)
 
 # Duration
@@ -669,13 +752,13 @@ $groupSplit.Controls.Add($labelDuration)
 $checkDuration = New-Object System.Windows.Forms.CheckBox
 $checkDuration.Location = New-Object System.Drawing.Point(420, 18)
 $checkDuration.Size = New-Object System.Drawing.Size(18, 18)
-$checkDuration.Checked = $false
+$checkDuration.Checked = $_cfg_length.enabled
 $groupSplit.Controls.Add($checkDuration)
 
 $textDuration = New-Object System.Windows.Forms.TextBox
 $textDuration.Location = New-Object System.Drawing.Point(440, 18)
 $textDuration.Size = New-Object System.Drawing.Size(80, 20)
-$textDuration.Text = "00-05-00"
+$textDuration.Text = $_cfg_length.value
 $groupSplit.Controls.Add($textDuration)
 
 # Split by Silence
@@ -683,7 +766,7 @@ $checkSplitSilence = New-Object System.Windows.Forms.CheckBox
 $checkSplitSilence.Location = New-Object System.Drawing.Point(8, 42)
 $checkSplitSilence.Size = New-Object System.Drawing.Size(145, 18)
 $checkSplitSilence.Text = "Разрезать по тишине"
-$checkSplitSilence.Checked = $false
+$checkSplitSilence.Checked = ($_cfg_split_silence -eq "yes")
 $groupSplit.Controls.Add($checkSplitSilence)
 
 # Silence Duration
@@ -696,7 +779,7 @@ $groupSplit.Controls.Add($labelSilenceDuration)
 $textSilenceDuration = New-Object System.Windows.Forms.TextBox
 $textSilenceDuration.Location = New-Object System.Drawing.Point(277, 42)
 $textSilenceDuration.Size = New-Object System.Drawing.Size(45, 20)
-$textSilenceDuration.Text = "2.0"
+$textSilenceDuration.Text = $_cfg_silence_duration
 $groupSplit.Controls.Add($textSilenceDuration)
 
 # Silence Threshold
@@ -709,7 +792,7 @@ $groupSplit.Controls.Add($labelSilenceThreshold)
 $textSilenceThreshold = New-Object System.Windows.Forms.TextBox
 $textSilenceThreshold.Location = New-Object System.Drawing.Point(413, 42)
 $textSilenceThreshold.Size = New-Object System.Drawing.Size(55, 20)
-$textSilenceThreshold.Text = "-30dB"
+$textSilenceThreshold.Text = $_cfg_silence_thresh
 $groupSplit.Controls.Add($textSilenceThreshold)
 
 # Split info
@@ -736,15 +819,16 @@ $groupOther.Add_Click({
 })
 $mainContainer.Controls.Add($groupOther)
 
-# ffmpeg path (не в UI — значение по умолчанию)
-$textFFmpegPath = [PSCustomObject]@{ Text = "ffmpeg" }
+# ffmpeg path (авто: ./ffmpeg.exe рядом со скриптом, иначе из PATH)
+$_localFfmpeg = Join-Path $PSScriptRoot "ffmpeg.exe"
+$textFFmpegPath = [PSCustomObject]@{ Text = if (Test-Path $_localFfmpeg) { $_localFfmpeg } else { "ffmpeg" } }
 
 # Save Old Extension
 $checkSaveExtension = New-Object System.Windows.Forms.CheckBox
 $checkSaveExtension.Location = New-Object System.Drawing.Point(8, 18)
 $checkSaveExtension.Size = New-Object System.Drawing.Size(400, 18)
 $checkSaveExtension.Text = "Оставлять старое расширение файла в названии"
-$checkSaveExtension.Checked = $false
+$checkSaveExtension.Checked = ($_cfg_save_ext -eq "yes")
 $groupOther.Controls.Add($checkSaveExtension)
 
 # Input Formats
@@ -757,7 +841,7 @@ $groupOther.Controls.Add($labelInputFormats)
 $textInputFormats = New-Object System.Windows.Forms.TextBox
 $textInputFormats.Location = New-Object System.Drawing.Point(110, 42)
 $textInputFormats.Size = New-Object System.Drawing.Size(648, 20)
-$textInputFormats.Text = "3gp,avi,flv,mp4,mpg,mpeg,wmv,mov,asf,mkv,m4v,webm,mts,vob,m4b,mp3,wma,ogg,m4a,aac"
+$textInputFormats.Text = $_cfg_formats
 $groupOther.Controls.Add($textInputFormats)
 
 # Subtitles Style
@@ -770,7 +854,7 @@ $groupOther.Controls.Add($labelSubtitlesStyle)
 $textSubtitlesStyle = New-Object System.Windows.Forms.TextBox
 $textSubtitlesStyle.Location = New-Object System.Drawing.Point(110, 66)
 $textSubtitlesStyle.Size = New-Object System.Drawing.Size(648, 20)
-$textSubtitlesStyle.Text = "FontName=Arial:FontSize=24:PrimaryColour=&HFFFFFF&"
+$textSubtitlesStyle.Text = $_cfg_sub_style
 $groupOther.Controls.Add($textSubtitlesStyle)
 
 # ========== Buttons Row ==========

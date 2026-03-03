@@ -53,19 +53,24 @@
 
 | Файл | Описание |
 |------|----------|
-| `FFmpeg_Converter_run.sh` | Конфигурация (настройки) для Linux/macOS/Git Bash |
+| `config.ini` | Общий конфиг: папки, кодеки, разрешение, качество, GPU, нарезка и т.д. |
+| `FFmpeg_Converter_run.sh` | Загрузчик конфига + запуск script (Linux/macOS/Git Bash) |
 | `FFmpeg_Converter_script.sh` | Основной скрипт обработки (bash) |
-| `FFmpeg_Converter_run.cmd` | Конфигурация для Windows (CMD) |
+| `FFmpeg_Converter_run.cmd` | Загрузчик конфига + запуск script (Windows CMD) |
 | `FFmpeg_Converter_script.cmd` | Основной скрипт обработки (CMD) |
-| `FFmpeg_Converter_run.ps1` | Конфигурация для PowerShell CLI |
+| `FFmpeg_Converter_run.ps1` | Загрузчик конфига + запуск script (PowerShell CLI) |
 | `FFmpeg_Converter_script.ps1` | Основной скрипт обработки (PowerShell) |
-| `FFmpeg_Converter_run_win.ps1` | GUI для Windows (WinForms): все настройки, прогресс, версии |
+| `FFmpeg_Converter_run_win.ps1` | GUI для Windows (WinForms): все настройки из config.ini, прогресс, проверка обновлений |
 | `build_exe.ps1` | Сборка PS1 -> VideoConverter.exe через ps2exe |
 
-### Архитектура: run + script
+### Архитектура: config.ini + run + script
 
-Настройки задаются в `run`-файле (формат `:+:value` = включено, `:-:value` = выключено).
-`run` вызывает `script`, который выполняет обработку. GUI (`run_win.ps1`) заменяет оба файла.
+Все настройки хранятся в `config.ini` (формат `+value` = включено, `-value` = выключено).
+`run`-файлы читают config.ini, конвертируют в внутренний формат (`:+:value` / `:-:value`) и вызывают `script`.
+GUI (`run_win.ps1`) читает config.ini для начальных значений UI-контролов.
+
+Относительные пути в `config.ini` (например `source = _video_\0`) автоматически разрешаются от директории скрипта.
+ffmpeg/ffprobe автоматически определяются рядом со скриптом (`.exe` в той же папке), иначе ищутся в PATH.
 
 ### Возможности
 
@@ -87,8 +92,7 @@
 | Файл | Назначение |
 |------|------------|
 | `VideoConverter.exe` | Скомпилированный GUI |
-
-ffmpeg/ffprobe должны быть в PATH или указаны в настройках.
+| `ffmpeg.exe` | Конвертер (опционально, рядом со скриптом или в PATH) |
 
 ### Статус
 
@@ -102,7 +106,9 @@ ffmpeg/ffprobe должны быть в PATH или указаны в настр
 ### Общие паттерны обоих проектов
 
 - **3 платформы:** .sh (Linux/macOS/Git Bash), .cmd (Windows), .ps1 (Windows GUI)
-- **Формат настроек ffmpeg:** `:+:value` (включено) / `:-:value` (выключено)
+- **Конфигурация:** `config.ini` с форматом `+value` / `-value` (внутренний формат скриптов: `:+:value` / `:-:value`)
+- **Авто-определение бинарников:** ffmpeg, ffprobe, yt-dlp — сначала ищутся рядом со скриптом, потом в PATH
+- **Относительные пути:** автоматически разрешаются от директории скрипта
 - **GUI:** WinForms (PowerShell) + сборка в EXE через ps2exe
 - **Кодировка:** UTF-8 + BOM для .ps1, UTF-8 без BOM для .sh, chcp 65001 для .cmd
 

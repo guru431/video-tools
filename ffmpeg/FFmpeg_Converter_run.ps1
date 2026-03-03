@@ -2,68 +2,94 @@
 # FFmpeg Converter — Конфигурация (PowerShell)
 # ============================================================
 
-# general settings
-$folder_sources = "m:\ffmpeg\0"					# Здесь не должно быть скобок и восклицательных знаков
-$folder_destination = "m:\ffmpeg\1"				# Здесь не должно быть восклицательных знаков
+$configFile = Join-Path $PSScriptRoot "config.ini"
 
-# options
-$audio_only = "no"					# Сохранить только аудио (при включенном "audio_only" все настройки "video settings" игнорируются)
-$merge_files = "no"				# Объединить файлы
-$create_frame = "no"				# Разбить видео на кадры (при включенном "create_frame" все другие настройки игнорируются)
-$copy_codecs = "no"				# Выполнить без перекодирования (при включенном "copy_codecs" все настройки "audio settings" и "video settings" игнорируются)
-$multithreads = ":+:4"			# Число потоков ffmpeg (для программных кодеков: libx264, libx265)
-$parallel_files = ":-:2"			# Количество файлов для одновременной обработки
-$extract_audio_copy = "no"		# Извлечь аудио без перекодирования (копирует аудио-дорожку как есть; игнорирует все audio/video settings)
+# --- Авто-определение ffmpeg рядом со скриптом ---
+$ffmpeg = if (Test-Path "$PSScriptRoot\ffmpeg.exe") { "$PSScriptRoot\ffmpeg.exe" } else { "ffmpeg" }
 
-# audio settings
-$audio_codec = ":+:aac"			# Аудио кодек (для видео на Apple - aac, для mp3 - libmp3lame)
-$audio_number_channels = ":+:2"	# Число каналов: 1 - mono, 2 - stereo
-$audio_bitrate = ":+:128"			# Аудио битрейт (если в исходном файле битрейт аудио меньше, то при кодировании он будет повышен)
-$audio_sampling_rate = ":+:44100"	# Частота дискретизации (ниже 32000 опускать не рекомендуется, максимум - 48000)
-$audio_normalize = ":-:loudnorm"	# Нормализация звука: loudnorm (EBU R128), dynaudnorm, off
+# --- Чтение config.ini ---
+function Read-Config {
+	param([string]$Key, [string]$Section, [string]$Default = "")
+	if (-not (Test-Path $configFile)) { return $Default }
+	$inSection = $false
+	foreach ($line in (Get-Content $configFile -Encoding UTF8)) {
+		$line = $line.Trim()
+		if ([string]::IsNullOrEmpty($line) -or $line.StartsWith("#")) { continue }
+		if ($line -match '^\[([^\]]+)\]$') {
+			$inSection = ($Matches[1] -eq $Section)
+			continue
+		}
+		if ($inSection -and $line -match "^${Key}\s*=\s*(.*)") {
+			$val = $Matches[1] -replace '\s*#.*', ''
+			return $val.Trim()
+		}
+	}
+	return $Default
+}
 
-# video settings
-$video_codec = ":+:libx264"		# Видео кодек. Программные: libx264, libx265, libsvtav1. GPU (NVIDIA): h264_nvenc, hevc_nvenc, av1_nvenc. Intel: h264_qsv
-$video_resolution = ":+:1280x720"	# Разрешение видео (примеры (16:9): 1080p - 1920x1080; 720p - 1280x720; 360p - 640x360)
-$video_bitrate = ":+:2000"		# Видео битрейт (если в исходном файле битрейт видео меньше, то при кодировании он изменяться не будет)
-$video_number_frames = ":+:25"	# Количество кадров в секунду
-$video_rotation = ":-:2"			# Повернуть видео: 1 - по часовой стрелке, 2 - против часовой стрелки
-$video_subtitles = ":-:burn"		# Добавить субтитры: burn - накладывать на видео, meta - добавить отдельной дорожкой
-$video_quality = ":-:23"			# Постоянное качество (CRF/CQ): 0-51, ниже = лучше. Когда включён — video_bitrate игнорируется
-$keep_aspect_ratio = ":+:yes"		# Сохранять пропорции при изменении разрешения
-$output_container = ":-:mp4"		# Выходной контейнер: mp4, mkv, webm, avi, ts
+# Конвертирует формат config.ini (+value / -value) в формат скрипта (:+:value / :-:value)
+function To-Flag {
+	param([string]$Val, [string]$Default)
+	if (-not $Val) { return $Default }
+	$first = $Val[0]
+	$rest = $Val.Substring(1)
+	switch ($first) {
+		'+' { return ":+:$rest" }
+		'-' { return ":-:$rest" }
+		default { return ":+:$Val" }
+	}
+}
 
-# hardware acceleration
-$hw_accel = ":-:nvidia"			# Аппаратное ускорение: nvidia (NVENC/CUVID), intel (QSV), off
-$gpu_preset = ":-:p5"				# Пресет GPU: NVENC p1-p7, QSV veryfast/faster/fast/medium/slow/slower/veryslow
-$gpu_tune = ":-:hq"				# Tune (только NVIDIA): hq, ll, ull, lossless
-$gpu_rc = ":-:vbr"					# Rate control (только NVIDIA): constqp, vbr, cbr
+# --- Загрузка настроек из config.ini ---
+$folder_sources      = Read-Config "source"      "folders" "m:\ffmpeg\0"
+$folder_destination  = Read-Config "destination"  "folders" "m:\ffmpeg\1"
+if (-not [System.IO.Path]::IsPathRooted($folder_sources))     { $folder_sources     = Join-Path $PSScriptRoot $folder_sources }
+if (-not [System.IO.Path]::IsPathRooted($folder_destination)) { $folder_destination = Join-Path $PSScriptRoot $folder_destination }
 
-# playback speed
-$playback_speed = ":-:1.0"		# Скорость воспроизведения: 1.0 = нормальная, 2.0 = ускорение x2, 0.5 = замедление x2
+$audio_only          = Read-Config "audio_only"          "options" "no"
+$merge_files         = Read-Config "merge_files"         "options" "no"
+$create_frame        = Read-Config "create_frame"        "options" "no"
+$copy_codecs         = Read-Config "copy_codecs"         "options" "no"
+$extract_audio_copy  = Read-Config "extract_audio_copy"  "options" "no"
 
-# split settings
-#######################################:
-# Если необходимо разрезать файл на части определенной продолжительности, то "start_coding" отключаем, а в "length_coding" указываем продолжительность одного куска
-# Если необходимо вырезать фрагмент из середины файла, то в "start_coding" указываем с какого момента начинать вырезать, а в "length_coding" продолжительность вырезаемого фрагмента
-# Если необходимо обрезать начало файла, то в "start_coding" указываем с какого момента начать вырезать, а "length_coding" отключаем
-#######################################:
-$start_coding = ":-:01-00-00"		# Время начала кодирования
-$length_coding = ":-:00-05-00"	# Длительность фрагмента (17000 секунд = 04-43-20)
-$split_by_silence = "no"			# Разрезать по тишине (если есть рядом паузы с тишиной, разрез будет в этом месте)
-$silence_duration = "2.0"			# Минимальная длительность тишины для разрезания (в секундах)
-$silence_threshold = "-30dB"		# Порог тишины для обнаружения
+$audio_codec             = To-Flag (Read-Config "codec"         "audio" "+aac")       ":+:aac"
+$audio_number_channels   = To-Flag (Read-Config "channels"      "audio" "+2")         ":+:2"
+$audio_bitrate           = To-Flag (Read-Config "bitrate"       "audio" "+128")       ":+:128"
+$audio_sampling_rate     = To-Flag (Read-Config "sampling_rate" "audio" "+44100")     ":+:44100"
+$audio_normalize         = To-Flag (Read-Config "normalize"     "audio" "-loudnorm")  ":-:loudnorm"
 
-# other settings
-$ffmpeg = "ffmpeg"					# Путь к ffmpeg
-$save_old_extension = "no"		# Оставлять старое расширение файла в названии (например, <file_name>.avi.mp4)
-$format_files_in = "3gp,avi,flv,mp4,mpg,mpeg,wmv,mov,asf,mkv,m4v,webm,mts,vob,m4b,mp3,wma,ogg,m4a,aac"	# Формат файлов на входе
-$subtitles_style = "FontName=Arial:FontSize=24:PrimaryColour=&HFFFFFF&"									# Стиль субтитров
-$dry_run = "no"					# Только показать команды, не запускать
-$enable_log = "no"					# Писать лог в файл
-$log_file = "ffmpeg_convert.log"	# Путь к файлу лога
+$video_codec         = To-Flag (Read-Config "codec"            "video" "+libx264")   ":+:libx264"
+$video_resolution    = To-Flag (Read-Config "resolution"       "video" "+1280x720")  ":+:1280x720"
+$video_bitrate       = To-Flag (Read-Config "bitrate"          "video" "+2000")      ":+:2000"
+$video_number_frames = To-Flag (Read-Config "framerate"        "video" "+25")        ":+:25"
+$video_rotation      = To-Flag (Read-Config "rotation"         "video" "-2")         ":-:2"
+$video_subtitles     = To-Flag (Read-Config "subtitles"        "video" "-burn")      ":-:burn"
+$video_quality       = To-Flag (Read-Config "quality"          "video" "-23")        ":-:23"
+$keep_aspect_ratio   = To-Flag (Read-Config "keep_aspect_ratio" "video" "+yes")      ":+:yes"
+$output_container    = To-Flag (Read-Config "container"        "video" "-mp4")       ":-:mp4"
+
+$multithreads    = To-Flag (Read-Config "threads"        "performance" "+4") ":+:4"
+$parallel_files  = To-Flag (Read-Config "parallel_files" "performance" "-2") ":-:2"
+
+$hw_accel   = To-Flag (Read-Config "hw_accel" "gpu" "-nvidia") ":-:nvidia"
+$gpu_preset = To-Flag (Read-Config "preset"   "gpu" "-p5")     ":-:p5"
+$gpu_tune   = To-Flag (Read-Config "tune"     "gpu" "-hq")     ":-:hq"
+$gpu_rc     = To-Flag (Read-Config "rc"       "gpu" "-vbr")    ":-:vbr"
+
+$playback_speed = To-Flag (Read-Config "playback_speed" "speed" "-1.0") ":-:1.0"
+
+$start_coding    = To-Flag (Read-Config "start"  "split" "-01-00-00") ":-:01-00-00"
+$length_coding   = To-Flag (Read-Config "length" "split" "-00-05-00") ":-:00-05-00"
+$split_by_silence  = Read-Config "split_by_silence"  "split" "no"
+$silence_duration  = Read-Config "silence_duration"  "split" "2.0"
+$silence_threshold = Read-Config "silence_threshold" "split" "-30dB"
+
+$save_old_extension = Read-Config "save_old_extension" "other" "no"
+$format_files_in    = Read-Config "format_files_in"    "other" "3gp,avi,flv,mp4,mpg,mpeg,wmv,mov,asf,mkv,m4v,webm,mts,vob,m4b,mp3,wma,ogg,m4a,aac"
+$subtitles_style    = Read-Config "subtitles_style"    "other" "FontName=Arial:FontSize=24:PrimaryColour=&HFFFFFF&"
+$dry_run            = Read-Config "dry_run"            "other" "no"
+$enable_log         = Read-Config "enable_log"         "other" "no"
+$log_file           = Read-Config "log_file"           "other" "ffmpeg_convert.log"
 
 # start coding
 . "$PSScriptRoot\FFmpeg_Converter_script.ps1"
-
-

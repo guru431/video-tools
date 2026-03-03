@@ -4,66 +4,116 @@
 # FFmpeg Converter — Конфигурация (Bash / Linux)
 # ============================================================
 
-# general settings
-folder_sources="/mnt/share/_Downloads/ffmpeg/0"		# Здесь не должно быть скобок и восклицательных знаков
-folder_destination="/mnt/share/_Downloads/ffmpeg/1"	# Здесь не должно быть восклицательных знаков
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CONFIG_FILE="${SCRIPT_DIR}/config.ini"
 
-# options
-audio_only="no"						# Сохранить только аудио (при включенном "audio_only" все настройки "video settings" игнорируются)
-merge_files="no"					# Объединить файлы
-create_frame="no"					# Разбить видео на кадры (при включенном "create_frame" все другие настройки игнорируются)
-copy_codecs="no"					# Выполнить без перекодирования (при включенном "copy_codecs" все настройки "audio settings" и "video settings" игнорируются)
-multithreads=":+:4"					# Число потоков ffmpeg (для программных кодеков: libx264, libx265)
-parallel_files=":-:2"				# Количество файлов для одновременной обработки
-extract_audio_copy="no"				# Извлечь аудио без перекодирования (копирует аудио-дорожку как есть; игнорирует все audio/video settings)
+# --- Авто-определение ffmpeg рядом со скриптом ---
+if [ -x "$SCRIPT_DIR/ffmpeg" ] || [ -f "$SCRIPT_DIR/ffmpeg.exe" ]; then
+	ffmpeg="$SCRIPT_DIR/ffmpeg"
+else
+	ffmpeg="ffmpeg"
+fi
 
-# audio settings
-audio_codec=":+:aac"				# Аудио кодек (для видео на Apple - aac, для mp3 - libmp3lame)
-audio_number_channels=":+:2"		# Число каналов: 1 - mono, 2 - stereo
-audio_bitrate=":+:128"				# Аудио битрейт (если в исходном файле битрейт аудио меньше, то при кодировании он будет повышен)
-audio_sampling_rate=":+:44100"		# Частота дискретизации (ниже 32000 опускать не рекомендуется, максимум - 48000)
-audio_normalize=":-:loudnorm"		# Нормализация звука: loudnorm (EBU R128), dynaudnorm, off
+# --- Чтение config.ini ---
+read_config() {
+	local key="$1"
+	local section="$2"
+	local default="${3:-}"
 
-# video settings
-video_codec=":+:libx264"			# Видео кодек. Программные: libx264, libx265, libsvtav1. GPU (NVIDIA): h264_nvenc, hevc_nvenc, av1_nvenc. Intel: h264_qsv
-video_resolution=":+:1280x720"		# Разрешение видео (примеры (16:9): 1080p - 1920x1080; 720p - 1280x720; 360p - 640x360)
-video_bitrate=":+:2000"				# Видео битрейт (если в исходном файле битрейт видео меньше, то при кодировании он изменяться не будет)
-video_number_frames=":+:25"			# Количество кадров в секунду
-video_rotation=":-:2"				# Повернуть видео: 1 - по часовой стрелке, 2 - против часовой стрелки
-video_subtitles=":-:burn"			# Добавить субтитры: burn - накладывать на видео, meta - добавить отдельной дорожкой
-video_quality=":-:23"				# Постоянное качество (CRF/CQ): 0-51, ниже = лучше. Когда включён — video_bitrate игнорируется
-keep_aspect_ratio=":+:yes"			# Сохранять пропорции при изменении разрешения
-output_container=":-:mp4"			# Выходной контейнер: mp4, mkv, webm, avi, ts
+	if [ ! -f "$CONFIG_FILE" ]; then
+		echo "$default"
+		return
+	fi
 
-# hardware acceleration
-hw_accel=":-:nvidia"				# Аппаратное ускорение: nvidia (NVENC/CUVID), intel (QSV), off
-gpu_preset=":-:p5"					# Пресет GPU: NVENC p1-p7, QSV veryfast/faster/fast/medium/slow/slower/veryslow
-gpu_tune=":-:hq"					# Tune (только NVIDIA): hq, ll, ull, lossless
-gpu_rc=":-:vbr"					# Rate control (только NVIDIA): constqp, vbr, cbr
+	local in_section=false
+	while IFS= read -r line || [ -n "$line" ]; do
+		line=$(echo "$line" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+		[[ -z "$line" || "$line" == \#* ]] && continue
 
-# playback speed
-playback_speed=":-:1.0"			# Скорость воспроизведения: 1.0 = нормальная, 2.0 = ускорение x2, 0.5 = замедление x2
+		if [[ "$line" =~ ^\[([^]]+)\]$ ]]; then
+			if [ "${BASH_REMATCH[1]}" = "$section" ]; then
+				in_section=true
+			else
+				in_section=false
+			fi
+			continue
+		fi
 
-# split settings
-#######################################:
-# Если необходимо разрезать файл на части определенной продолжительности, то "start_coding" отключаем, а в "length_coding" указываем продолжительность одного куска
-# Если необходимо вырезать фрагмент из середины файла, то в "start_coding" указываем с какого момента начинать вырезать, а в "length_coding" продолжительность вырезаемого фрагмента
-# Если необходимо обрезать начало файла, то в "start_coding" указываем с какого момента начать вырезать, а "length_coding" отключаем
-#######################################:
-start_coding=":-:01-00-00"			# Время начала кодирования
-length_coding=":-:00-05-00"			# Длительность фрагмента (17000 секунд = 04-43-20)
-split_by_silence="no"				# Разрезать по тишине (если есть рядом паузы с тишиной, разрез будет в этом месте)
-silence_duration="2.0"				# Минимальная длительность тишины для разрезания (в секундах)
-silence_threshold="-30dB"			# Порог тишины для обнаружения
+		if $in_section && [[ "$line" =~ ^${key}[[:space:]]*=[[:space:]]*(.*) ]]; then
+			local value="${BASH_REMATCH[1]}"
+			value=$(echo "$value" | sed 's/[[:space:]]*#.*//')
+			echo "$value"
+			return
+		fi
+	done < "$CONFIG_FILE"
 
-# other settings
-ffmpeg="ffmpeg"						# Путь к ffmpeg
-save_old_extension="no"				# Оставлять старое расширение файла в названии (например, <file_name>.avi.mp4)
-format_files_in="3gp,avi,flv,mp4,mpg,mpeg,wmv,mov,asf,mkv,m4v,webm,mts,vob,m4b,mp3,wma,ogg,m4a,aac"		# Формат файлов на входе
-subtitles_style="FontName=Arial:FontSize=24:PrimaryColour=&HFFFFFF&"									# Стиль субтитров
-dry_run="no"						# Только показать команды, не запускать
-enable_log="no"						# Писать лог в файл
-log_file="ffmpeg_convert.log"		# Путь к файлу лога
+	echo "$default"
+}
+
+# Конвертирует формат config.ini (+value / -value) в формат скрипта (:+:value / :-:value)
+to_flag() {
+	local val="$1"
+	local default="$2"
+	if [ -z "$val" ]; then echo "$default"; return; fi
+	local first="${val:0:1}"
+	local rest="${val:1}"
+	case "$first" in
+		+) echo ":+:$rest" ;;
+		-) echo ":-:$rest" ;;
+		*) echo ":+:$val" ;;
+	esac
+}
+
+# --- Загрузка настроек из config.ini ---
+folder_sources="$(read_config "source" "folders" "/mnt/share/_Downloads/ffmpeg/0")"
+folder_destination="$(read_config "destination" "folders" "/mnt/share/_Downloads/ffmpeg/1")"
+[[ "$folder_sources" != /* ]]     && folder_sources="$SCRIPT_DIR/$folder_sources"
+[[ "$folder_destination" != /* ]] && folder_destination="$SCRIPT_DIR/$folder_destination"
+
+audio_only="$(read_config "audio_only" "options" "no")"
+merge_files="$(read_config "merge_files" "options" "no")"
+create_frame="$(read_config "create_frame" "options" "no")"
+copy_codecs="$(read_config "copy_codecs" "options" "no")"
+extract_audio_copy="$(read_config "extract_audio_copy" "options" "no")"
+
+audio_codec="$(to_flag "$(read_config "codec" "audio" "+aac")" ":+:aac")"
+audio_number_channels="$(to_flag "$(read_config "channels" "audio" "+2")" ":+:2")"
+audio_bitrate="$(to_flag "$(read_config "bitrate" "audio" "+128")" ":+:128")"
+audio_sampling_rate="$(to_flag "$(read_config "sampling_rate" "audio" "+44100")" ":+:44100")"
+audio_normalize="$(to_flag "$(read_config "normalize" "audio" "-loudnorm")" ":-:loudnorm")"
+
+video_codec="$(to_flag "$(read_config "codec" "video" "+libx264")" ":+:libx264")"
+video_resolution="$(to_flag "$(read_config "resolution" "video" "+1280x720")" ":+:1280x720")"
+video_bitrate="$(to_flag "$(read_config "bitrate" "video" "+2000")" ":+:2000")"
+video_number_frames="$(to_flag "$(read_config "framerate" "video" "+25")" ":+:25")"
+video_rotation="$(to_flag "$(read_config "rotation" "video" "-2")" ":-:2")"
+video_subtitles="$(to_flag "$(read_config "subtitles" "video" "-burn")" ":-:burn")"
+video_quality="$(to_flag "$(read_config "quality" "video" "-23")" ":-:23")"
+keep_aspect_ratio="$(to_flag "$(read_config "keep_aspect_ratio" "video" "+yes")" ":+:yes")"
+output_container="$(to_flag "$(read_config "container" "video" "-mp4")" ":-:mp4")"
+
+multithreads="$(to_flag "$(read_config "threads" "performance" "+4")" ":+:4")"
+parallel_files="$(to_flag "$(read_config "parallel_files" "performance" "-2")" ":-:2")"
+
+hw_accel="$(to_flag "$(read_config "hw_accel" "gpu" "-nvidia")" ":-:nvidia")"
+gpu_preset="$(to_flag "$(read_config "preset" "gpu" "-p5")" ":-:p5")"
+gpu_tune="$(to_flag "$(read_config "tune" "gpu" "-hq")" ":-:hq")"
+gpu_rc="$(to_flag "$(read_config "rc" "gpu" "-vbr")" ":-:vbr")"
+
+playback_speed="$(to_flag "$(read_config "playback_speed" "speed" "-1.0")" ":-:1.0")"
+
+start_coding="$(to_flag "$(read_config "start" "split" "-01-00-00")" ":-:01-00-00")"
+length_coding="$(to_flag "$(read_config "length" "split" "-00-05-00")" ":-:00-05-00")"
+split_by_silence="$(read_config "split_by_silence" "split" "no")"
+silence_duration="$(read_config "silence_duration" "split" "2.0")"
+silence_threshold="$(read_config "silence_threshold" "split" "-30dB")"
+
+save_old_extension="$(read_config "save_old_extension" "other" "no")"
+format_files_in="$(read_config "format_files_in" "other" "3gp,avi,flv,mp4,mpg,mpeg,wmv,mov,asf,mkv,m4v,webm,mts,vob,m4b,mp3,wma,ogg,m4a,aac")"
+subtitles_style="$(read_config "subtitles_style" "other" "FontName=Arial:FontSize=24:PrimaryColour=&HFFFFFF&")"
+dry_run="$(read_config "dry_run" "other" "no")"
+enable_log="$(read_config "enable_log" "other" "no")"
+log_file="$(read_config "log_file" "other" "ffmpeg_convert.log")"
 
 # start coding #
-source "$(dirname "$0")/FFmpeg_Converter_script.sh"
+source "${SCRIPT_DIR}/FFmpeg_Converter_script.sh"

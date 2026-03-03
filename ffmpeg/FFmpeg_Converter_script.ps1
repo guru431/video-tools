@@ -2,6 +2,14 @@
 # FFmpeg Converter Script (PowerShell)
 # ============================================================
 
+# --- Определение ffprobe рядом с ffmpeg ---
+$_ffmpegDir = Split-Path $ffmpeg -Parent
+if ($_ffmpegDir -and (Test-Path (Join-Path $_ffmpegDir "ffprobe.exe"))) {
+	$ffprobe = Join-Path $_ffmpegDir "ffprobe.exe"
+} else {
+	$ffprobe = "ffprobe"
+}
+
 # --- E1. Проверка окружения ---
 if (!(Test-Path $folder_sources)) {
 	Write-Host "`n[ОШИБКА] Папка источника не найдена: $folder_sources`n"
@@ -313,7 +321,7 @@ function Encode-File {
 
 	# --- I. Извлечение аудио без перекодирования ---
 	if ($extract_audio_copy -eq "yes") {
-		$codec = & ffprobe -v quiet -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 $full_path 2>&1
+		$codec = & $ffprobe -v quiet -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 $full_path 2>&1
 		$ext = switch -Regex ($codec) {
 			'^aac$'    { 'm4a'  }
 			'^mp3$'    { 'mp3'  }
@@ -378,7 +386,7 @@ function Encode-File {
 	# E4. Получение битрейта через ffprobe
 	$src_bitrate = $null
 	try {
-		$probe_out = & ffprobe -v quiet -show_entries format=bit_rate -of default=noprint_wrappers=1:nokey=1 $full_path 2>&1
+		$probe_out = & $ffprobe -v quiet -show_entries format=bit_rate -of default=noprint_wrappers=1:nokey=1 $full_path 2>&1
 		if ($probe_out -match '^\d+$') {
 			$src_bitrate = [int]([long]$probe_out / 1000)
 		}
@@ -409,7 +417,7 @@ function Encode-File {
 	# --- J1. Получение длительности (для прогресс-бара и split) ---
 	$fileDuration = 0
 	try {
-		$dur_probe = & ffprobe -v quiet -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 $full_path 2>&1
+		$dur_probe = & $ffprobe -v quiet -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 $full_path 2>&1
 		$fileDuration = [double]$dur_probe
 	} catch {
 		$dur_match = [regex]::Match((& $ffmpeg -i $full_path 2>&1 | Out-String), "Duration:\s+(\d+):(\d+):(\d+)")

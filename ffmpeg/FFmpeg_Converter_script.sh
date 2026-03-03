@@ -4,6 +4,14 @@
 # FFmpeg Converter Script (Bash)
 # ============================================================
 
+# --- Определение ffprobe рядом с ffmpeg ---
+ffprobe_dir="$(dirname "$ffmpeg")"
+if [ "$ffprobe_dir" != "." ] && { [ -x "$ffprobe_dir/ffprobe" ] || [ -f "$ffprobe_dir/ffprobe.exe" ]; }; then
+	ffprobe="$ffprobe_dir/ffprobe"
+else
+	ffprobe="ffprobe"
+fi
+
 # --- E1. Проверка окружения ---
 if [ ! -d "$folder_sources" ]; then
 	echo -e "\n[ОШИБКА] Папка источника не найдена: $folder_sources\n"
@@ -299,7 +307,7 @@ encode_file() {
 	# --- I. Извлечение аудио без перекодирования ---
 	if [ "$extract_audio_copy" = "yes" ]; then
 		local codec ext out_audio
-		codec=$(ffprobe -v quiet -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$full_path" 2>/dev/null)
+		codec=$($ffprobe -v quiet -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$full_path" 2>/dev/null)
 		case "$codec" in
 			aac)    ext="m4a"  ;;
 			mp3)    ext="mp3"  ;;
@@ -357,8 +365,8 @@ encode_file() {
 
 	# E4. Получение битрейта через ffprobe
 	local src_bitrate=""
-	if command -v ffprobe &> /dev/null; then
-		src_bitrate=$(ffprobe -v quiet -show_entries format=bit_rate -of default=noprint_wrappers=1:nokey=1 "$full_path" 2>/dev/null)
+	if command -v $ffprobe &> /dev/null; then
+		src_bitrate=$($ffprobe -v quiet -show_entries format=bit_rate -of default=noprint_wrappers=1:nokey=1 "$full_path" 2>/dev/null)
 		if [ -n "$src_bitrate" ]; then src_bitrate=$((src_bitrate / 1000)); fi
 	else
 		src_bitrate=$(${ffmpeg} -i "$full_path" 2>&1 | grep -i 'bitrate:' | head -1 | grep -oP 'bitrate: \K[0-9]+')
@@ -383,9 +391,9 @@ encode_file() {
 
 	# --- J1. Получение длительности (для прогресс-бара и split) ---
 	local file_duration=0
-	if command -v ffprobe &> /dev/null; then
+	if command -v $ffprobe &> /dev/null; then
 		local dur_raw
-		dur_raw=$(ffprobe -v quiet -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$full_path" 2>/dev/null)
+		dur_raw=$($ffprobe -v quiet -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$full_path" 2>/dev/null)
 		if [ -n "$dur_raw" ]; then
 			file_duration=$(awk "BEGIN {printf \"%d\", $dur_raw}")
 		fi

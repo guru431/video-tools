@@ -15,23 +15,27 @@ $scriptDir = if ($MyInvocation.MyCommand.Path) {
 }
 $configFile = Join-Path $scriptDir "config.ini"
 
-# ── Чтение config.ini ─────────────────────────────────────────────────────
-function Read-Config {
-    param([string]$Key, [string]$Section, [string]$Default = "")
-    if (-not (Test-Path $configFile)) { return $Default }
-    $inSection = $false
+# ── Чтение config.ini (один раз в хеш-таблицу) ──────────────────────────
+$script:_configCache = @{}
+if (Test-Path $configFile) {
+    $curSection = ""
     foreach ($line in (Get-Content $configFile -Encoding UTF8)) {
         $line = $line.Trim()
         if ([string]::IsNullOrEmpty($line) -or $line.StartsWith("#")) { continue }
         if ($line -match '^\[([^\]]+)\]$') {
-            $inSection = ($Matches[1] -eq $Section)
+            $curSection = $Matches[1]
             continue
         }
-        if ($inSection -and $line -match "^${Key}\s*=\s*(.*)") {
-            $val = $Matches[1] -replace '\s*#.*', ''
-            return $val
+        if ($curSection -and $line -match '^([^=]+?)\s*=\s*(.*)') {
+            $val = $Matches[2] -replace '\s*#.*', ''
+            $script:_configCache["${curSection}::$($Matches[1].Trim())"] = $val
         }
     }
+}
+function Read-Config {
+    param([string]$Key, [string]$Section, [string]$Default = "")
+    $k = "${Section}::${Key}"
+    if ($script:_configCache.ContainsKey($k)) { return $script:_configCache[$k] }
     return $Default
 }
 
@@ -86,29 +90,34 @@ $currentVersion = ""
 $global:urlQueue = [System.Collections.Generic.List[hashtable]]::new()
 
 # ── Создание формы ────────────────────────────────────────────────────────
-$form = New-Object System.Windows.Forms.Form
+$form = [System.Windows.Forms.Form]::new()
 $form.Text = "Video Downloader (yt-dlp) v11"
-$form.Size = New-Object System.Drawing.Size(830, 720)
+$form.Size = [System.Drawing.Size]::new(830, 720)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
 $form.MaximizeBox = $false
-$form.Font = New-Object System.Drawing.Font("Microsoft Sans Serif", 10)
+$form.Font = [System.Drawing.Font]::new("Microsoft Sans Serif", 10)
+# DoubleBuffered (protected) — убирает мерцание при перерисовке / разблокировке
+$form.GetType().GetProperty('DoubleBuffered',
+    [System.Reflection.BindingFlags]'Instance,NonPublic').SetValue($form, $true, $null)
+$form.SuspendLayout()
+$_fc = [System.Collections.Generic.List[System.Windows.Forms.Control]]::new()
 
 $xPos0 = 20
 $yPos  = 15
 
 # ── 0. Версия yt-dlp + кнопка проверки обновлений ─────────────────────────
 $xPos = $xPos0
-$lblVersion = New-Object System.Windows.Forms.Label
-$lblVersion.Location = New-Object System.Drawing.Point($xPos, ($yPos + 3))
-$lblVersion.Size     = New-Object System.Drawing.Size(400, 20)
+$lblVersion = [System.Windows.Forms.Label]::new()
+$lblVersion.Location = [System.Drawing.Point]::new($xPos, ($yPos + 3))
+$lblVersion.Size     = [System.Drawing.Size]::new(400, 20)
 $lblVersion.Text     = "yt-dlp: ..."
 $lblVersion.ForeColor = [System.Drawing.Color]::DimGray
-$form.Controls.Add($lblVersion)
+$_fc.Add($lblVersion)
 
-$btnCheckUpdate = New-Object System.Windows.Forms.Button
-$btnCheckUpdate.Location = New-Object System.Drawing.Point(618, $yPos)
-$btnCheckUpdate.Size     = New-Object System.Drawing.Size(182, 25)
+$btnCheckUpdate = [System.Windows.Forms.Button]::new()
+$btnCheckUpdate.Location = [System.Drawing.Point]::new(618, $yPos)
+$btnCheckUpdate.Size     = [System.Drawing.Size]::new(182, 25)
 $btnCheckUpdate.Text     = "Проверить обновления"
 $btnCheckUpdate.Add_Click({
     $btnCheckUpdate.Enabled = $false
@@ -169,42 +178,42 @@ $btnCheckUpdate.Add_Click({
         $form.Cursor = [System.Windows.Forms.Cursors]::Default
     }
 })
-$form.Controls.Add($btnCheckUpdate)
+$_fc.Add($btnCheckUpdate)
 
 $script:updateUrl    = ""
-$lnkUpdateResult     = New-Object System.Windows.Forms.LinkLabel
-$lnkUpdateResult.Location  = New-Object System.Drawing.Point(425, ($yPos + 5))
-$lnkUpdateResult.Size      = New-Object System.Drawing.Size(190, 18)
+$lnkUpdateResult     = [System.Windows.Forms.LinkLabel]::new()
+$lnkUpdateResult.Location  = [System.Drawing.Point]::new(425, ($yPos + 5))
+$lnkUpdateResult.Size      = [System.Drawing.Size]::new(190, 18)
 $lnkUpdateResult.Text      = ""
-$lnkUpdateResult.Font      = New-Object System.Drawing.Font("Microsoft Sans Serif", 9)
+$lnkUpdateResult.Font      = [System.Drawing.Font]::new("Microsoft Sans Serif", 9)
 $lnkUpdateResult.Add_LinkClicked({
     if (-not [string]::IsNullOrEmpty($script:updateUrl)) {
         [System.Diagnostics.Process]::Start($script:updateUrl) | Out-Null
     }
 })
-$form.Controls.Add($lnkUpdateResult)
+$_fc.Add($lnkUpdateResult)
 
 # ── 1. URL + кнопка добавления ────────────────────────────────────────────
 $yPos += 35; $xPos = $xPos0
-$lbl = New-Object System.Windows.Forms.Label
-$lbl.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$lbl.Size     = New-Object System.Drawing.Size(110, 20)
+$lbl = [System.Windows.Forms.Label]::new()
+$lbl.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$lbl.Size     = [System.Drawing.Size]::new(110, 20)
 $lbl.Text     = "URL видео:"
-$lbl.Font     = New-Object System.Drawing.Font("Microsoft Sans Serif", 10, [System.Drawing.FontStyle]::Bold)
-$form.Controls.Add($lbl)
+$lbl.Font     = [System.Drawing.Font]::new("Microsoft Sans Serif", 10, [System.Drawing.FontStyle]::Bold)
+$_fc.Add($lbl)
 
 $xPos += 110
-$textBoxUrl = New-Object System.Windows.Forms.TextBox
-$textBoxUrl.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$textBoxUrl.Size     = New-Object System.Drawing.Size(556, 25)
-$form.Controls.Add($textBoxUrl)
+$textBoxUrl = [System.Windows.Forms.TextBox]::new()
+$textBoxUrl.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$textBoxUrl.Size     = [System.Drawing.Size]::new(556, 25)
+$_fc.Add($textBoxUrl)
 
 $xPos += 564
-$btnAddUrl = New-Object System.Windows.Forms.Button
-$btnAddUrl.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$btnAddUrl.Size     = New-Object System.Drawing.Size(106, 25)
+$btnAddUrl = [System.Windows.Forms.Button]::new()
+$btnAddUrl.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$btnAddUrl.Size     = [System.Drawing.Size]::new(106, 25)
 $btnAddUrl.Text     = "Добавить  ↵"
-$form.Controls.Add($btnAddUrl)
+$_fc.Add($btnAddUrl)
 
 # Функция добавления URL в очередь (используется кнопкой и Enter)
 $addUrlToQueue = {
@@ -231,17 +240,17 @@ $textBoxUrl.Add_KeyDown({
 
 # ── 2. Очередь URL (ListBox) ──────────────────────────────────────────────
 $yPos += 35; $xPos = $xPos0
-$listBoxQueue = New-Object System.Windows.Forms.ListBox
-$listBoxQueue.Location        = New-Object System.Drawing.Point($xPos, $yPos)
-$listBoxQueue.Size            = New-Object System.Drawing.Size(666, 80)
-$listBoxQueue.Font            = New-Object System.Drawing.Font("Consolas", 9)
+$listBoxQueue = [System.Windows.Forms.ListBox]::new()
+$listBoxQueue.Location        = [System.Drawing.Point]::new($xPos, $yPos)
+$listBoxQueue.Size            = [System.Drawing.Size]::new(666, 80)
+$listBoxQueue.Font            = [System.Drawing.Font]::new("Consolas", 9)
 $listBoxQueue.HorizontalScrollbar = $true
-$form.Controls.Add($listBoxQueue)
+$_fc.Add($listBoxQueue)
 
 $xPos += 674
-$btnRemoveUrl = New-Object System.Windows.Forms.Button
-$btnRemoveUrl.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$btnRemoveUrl.Size     = New-Object System.Drawing.Size(106, 36)
+$btnRemoveUrl = [System.Windows.Forms.Button]::new()
+$btnRemoveUrl.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$btnRemoveUrl.Size     = [System.Drawing.Size]::new(106, 36)
 $btnRemoveUrl.Text     = "Удалить"
 $btnRemoveUrl.Add_Click({
     $idx = $listBoxQueue.SelectedIndex
@@ -250,37 +259,37 @@ $btnRemoveUrl.Add_Click({
         $global:urlQueue.RemoveAt($idx)
     }
 })
-$form.Controls.Add($btnRemoveUrl)
+$_fc.Add($btnRemoveUrl)
 
-$btnClearQueue = New-Object System.Windows.Forms.Button
-$btnClearQueue.Location = New-Object System.Drawing.Point($xPos, ($yPos + 42))
-$btnClearQueue.Size     = New-Object System.Drawing.Size(106, 36)
+$btnClearQueue = [System.Windows.Forms.Button]::new()
+$btnClearQueue.Location = [System.Drawing.Point]::new($xPos, ($yPos + 42))
+$btnClearQueue.Size     = [System.Drawing.Size]::new(106, 36)
 $btnClearQueue.Text     = "Очистить"
 $btnClearQueue.Add_Click({
     $listBoxQueue.Items.Clear()
     $global:urlQueue.Clear()
 })
-$form.Controls.Add($btnClearQueue)
+$_fc.Add($btnClearQueue)
 
 # ── 3. Папка сохранения ───────────────────────────────────────────────────
 $yPos += 90; $xPos = $xPos0
-$lbl = New-Object System.Windows.Forms.Label
-$lbl.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$lbl.Size     = New-Object System.Drawing.Size(110, 20)
+$lbl = [System.Windows.Forms.Label]::new()
+$lbl.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$lbl.Size     = [System.Drawing.Size]::new(110, 20)
 $lbl.Text     = "Папка:"
-$form.Controls.Add($lbl)
+$_fc.Add($lbl)
 
 $xPos += 110
-$textBoxFolder = New-Object System.Windows.Forms.TextBox
-$textBoxFolder.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$textBoxFolder.Size     = New-Object System.Drawing.Size(556, 25)
+$textBoxFolder = [System.Windows.Forms.TextBox]::new()
+$textBoxFolder.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$textBoxFolder.Size     = [System.Drawing.Size]::new(556, 25)
 $textBoxFolder.Text     = [System.IO.Path]::Combine($PWD.Path, $cfg_baseDir)
-$form.Controls.Add($textBoxFolder)
+$_fc.Add($textBoxFolder)
 
 $xPos += 564
-$btnBrowse = New-Object System.Windows.Forms.Button
-$btnBrowse.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$btnBrowse.Size     = New-Object System.Drawing.Size(106, 25)
+$btnBrowse = [System.Windows.Forms.Button]::new()
+$btnBrowse.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$btnBrowse.Size     = [System.Drawing.Size]::new(106, 25)
 $btnBrowse.Text     = "Обзор..."
 $btnBrowse.Add_Click({
     $fb = New-Object System.Windows.Forms.FolderBrowserDialog
@@ -289,39 +298,39 @@ $btnBrowse.Add_Click({
         $textBoxFolder.Text = $fb.SelectedPath
     }
 })
-$form.Controls.Add($btnBrowse)
+$_fc.Add($btnBrowse)
 
 # ── 4. Качество ───────────────────────────────────────────────────────────
 $yPos += 30; $xPos = $xPos0
-$lbl = New-Object System.Windows.Forms.Label
-$lbl.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$lbl.Size     = New-Object System.Drawing.Size(110, 20)
+$lbl = [System.Windows.Forms.Label]::new()
+$lbl.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$lbl.Size     = [System.Drawing.Size]::new(110, 20)
 $lbl.Text     = "Качество:"
-$form.Controls.Add($lbl)
+$_fc.Add($lbl)
 
 $xPos += 110
-$comboQuality = New-Object System.Windows.Forms.ComboBox
-$comboQuality.Location      = New-Object System.Drawing.Point($xPos, $yPos)
-$comboQuality.Size          = New-Object System.Drawing.Size(220, 25)
+$comboQuality = [System.Windows.Forms.ComboBox]::new()
+$comboQuality.Location      = [System.Drawing.Point]::new($xPos, $yPos)
+$comboQuality.Size          = [System.Drawing.Size]::new(220, 25)
 $comboQuality.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
 $comboQuality.Items.AddRange(@(
     "Только аудио", "360p", "480p", "720p", "1080p", "1440p", "2160p",
     "Субтитры (RU)", "Субтитры (EN)"
 ))
 $comboQuality.SelectedIndex = $defaultQualityIdx
-$form.Controls.Add($comboQuality)
+$_fc.Add($comboQuality)
 
 $xPos += 230
-$lbl = New-Object System.Windows.Forms.Label
-$lbl.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$lbl.Size     = New-Object System.Drawing.Size(65, 20)
+$lbl = [System.Windows.Forms.Label]::new()
+$lbl.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$lbl.Size     = [System.Drawing.Size]::new(65, 20)
 $lbl.Text     = "Формат:"
-$form.Controls.Add($lbl)
+$_fc.Add($lbl)
 
 $xPos += 65
-$comboFormat = New-Object System.Windows.Forms.ComboBox
-$comboFormat.Location      = New-Object System.Drawing.Point($xPos, $yPos)
-$comboFormat.Size          = New-Object System.Drawing.Size(235, 25)
+$comboFormat = [System.Windows.Forms.ComboBox]::new()
+$comboFormat.Location      = [System.Drawing.Point]::new($xPos, $yPos)
+$comboFormat.Size          = [System.Drawing.Size]::new(235, 25)
 $comboFormat.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
 $comboFormat.Items.AddRange(@(
     "avc1_best", "avc1_https", "avc1_m3u8",
@@ -331,136 +340,136 @@ $comboFormat.Items.AddRange(@(
 $cfg_format = Read-Config "format_preset" "download" "avc1_best"
 $fmtIdx = $comboFormat.Items.IndexOf($cfg_format)
 $comboFormat.SelectedIndex = if ($fmtIdx -ge 0) { $fmtIdx } else { 0 }
-$form.Controls.Add($comboFormat)
+$_fc.Add($comboFormat)
 
 # ── 5. Плейлист ───────────────────────────────────────────────────────────
 $yPos += 30; $xPos = $xPos0
-$lbl = New-Object System.Windows.Forms.Label
-$lbl.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$lbl.Size     = New-Object System.Drawing.Size(110, 20)
+$lbl = [System.Windows.Forms.Label]::new()
+$lbl.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$lbl.Size     = [System.Drawing.Size]::new(110, 20)
 $lbl.Text     = "Плейлист с:"
-$form.Controls.Add($lbl)
+$_fc.Add($lbl)
 
 $xPos += 110
-$textBoxStart = New-Object System.Windows.Forms.TextBox
-$textBoxStart.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$textBoxStart.Size     = New-Object System.Drawing.Size(50, 25)
-$form.Controls.Add($textBoxStart)
+$textBoxStart = [System.Windows.Forms.TextBox]::new()
+$textBoxStart.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$textBoxStart.Size     = [System.Drawing.Size]::new(50, 25)
+$_fc.Add($textBoxStart)
 
 $xPos += 55
-$lbl = New-Object System.Windows.Forms.Label
-$lbl.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$lbl.Size     = New-Object System.Drawing.Size(30, 20)
+$lbl = [System.Windows.Forms.Label]::new()
+$lbl.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$lbl.Size     = [System.Drawing.Size]::new(30, 20)
 $lbl.Text     = "по:"
-$form.Controls.Add($lbl)
+$_fc.Add($lbl)
 
 $xPos += 30
-$textBoxEnd = New-Object System.Windows.Forms.TextBox
-$textBoxEnd.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$textBoxEnd.Size     = New-Object System.Drawing.Size(50, 25)
-$form.Controls.Add($textBoxEnd)
+$textBoxEnd = [System.Windows.Forms.TextBox]::new()
+$textBoxEnd.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$textBoxEnd.Size     = [System.Drawing.Size]::new(50, 25)
+$_fc.Add($textBoxEnd)
 
 # ── 6. Прокси (5 полей) ───────────────────────────────────────────────────
 $yPos += 30; $xPos = $xPos0
-$lbl = New-Object System.Windows.Forms.Label
-$lbl.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$lbl.Size     = New-Object System.Drawing.Size(110, 20)
+$lbl = [System.Windows.Forms.Label]::new()
+$lbl.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$lbl.Size     = [System.Drawing.Size]::new(110, 20)
 $lbl.Text     = "Прокси:"
-$form.Controls.Add($lbl)
+$_fc.Add($lbl)
 
 $xPos += 110
-$comboProxyType = New-Object System.Windows.Forms.ComboBox
-$comboProxyType.Location      = New-Object System.Drawing.Point($xPos, $yPos)
-$comboProxyType.Size          = New-Object System.Drawing.Size(75, 25)
+$comboProxyType = [System.Windows.Forms.ComboBox]::new()
+$comboProxyType.Location      = [System.Drawing.Point]::new($xPos, $yPos)
+$comboProxyType.Size          = [System.Drawing.Size]::new(75, 25)
 $comboProxyType.DropDownStyle = "DropDownList"
 $comboProxyType.Items.AddRange(@("https", "http", "socks5", "socks4"))
 $comboProxyType.SelectedItem  = $cfg_proxyType
 if ($comboProxyType.SelectedIndex -lt 0) { $comboProxyType.SelectedIndex = 0 }
-$form.Controls.Add($comboProxyType)
+$_fc.Add($comboProxyType)
 
 $xPos += 80
-$lbl = New-Object System.Windows.Forms.Label
-$lbl.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$lbl.Size     = New-Object System.Drawing.Size(18, 20)
+$lbl = [System.Windows.Forms.Label]::new()
+$lbl.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$lbl.Size     = [System.Drawing.Size]::new(18, 20)
 $lbl.Text     = "://"
-$form.Controls.Add($lbl)
+$_fc.Add($lbl)
 
 $xPos += 18
-$textProxyHost = New-Object System.Windows.Forms.TextBox
-$textProxyHost.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$textProxyHost.Size     = New-Object System.Drawing.Size(210, 25)
+$textProxyHost = [System.Windows.Forms.TextBox]::new()
+$textProxyHost.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$textProxyHost.Size     = [System.Drawing.Size]::new(210, 25)
 $textProxyHost.Text     = $cfg_proxyHost
-$form.Controls.Add($textProxyHost)
+$_fc.Add($textProxyHost)
 
 $xPos += 213
-$lbl = New-Object System.Windows.Forms.Label
-$lbl.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$lbl.Size     = New-Object System.Drawing.Size(10, 20)
+$lbl = [System.Windows.Forms.Label]::new()
+$lbl.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$lbl.Size     = [System.Drawing.Size]::new(10, 20)
 $lbl.Text     = ":"
-$form.Controls.Add($lbl)
+$_fc.Add($lbl)
 
 $xPos += 10
-$textProxyPort = New-Object System.Windows.Forms.TextBox
-$textProxyPort.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$textProxyPort.Size     = New-Object System.Drawing.Size(55, 25)
+$textProxyPort = [System.Windows.Forms.TextBox]::new()
+$textProxyPort.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$textProxyPort.Size     = [System.Drawing.Size]::new(55, 25)
 $textProxyPort.Text     = $cfg_proxyPort
-$form.Controls.Add($textProxyPort)
+$_fc.Add($textProxyPort)
 
 $xPos += 65
-$textProxyUser = New-Object System.Windows.Forms.TextBox
-$textProxyUser.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$textProxyUser.Size     = New-Object System.Drawing.Size(130, 25)
+$textProxyUser = [System.Windows.Forms.TextBox]::new()
+$textProxyUser.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$textProxyUser.Size     = [System.Drawing.Size]::new(130, 25)
 $textProxyUser.Text     = $cfg_proxyUser
-$form.Controls.Add($textProxyUser)
+$_fc.Add($textProxyUser)
 
 $xPos += 140
-$textProxyPass = New-Object System.Windows.Forms.TextBox
-$textProxyPass.Location              = New-Object System.Drawing.Point($xPos, $yPos)
-$textProxyPass.Size                  = New-Object System.Drawing.Size(144, 25)
+$textProxyPass = [System.Windows.Forms.TextBox]::new()
+$textProxyPass.Location              = [System.Drawing.Point]::new($xPos, $yPos)
+$textProxyPass.Size                  = [System.Drawing.Size]::new(144, 25)
 $textProxyPass.Text                  = $cfg_proxyPass
 $textProxyPass.UseSystemPasswordChar = $true
-$form.Controls.Add($textProxyPass)
+$_fc.Add($textProxyPass)
 
 # ── 7. Cookies ────────────────────────────────────────────────────────────
 $yPos += 30; $xPos = $xPos0
-$lbl = New-Object System.Windows.Forms.Label
-$lbl.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$lbl.Size     = New-Object System.Drawing.Size(110, 20)
+$lbl = [System.Windows.Forms.Label]::new()
+$lbl.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$lbl.Size     = [System.Drawing.Size]::new(110, 20)
 $lbl.Text     = "Cookies:"
-$form.Controls.Add($lbl)
+$_fc.Add($lbl)
 
 $xPos += 110
-$comboCookies = New-Object System.Windows.Forms.ComboBox
-$comboCookies.Location      = New-Object System.Drawing.Point($xPos, $yPos)
-$comboCookies.Size          = New-Object System.Drawing.Size(150, 25)
+$comboCookies = [System.Windows.Forms.ComboBox]::new()
+$comboCookies.Location      = [System.Drawing.Point]::new($xPos, $yPos)
+$comboCookies.Size          = [System.Drawing.Size]::new(150, 25)
 $comboCookies.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
 $comboCookies.Items.AddRange(@("Без cookies", "Из браузера", "Из файла"))
 $cookieIdx = switch ($cfg_cookieMethod) { "browser" { 1 } "file" { 2 } default { 0 } }
 $comboCookies.SelectedIndex = $cookieIdx
-$form.Controls.Add($comboCookies)
+$_fc.Add($comboCookies)
 
 $xPos += 160
-$comboCookieBrowser = New-Object System.Windows.Forms.ComboBox
-$comboCookieBrowser.Location      = New-Object System.Drawing.Point($xPos, $yPos)
-$comboCookieBrowser.Size          = New-Object System.Drawing.Size(120, 25)
+$comboCookieBrowser = [System.Windows.Forms.ComboBox]::new()
+$comboCookieBrowser.Location      = [System.Drawing.Point]::new($xPos, $yPos)
+$comboCookieBrowser.Size          = [System.Drawing.Size]::new(120, 25)
 $comboCookieBrowser.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
 $comboCookieBrowser.Items.AddRange(@("chrome", "firefox", "edge"))
 $browserIdx = switch ($cfg_cookieBrowser) { "firefox" { 1 } "edge" { 2 } default { 0 } }
 $comboCookieBrowser.SelectedIndex = $browserIdx
 $comboCookieBrowser.Visible       = ($comboCookies.SelectedIndex -eq 1)
-$form.Controls.Add($comboCookieBrowser)
+$_fc.Add($comboCookieBrowser)
 
-$textBoxCookieFile = New-Object System.Windows.Forms.TextBox
-$textBoxCookieFile.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$textBoxCookieFile.Size     = New-Object System.Drawing.Size(400, 25)
+$textBoxCookieFile = [System.Windows.Forms.TextBox]::new()
+$textBoxCookieFile.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$textBoxCookieFile.Size     = [System.Drawing.Size]::new(400, 25)
 $textBoxCookieFile.Text     = $cfg_cookieFile
 $textBoxCookieFile.Visible  = ($comboCookies.SelectedIndex -eq 2)
-$form.Controls.Add($textBoxCookieFile)
+$_fc.Add($textBoxCookieFile)
 
 $xPosFileBrowse = $xPos + 410
-$btnCookieBrowse = New-Object System.Windows.Forms.Button
-$btnCookieBrowse.Location = New-Object System.Drawing.Point($xPosFileBrowse, $yPos)
-$btnCookieBrowse.Size     = New-Object System.Drawing.Size(90, 25)
+$btnCookieBrowse = [System.Windows.Forms.Button]::new()
+$btnCookieBrowse.Location = [System.Drawing.Point]::new($xPosFileBrowse, $yPos)
+$btnCookieBrowse.Size     = [System.Drawing.Size]::new(90, 25)
 $btnCookieBrowse.Text     = "Обзор..."
 $btnCookieBrowse.Visible  = ($comboCookies.SelectedIndex -eq 2)
 $btnCookieBrowse.Add_Click({
@@ -470,7 +479,7 @@ $btnCookieBrowse.Add_Click({
         $textBoxCookieFile.Text = $fd.FileName
     }
 })
-$form.Controls.Add($btnCookieBrowse)
+$_fc.Add($btnCookieBrowse)
 
 $comboCookies.Add_SelectedIndexChanged({
     $comboCookieBrowser.Visible = ($comboCookies.SelectedIndex -eq 1)
@@ -480,84 +489,84 @@ $comboCookies.Add_SelectedIndexChanged({
 
 # ── 8. AI-перевод ─────────────────────────────────────────────────────────
 $yPos += 30; $xPos = $xPos0
-$chkTranslate = New-Object System.Windows.Forms.CheckBox
-$chkTranslate.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$chkTranslate.Size     = New-Object System.Drawing.Size(150, 20)
+$chkTranslate = [System.Windows.Forms.CheckBox]::new()
+$chkTranslate.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$chkTranslate.Size     = [System.Drawing.Size]::new(150, 20)
 $chkTranslate.Text     = "AI-перевод аудио"
 $chkTranslate.Checked  = ($cfg_transEnabled -eq "true")
-$form.Controls.Add($chkTranslate)
+$_fc.Add($chkTranslate)
 
 $xPos += 170
-$lbl = New-Object System.Windows.Forms.Label
-$lbl.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$lbl.Size     = New-Object System.Drawing.Size(50, 20)
+$lbl = [System.Windows.Forms.Label]::new()
+$lbl.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$lbl.Size     = [System.Drawing.Size]::new(50, 20)
 $lbl.Text     = "Язык:"
-$form.Controls.Add($lbl)
+$_fc.Add($lbl)
 
 $xPos += 50
-$comboTransLang = New-Object System.Windows.Forms.ComboBox
-$comboTransLang.Location      = New-Object System.Drawing.Point($xPos, $yPos)
-$comboTransLang.Size          = New-Object System.Drawing.Size(60, 25)
+$comboTransLang = [System.Windows.Forms.ComboBox]::new()
+$comboTransLang.Location      = [System.Drawing.Point]::new($xPos, $yPos)
+$comboTransLang.Size          = [System.Drawing.Size]::new(60, 25)
 $comboTransLang.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
 $comboTransLang.Items.AddRange(@("ru", "en", "kk"))
 $langIdx = switch ($cfg_transLang) { "en" { 1 } "kk" { 2 } default { 0 } }
 $comboTransLang.SelectedIndex = $langIdx
-$form.Controls.Add($comboTransLang)
+$_fc.Add($comboTransLang)
 
 $xPos += 80
-$lbl = New-Object System.Windows.Forms.Label
-$lbl.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$lbl.Size     = New-Object System.Drawing.Size(55, 20)
+$lbl = [System.Windows.Forms.Label]::new()
+$lbl.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$lbl.Size     = [System.Drawing.Size]::new(55, 20)
 $lbl.Text     = "Режим:"
-$form.Controls.Add($lbl)
+$_fc.Add($lbl)
 
 $xPos += 55
-$comboTransMode = New-Object System.Windows.Forms.ComboBox
-$comboTransMode.Location      = New-Object System.Drawing.Point($xPos, $yPos)
-$comboTransMode.Size          = New-Object System.Drawing.Size(130, 25)
+$comboTransMode = [System.Windows.Forms.ComboBox]::new()
+$comboTransMode.Location      = [System.Drawing.Point]::new($xPos, $yPos)
+$comboTransMode.Size          = [System.Drawing.Size]::new(130, 25)
 $comboTransMode.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
 $comboTransMode.Items.AddRange(@("2 дорожки", "Смешать", "Заменить"))
 $modeIdx = switch ($cfg_transMode) { "mix" { 1 } "replace" { 2 } default { 0 } }
 $comboTransMode.SelectedIndex = $modeIdx
-$form.Controls.Add($comboTransMode)
+$_fc.Add($comboTransMode)
 
 $xPos += 150
-$lbl = New-Object System.Windows.Forms.Label
-$lbl.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$lbl.Size     = New-Object System.Drawing.Size(55, 20)
+$lbl = [System.Windows.Forms.Label]::new()
+$lbl.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$lbl.Size     = [System.Drawing.Size]::new(55, 20)
 $lbl.Text     = "Голос:"
-$form.Controls.Add($lbl)
+$_fc.Add($lbl)
 
 $xPos += 55
-$comboTransVoice = New-Object System.Windows.Forms.ComboBox
-$comboTransVoice.Location      = New-Object System.Drawing.Point($xPos, $yPos)
-$comboTransVoice.Size          = New-Object System.Drawing.Size(90, 25)
+$comboTransVoice = [System.Windows.Forms.ComboBox]::new()
+$comboTransVoice.Location      = [System.Drawing.Point]::new($xPos, $yPos)
+$comboTransVoice.Size          = [System.Drawing.Size]::new(90, 25)
 $comboTransVoice.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
 $comboTransVoice.Items.AddRange(@("live", "tts"))
 $voiceIdx = if ($cfg_transVoice -eq "tts") { 1 } else { 0 }
 $comboTransVoice.SelectedIndex = $voiceIdx
-$form.Controls.Add($comboTransVoice)
+$_fc.Add($comboTransVoice)
 
 # ── 9. Прогресс-бар ───────────────────────────────────────────────────────
 $yPos += 30; $xPos = $xPos0
-$progressBar = New-Object System.Windows.Forms.ProgressBar
-$progressBar.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$progressBar.Size     = New-Object System.Drawing.Size(780, 20)
+$progressBar = [System.Windows.Forms.ProgressBar]::new()
+$progressBar.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$progressBar.Size     = [System.Drawing.Size]::new(780, 20)
 $progressBar.Minimum  = 0
 $progressBar.Maximum  = 100
 $progressBar.Value    = 0
-$form.Controls.Add($progressBar)
+$_fc.Add($progressBar)
 
 # ── 10. RichTextBox вывода ────────────────────────────────────────────────
 $yPos += 25; $xPos = $xPos0
-$richOutput = New-Object System.Windows.Forms.RichTextBox
-$richOutput.Location  = New-Object System.Drawing.Point($xPos, $yPos)
-$richOutput.Size      = New-Object System.Drawing.Size(780, 220)
+$richOutput = [System.Windows.Forms.RichTextBox]::new()
+$richOutput.Location  = [System.Drawing.Point]::new($xPos, $yPos)
+$richOutput.Size      = [System.Drawing.Size]::new(780, 220)
 $richOutput.ReadOnly  = $true
-$richOutput.Font      = New-Object System.Drawing.Font("Consolas", 9)
+$richOutput.Font      = [System.Drawing.Font]::new("Consolas", 9)
 $richOutput.BackColor = [System.Drawing.Color]::FromArgb(30, 30, 30)
 $richOutput.ForeColor = [System.Drawing.Color]::White
-$form.Controls.Add($richOutput)
+$_fc.Add($richOutput)
 
 # ── Функции вывода с цветом ───────────────────────────────────────────────
 function Append-Output {
@@ -571,12 +580,12 @@ function Append-Output {
 
 # ── 11. Статусная строка ──────────────────────────────────────────────────
 $yPos += 225; $xPos = $xPos0
-$lblStatus = New-Object System.Windows.Forms.Label
-$lblStatus.Location  = New-Object System.Drawing.Point($xPos, $yPos)
-$lblStatus.Size      = New-Object System.Drawing.Size(780, 20)
+$lblStatus = [System.Windows.Forms.Label]::new()
+$lblStatus.Location  = [System.Drawing.Point]::new($xPos, $yPos)
+$lblStatus.Size      = [System.Drawing.Size]::new(780, 20)
 $lblStatus.Text      = "Готов к загрузке"
 $lblStatus.ForeColor = [System.Drawing.Color]::Gray
-$form.Controls.Add($lblStatus)
+$_fc.Add($lblStatus)
 
 # ── Глобальные переменные ─────────────────────────────────────────────────
 $global:processRunning  = $false
@@ -598,12 +607,12 @@ function Stop-Download {
 # ── 12. Кнопки ────────────────────────────────────────────────────────────
 $yPos += 25; $xPos = $xPos0
 
-$btnStart = New-Object System.Windows.Forms.Button
-$btnStart.Location  = New-Object System.Drawing.Point($xPos, $yPos)
-$btnStart.Size      = New-Object System.Drawing.Size(185, 35)
+$btnStart = [System.Windows.Forms.Button]::new()
+$btnStart.Location  = [System.Drawing.Point]::new($xPos, $yPos)
+$btnStart.Size      = [System.Drawing.Size]::new(185, 35)
 $btnStart.Text      = "Начать загрузку"
 $btnStart.BackColor = [System.Drawing.Color]::LightGreen
-$btnStart.Font      = New-Object System.Drawing.Font("Microsoft Sans Serif", 10, [System.Drawing.FontStyle]::Bold)
+$btnStart.Font      = [System.Drawing.Font]::new("Microsoft Sans Serif", 10, [System.Drawing.FontStyle]::Bold)
 $btnStart.Add_Click({
     if ($global:processRunning) { return }
 
@@ -896,21 +905,21 @@ $btnStart.Add_Click({
         $global:processRunning = $false
     }
 })
-$form.Controls.Add($btnStart)
+$_fc.Add($btnStart)
 
 $xPos += 195
-$btnStop = New-Object System.Windows.Forms.Button
-$btnStop.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$btnStop.Size     = New-Object System.Drawing.Size(185, 35)
+$btnStop = [System.Windows.Forms.Button]::new()
+$btnStop.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$btnStop.Size     = [System.Drawing.Size]::new(185, 35)
 $btnStop.Text     = "Остановить"
 $btnStop.Enabled  = $false
 $btnStop.Add_Click({ Stop-Download })
-$form.Controls.Add($btnStop)
+$_fc.Add($btnStop)
 
 $xPos += 195
-$btnClear = New-Object System.Windows.Forms.Button
-$btnClear.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$btnClear.Size     = New-Object System.Drawing.Size(185, 35)
+$btnClear = [System.Windows.Forms.Button]::new()
+$btnClear.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$btnClear.Size     = [System.Drawing.Size]::new(185, 35)
 $btnClear.Text     = "Очистить лог"
 $btnClear.Add_Click({
     $richOutput.Clear()
@@ -918,12 +927,12 @@ $btnClear.Add_Click({
     $lblStatus.Text    = "Готов к загрузке"
     $form.Text         = "Video Downloader (yt-dlp) v11"
 })
-$form.Controls.Add($btnClear)
+$_fc.Add($btnClear)
 
 $xPos += 195
-$btnExit = New-Object System.Windows.Forms.Button
-$btnExit.Location = New-Object System.Drawing.Point($xPos, $yPos)
-$btnExit.Size     = New-Object System.Drawing.Size(185, 35)
+$btnExit = [System.Windows.Forms.Button]::new()
+$btnExit.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$btnExit.Size     = [System.Drawing.Size]::new(185, 35)
 $btnExit.Text     = "Выход"
 $btnExit.Add_Click({
     if ($global:processRunning) {
@@ -938,7 +947,7 @@ $btnExit.Add_Click({
         }
     } else { $form.Close() }
 })
-$form.Controls.Add($btnExit)
+$_fc.Add($btnExit)
 
 # ── Обработчик закрытия окна ──────────────────────────────────────────────
 $form.Add_FormClosing({
@@ -957,15 +966,35 @@ $form.Add_FormClosing({
     }
 })
 
-# ── Версия yt-dlp — после показа формы, чтобы не задерживать открытие ────
+$form.Controls.AddRange($_fc.ToArray())
+$form.ResumeLayout($true)
+
+# ── Версия yt-dlp — асинхронно, чтобы не блокировать отрисовку формы ────
 $form.Add_Shown({
-    try {
-        $ver = (& $dlp --version 2>&1).ToString().Trim()
-        $script:currentVersion = $ver
-        $lblVersion.Text = "yt-dlp: $ver"
-    } catch {
-        $lblVersion.Text = "yt-dlp: н/д"
-    }
+    $rs = [runspacefactory]::CreateRunspace()
+    $rs.Open()
+    $ps = [powershell]::Create().AddScript({
+        param($dlpPath)
+        try { (& $dlpPath --version 2>&1).ToString().Trim() } catch { '' }
+    }).AddArgument($dlp)
+    $ps.Runspace = $rs
+    $async = $ps.BeginInvoke()
+    $timer = [System.Windows.Forms.Timer]::new()
+    $timer.Interval = 200
+    $timer.Add_Tick({
+        if ($async.IsCompleted) {
+            $timer.Stop()
+            $ver = $ps.EndInvoke($async)
+            if ($ver -and $ver[0]) {
+                $script:currentVersion = $ver[0]
+                $lblVersion.Text = "yt-dlp: $($ver[0])"
+            } else {
+                $lblVersion.Text = "yt-dlp: н/д"
+            }
+            $ps.Dispose(); $rs.Dispose(); $timer.Dispose()
+        }
+    }.GetNewClosure())
+    $timer.Start()
 })
 
 [void]$form.ShowDialog()

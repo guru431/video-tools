@@ -1155,24 +1155,15 @@ $mainContainer.Controls.AddRange($_mc.ToArray())
 $form.Controls.AddRange($_fc.ToArray())
 $form.ResumeLayout($true)
 
-# ========== Получить версию ffmpeg — асинхронно, чтобы не блокировать отрисовку ==========
+# ========== Получить версию ffmpeg — после отрисовки формы (через отложенный вызов) ==========
 $form.Add_Shown({
-    $ffmpegBin = $textFFmpegPath.Text
-    $rs = [runspacefactory]::CreateRunspace()
-    $rs.Open()
-    $ps = [powershell]::Create().AddScript({
-        param($bin)
-        try { (& $bin -version 2>&1 | Select-Object -First 1).ToString().Trim() } catch { '' }
-    }).AddArgument($ffmpegBin)
-    $ps.Runspace = $rs
-    $async = $ps.BeginInvoke()
-    $timer = [System.Windows.Forms.Timer]::new()
-    $timer.Interval = 200
-    $timer.Add_Tick({
-        if ($async.IsCompleted) {
-            $timer.Stop()
-            $result = $ps.EndInvoke($async)
-            $versionLine = if ($result -and $result[0]) { $result[0] } else { '' }
+    $t = [System.Windows.Forms.Timer]::new()
+    $t.Interval = 50
+    $t.Add_Tick({
+        try {
+            $this.Stop(); $this.Dispose()
+            $ffmpegBin = $textFFmpegPath.Text
+            $versionLine = (& $ffmpegBin -version 2>&1 | Select-Object -First 1).ToString().Trim()
             if ($versionLine -match 'ffmpeg version (\S+)') {
                 $script:ffmpegCurrentVersion = $Matches[1]
                 $lblFfmpegVersion.Text      = "ffmpeg: $($Matches[1])"
@@ -1181,10 +1172,12 @@ $form.Add_Shown({
                 $lblFfmpegVersion.Text      = "ffmpeg: не найден в PATH"
                 $lblFfmpegVersion.ForeColor = [System.Drawing.Color]::Firebrick
             }
-            $ps.Dispose(); $rs.Dispose(); $timer.Dispose()
+        } catch {
+            $lblFfmpegVersion.Text      = "ffmpeg: не найден в PATH"
+            $lblFfmpegVersion.ForeColor = [System.Drawing.Color]::Firebrick
         }
-    }.GetNewClosure())
-    $timer.Start()
+    })
+    $t.Start()
 })
 
 # ========== Show Form ==========

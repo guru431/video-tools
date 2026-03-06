@@ -969,32 +969,34 @@ $form.Add_FormClosing({
 $form.Controls.AddRange($_fc.ToArray())
 $form.ResumeLayout($true)
 
-# ── Версия yt-dlp — асинхронно, чтобы не блокировать отрисовку формы ────
+# ── Версия yt-dlp — после отрисовки формы (через отложенный вызов) ────
+$script:dlpPath = "$dlp"
 $form.Add_Shown({
-    $rs = [runspacefactory]::CreateRunspace()
-    $rs.Open()
-    $ps = [powershell]::Create().AddScript({
-        param($dlpPath)
-        try { (& $dlpPath --version 2>&1).ToString().Trim() } catch { '' }
-    }).AddArgument($dlp)
-    $ps.Runspace = $rs
-    $async = $ps.BeginInvoke()
-    $timer = [System.Windows.Forms.Timer]::new()
-    $timer.Interval = 200
-    $timer.Add_Tick({
-        if ($async.IsCompleted) {
-            $timer.Stop()
-            $ver = $ps.EndInvoke($async)
-            if ($ver -and $ver[0]) {
-                $script:currentVersion = $ver[0]
-                $lblVersion.Text = "yt-dlp: $($ver[0])"
+    $t = [System.Windows.Forms.Timer]::new()
+    $t.Interval = 50
+    $t.Add_Tick({
+        try {
+            $this.Stop(); $this.Dispose()
+            $psi = [System.Diagnostics.ProcessStartInfo]::new()
+            $psi.FileName = $script:dlpPath
+            $psi.Arguments = '--version'
+            $psi.UseShellExecute = $false
+            $psi.RedirectStandardOutput = $true
+            $psi.CreateNoWindow = $true
+            $p = [System.Diagnostics.Process]::Start($psi)
+            $ver = $p.StandardOutput.ReadToEnd().Trim()
+            $p.WaitForExit()
+            if ($ver) {
+                $script:currentVersion = $ver
+                $lblVersion.Text = "yt-dlp: $ver"
             } else {
                 $lblVersion.Text = "yt-dlp: н/д"
             }
-            $ps.Dispose(); $rs.Dispose(); $timer.Dispose()
+        } catch {
+            $lblVersion.Text = "yt-dlp: н/д"
         }
-    }.GetNewClosure())
-    $timer.Start()
+    })
+    $t.Start()
 })
 
 [void]$form.ShowDialog()

@@ -1,5 +1,10 @@
-# Executables
-*.exe
+# Large third-party binaries (download separately)
+ffmpeg/ffmpeg.exe
+yt-dlp/deno.exe
+yt-dlp/vot-cli-live.exe
+
+# ps2exe build artifacts
+_build_tmp.ps1
 
 # ps2exe temp
 ps2exe_tool.ps1

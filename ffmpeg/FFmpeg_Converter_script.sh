@@ -524,12 +524,19 @@ encode_file() {
 			while kill -0 $ffmpeg_pid 2>/dev/null; do
 				sleep 0.4
 				if [ "$file_duration" -gt 0 ] 2>/dev/null; then
-					local out_time_ms
-					out_time_ms=$(grep "^out_time_ms=" "$progress_file" 2>/dev/null | tail -1 | cut -d= -f2)
-					if [ -n "$out_time_ms" ] && [[ "$out_time_ms" =~ ^[0-9]+$ ]] && [ "$out_time_ms" -gt 0 ]; then
-						local pct=$((out_time_ms / 1000000 * 100 / file_duration))
-						[ $pct -gt 100 ] && pct=100
-						show_progress_bar $pct "$full_path"
+					local out_time_str
+					out_time_str=$(grep "^out_time=" "$progress_file" 2>/dev/null | tail -1 | cut -d= -f2)
+					if [ -n "$out_time_str" ]; then
+						local oh om os out_sec pct
+						oh=$(echo "$out_time_str" | cut -d: -f1)
+						om=$(echo "$out_time_str" | cut -d: -f2)
+						os=$(echo "$out_time_str" | cut -d: -f3 | cut -d. -f1)
+						out_sec=$(( 10#$oh * 3600 + 10#$om * 60 + 10#$os ))
+						if [ "$out_sec" -gt 0 ]; then
+							pct=$((out_sec * 100 / file_duration))
+							[ $pct -gt 100 ] && pct=100
+							show_progress_bar $pct "$full_path"
+						fi
 					fi
 				fi
 			done

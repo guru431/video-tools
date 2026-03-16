@@ -20,12 +20,13 @@ public class TrustAllCertsPolicy : ICertificatePolicy {
 }
 
 # --- Фallback для $PSScriptRoot при запуске из ps2exe-экзешника ---
-if ([string]::IsNullOrEmpty($PSScriptRoot)) {
-    $PSScriptRoot = Split-Path -Parent ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
+$script:_appDir = $PSScriptRoot
+if ([string]::IsNullOrEmpty($script:_appDir)) {
+    $script:_appDir = Split-Path -Parent ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
 }
 
 # --- Чтение config.ini (один раз в хеш-таблицу) ---
-$configFile = Join-Path $PSScriptRoot "config.ini"
+$configFile = Join-Path $script:_appDir "config.ini"
 $script:_configCache = @{}
 if (Test-Path $configFile) {
     $curSection = ""
@@ -64,8 +65,8 @@ function Parse-Flag {
 # Загрузка дефолтов из config.ini
 $_cfg_source      = Read-Config "source"      "folders" "m:\ffmpeg\0"
 $_cfg_destination = Read-Config "destination"  "folders" "m:\ffmpeg\1"
-if (-not [System.IO.Path]::IsPathRooted($_cfg_source))     { $_cfg_source     = Join-Path $PSScriptRoot $_cfg_source }
-if (-not [System.IO.Path]::IsPathRooted($_cfg_destination)) { $_cfg_destination = Join-Path $PSScriptRoot $_cfg_destination }
+if (-not [System.IO.Path]::IsPathRooted($_cfg_source))     { $_cfg_source     = Join-Path $script:_appDir $_cfg_source }
+if (-not [System.IO.Path]::IsPathRooted($_cfg_destination)) { $_cfg_destination = Join-Path $script:_appDir $_cfg_destination }
 
 $_cfg_audio_only         = Read-Config "audio_only"         "options" "no"
 $_cfg_merge_files        = Read-Config "merge_files"        "options" "no"
@@ -76,21 +77,24 @@ $_cfg_extract_audio_copy = Read-Config "extract_audio_copy" "options" "no"
 $_cfg_audio_codec    = Parse-Flag (Read-Config "codec"         "audio" "+aac")
 $_cfg_audio_channels = Parse-Flag (Read-Config "channels"      "audio" "+2")
 $_cfg_audio_bitrate  = Parse-Flag (Read-Config "bitrate"       "audio" "+128")
-$_cfg_audio_sample   = Parse-Flag (Read-Config "sampling_rate" "audio" "+44100")
+$_cfg_audio_sample   = Parse-Flag (Read-Config "sampling_rate" "audio" "+48000")
 $_cfg_audio_norm     = Parse-Flag (Read-Config "normalize"     "audio" "-loudnorm")
 
 $_cfg_video_codec      = Parse-Flag (Read-Config "codec"            "video" "+libx264")
 $_cfg_video_resolution = Parse-Flag (Read-Config "resolution"       "video" "+1280x720")
-$_cfg_video_bitrate    = Parse-Flag (Read-Config "bitrate"          "video" "+2000")
-$_cfg_video_framerate  = Parse-Flag (Read-Config "framerate"        "video" "+25")
+$_cfg_video_bitrate    = Parse-Flag (Read-Config "bitrate"          "video" "-3000")
+$_cfg_video_framerate  = Parse-Flag (Read-Config "framerate"        "video" "+30")
 $_cfg_video_rotation   = Parse-Flag (Read-Config "rotation"         "video" "-2")
 $_cfg_video_subtitles  = Parse-Flag (Read-Config "subtitles"        "video" "-burn")
 $_cfg_video_quality    = Parse-Flag (Read-Config "quality"          "video" "-23")
 $_cfg_keep_aspect      = Parse-Flag (Read-Config "keep_aspect_ratio" "video" "+yes")
-$_cfg_container        = Parse-Flag (Read-Config "container"        "video" "-mp4")
+$_cfg_container        = Parse-Flag (Read-Config "container"        "video" "+mp4")
 
 $_cfg_threads  = Parse-Flag (Read-Config "threads"        "performance" "+4")
-$_cfg_hw_accel = Parse-Flag (Read-Config "hw_accel"       "gpu"         "-nvidia")
+$_cfg_hw_accel  = Parse-Flag (Read-Config "hw_accel"       "gpu"         "-nvidia")
+$_cfg_gpu_preset = Parse-Flag (Read-Config "preset"        "gpu"         "-p5")
+$_cfg_gpu_tune   = Parse-Flag (Read-Config "tune"          "gpu"         "-hq")
+$_cfg_gpu_rc     = Parse-Flag (Read-Config "rc"            "gpu"         "-vbr")
 $_cfg_speed    = Parse-Flag (Read-Config "playback_speed" "speed"       "-1.0")
 
 $_cfg_start    = Parse-Flag (Read-Config "start"  "split" "-01-00-00")
@@ -104,6 +108,7 @@ $_cfg_formats      = Read-Config "format_files_in"    "other" "3gp,avi,flv,mp4,m
 $_cfg_sub_style    = Read-Config "subtitles_style"    "other" "FontName=Arial:FontSize=24:PrimaryColour=&HFFFFFF&"
 $_cfg_dry_run      = Read-Config "dry_run"            "other" "no"
 $_cfg_log          = Read-Config "enable_log"         "other" "no"
+$_cfg_log_file     = Read-Config "log_file"           "other" "ffmpeg_convert.log"
 
 # Main Form
 $form = [System.Windows.Forms.Form]::new()
@@ -435,6 +440,28 @@ $comboHWAccel.Add_SelectedIndexChanged({
         $labelHWInfo.Text = ""
     }
 })
+
+# Инициализация пресетов GPU по выбранному ускорителю (SelectedIndexChanged не срабатывает при начальной установке)
+if ($comboHWAccel.SelectedIndex -eq 2) {
+    $comboGpuPreset.Items.Clear()
+    $comboGpuPreset.Items.AddRange(@("veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"))
+    $idx = $comboGpuPreset.Items.IndexOf($_cfg_gpu_preset.value)
+    $comboGpuPreset.SelectedIndex = if ($idx -ge 0) { $idx } else { 3 }
+    $comboGpuPreset.Visible = $true
+    $labelGpuPreset.Visible = $true
+} elseif ($comboHWAccel.SelectedIndex -eq 1) {
+    $idx = $comboGpuPreset.Items.IndexOf($_cfg_gpu_preset.value)
+    if ($idx -ge 0) { $comboGpuPreset.SelectedIndex = $idx }
+    $comboGpuPreset.Visible = $true
+    $labelGpuPreset.Visible = $true
+    $comboGpuTune.Visible = $true; $labelGpuTune.Visible = $true
+    $comboGpuRC.Visible = $true; $labelGpuRC.Visible = $true
+}
+# Инициализация tune/rc из config
+$idxTune = $comboGpuTune.Items.IndexOf($_cfg_gpu_tune.value)
+if ($idxTune -ge 0) { $comboGpuTune.SelectedIndex = $idxTune }
+$idxRC = $comboGpuRC.Items.IndexOf($_cfg_gpu_rc.value)
+if ($idxRC -ge 0) { $comboGpuRC.SelectedIndex = $idxRC }
 
 $groupOptions.Controls.AddRange($_go.ToArray())
 $_mc.Add($groupOptions)
@@ -853,7 +880,7 @@ $groupOther.Add_Click({
 $_goth = [System.Collections.Generic.List[System.Windows.Forms.Control]]::new()
 
 # ffmpeg path (авто: ./ffmpeg.exe рядом со скриптом, иначе из PATH)
-$_localFfmpeg = Join-Path $PSScriptRoot "ffmpeg.exe"
+$_localFfmpeg = Join-Path $script:_appDir "ffmpeg.exe"
 $textFFmpegPath = [PSCustomObject]@{ Text = if (Test-Path $_localFfmpeg) { $_localFfmpeg } else { "ffmpeg" } }
 
 # Save Old Extension
@@ -914,7 +941,7 @@ $buttonStop.ForeColor = [System.Drawing.Color]::DarkRed
 $buttonStop.Enabled = $false
 $buttonStop.Add_Click({
     # Записываем файл-флаг отмены
-    try { "cancel" | Set-Content $env:FFMPEG_GUI_CANCEL_FILE -Encoding UTF8 } catch {}
+    try { "cancel" | Set-Content $global:_guiCancel -Encoding UTF8 } catch {}
 })
 $_mc.Add($buttonStop)
 
@@ -974,6 +1001,7 @@ $_mc.Add($groupProgress)
 
 # ========== Run Button Click Handler ==========
 $buttonRun.Add_Click({
+  try {
     # ---- Собрать все настройки ----
     $script:folder_sources      = $textInputFolder.Text
     $script:folder_destination  = $textOutputFolder.Text
@@ -987,7 +1015,7 @@ $buttonRun.Add_Click({
     $script:parallel_files      = ":-:1"
     $script:dry_run             = if ($checkDryRun.Checked)      { "yes" } else { "no" }
     $script:enable_log          = if ($checkLog.Checked)         { "yes" } else { "no" }
-    $script:log_file            = "ffmpeg_convert.log"
+    $script:log_file            = $_cfg_log_file
     $script:extract_audio_copy  = if ($checkExtractAudioCopy.Checked) { "yes" } else { "no" }
 
     # Audio settings
@@ -1041,7 +1069,7 @@ $buttonRun.Add_Click({
     $script:subtitles_style    = $textSubtitlesStyle.Text
 
     # ---- Валидация ----
-    if (!(Test-Path $script:folder_sources)) {
+    if ([string]::IsNullOrWhiteSpace($script:folder_sources) -or !(Test-Path $script:folder_sources)) {
         [System.Windows.Forms.MessageBox]::Show("Папка источника не найдена:`n$($script:folder_sources)", "Ошибка", "OK", "Error")
         return
     }
@@ -1063,7 +1091,17 @@ $buttonRun.Add_Click({
     $labelProgressSummary.Text = ""
 
     # ---- Запуск script.ps1 в фоновом Runspace ----
-    $scriptPath = Join-Path $PSScriptRoot "FFmpeg_Converter_script.ps1"
+    $scriptPath = Join-Path $script:_appDir "FFmpeg_Converter_script.ps1"
+    # Загружаем скрипт: из встроенной переменной (EXE) или из файла (.ps1)
+    if ($script:_embeddedScript) {
+        $scriptContent = $script:_embeddedScript
+    } elseif (Test-Path $scriptPath) {
+        $scriptContent = [System.IO.File]::ReadAllText($scriptPath, [System.Text.Encoding]::UTF8)
+    } else {
+        [System.Windows.Forms.MessageBox]::Show("Скрипт не найден:`n$scriptPath", "Ошибка", "OK", "Error") | Out-Null
+        $buttonRun.Enabled = $true; $buttonStop.Enabled = $false
+        return
+    }
 
     # Собираем все переменные для передачи в runspace
     $varsToPass = @{}
@@ -1088,11 +1126,13 @@ $buttonRun.Add_Click({
     foreach ($kv in $varsToPass.GetEnumerator()) {
         $rs.SessionStateProxy.SetVariable($kv.Key, $kv.Value)
     }
-    $rs.SessionStateProxy.SetVariable("PSScriptRoot", $PSScriptRoot)
+    $rs.SessionStateProxy.SetVariable("PSScriptRoot", $script:_appDir)
+    $rs.SessionStateProxy.SetVariable("guiProgressFile", $progressFile)
+    $rs.SessionStateProxy.SetVariable("guiCancelFile", $cancelFile)
 
     $ps = [System.Management.Automation.PowerShell]::Create()
     $ps.Runspace = $rs
-    $ps.AddScript(". '$scriptPath'") | Out-Null
+    $ps.AddScript($scriptContent) | Out-Null
     $global:_guiHandle    = $ps.BeginInvoke()
     $global:_guiPS        = $ps
     $global:_guiRunspace  = $rs
@@ -1103,9 +1143,19 @@ $buttonRun.Add_Click({
     $timer = [System.Windows.Forms.Timer]::new()
     $timer.Interval = 400
     $timer.Add_Tick({
+      try {
         # Проверяем, завершился ли фоновый процесс
         if ($global:_guiHandle.IsCompleted) {
-            $timer.Stop()
+            $this.Stop()
+
+            # Проверяем ошибки Runspace
+            try { $global:_guiPS.EndInvoke($global:_guiHandle) | Out-Null } catch {}
+            $rsErrors = $global:_guiPS.Streams.Error
+            if ($rsErrors -and $rsErrors.Count -gt 0) {
+                $errMsg = ($rsErrors | ForEach-Object { $_.ToString() }) -join "`n"
+                [System.Windows.Forms.MessageBox]::Show($errMsg, "Ошибка скрипта", "OK", "Error") | Out-Null
+                $labelProgressFile.Text = "Ошибка"
+            }
 
             # Читаем финальное состояние
             try {
@@ -1113,7 +1163,7 @@ $buttonRun.Add_Click({
                 if ($json) {
                     $progressBarFile.Value  = 100
                     $progressBarTotal.Value = 100
-                    $labelProgressFile.Text = "Готово"
+                    if (-not $labelProgressFile.Text.StartsWith("Ошибка")) { $labelProgressFile.Text = "Готово" }
                     $labelProgressTotal.Text = "Файлов: $($json.fileNum) / $($json.totalFiles)"
                     $labelProgressSummary.Text = "OK: $($json.ok)   Ошибки: $($json.fail)   Пропущено: $($json.skip)"
                 }
@@ -1134,7 +1184,7 @@ $buttonRun.Add_Click({
 
         # Читаем прогресс из JSON-файла
         try {
-            if (Test-Path $global:_guiProgress) {
+            if ($global:_guiProgress -and (Test-Path $global:_guiProgress)) {
                 $json = [System.IO.File]::ReadAllText($global:_guiProgress) | ConvertFrom-Json
                 $progressBarFile.Value  = [Math]::Min($json.filePercent,  100)
                 $progressBarTotal.Value = [Math]::Min($json.totalPercent, 100)
@@ -1147,8 +1197,14 @@ $buttonRun.Add_Click({
                 $labelProgressSummary.Text = "OK: $($json.ok)   Ошибки: $($json.fail)   Пропущено: $($json.skip)"
             }
         } catch {}
+      } catch {}
     })
     $timer.Start()
+  } catch {
+    [System.Windows.Forms.MessageBox]::Show("LINE $($_.InvocationInfo.ScriptLineNumber): $_", "DEBUG: Click Error", "OK", "Error") | Out-Null
+    $buttonRun.Enabled = $true
+    $buttonStop.Enabled = $false
+  }
 })
 
 $mainContainer.Controls.AddRange($_mc.ToArray())

@@ -2,20 +2,32 @@
 # FFmpeg Converter Script (PowerShell)
 # ============================================================
 
+# Перехват всех ошибок (не даёт исключениям выйти из Runspace в ps2exe)
+trap {
+	Write-Error "LINE $($_.InvocationInfo.ScriptLineNumber): $_"
+	break
+}
+
 # --- E1. Проверка окружения ---
-if (!(Test-Path $folder_sources)) {
+$_isGui = [bool]$env:FFMPEG_GUI_PROGRESS_FILE -or [bool]$guiProgressFile
+if ([string]::IsNullOrWhiteSpace($folder_sources) -or !(Test-Path $folder_sources)) {
 	Write-Host "`n[ОШИБКА] Папка источника не найдена: $folder_sources`n"
-	Read-Host "Нажмите [Enter], чтобы выйти..."
+	if (-not $_isGui) { Read-Host "Нажмите [Enter], чтобы выйти..." }
 	exit 1
 }
 
+if ([string]::IsNullOrWhiteSpace($folder_destination)) {
+	Write-Host "`n[ОШИБКА] Папка назначения не задана`n"
+	if (-not $_isGui) { Read-Host "Нажмите [Enter], чтобы выйти..." }
+	exit 1
+}
 if (!(Test-Path $folder_destination)) {
 	New-Item -ItemType Directory $folder_destination -Force | Out-Null
 }
 
 try { & $ffmpeg -version 2>&1 | Out-Null } catch {
 	Write-Host "`n[ОШИБКА] ffmpeg не найден: $ffmpeg`n"
-	Read-Host "Нажмите [Enter], чтобы выйти..."
+	if (-not $_isGui) { Read-Host "Нажмите [Enter], чтобы выйти..." }
 	exit 1
 }
 
@@ -247,9 +259,9 @@ $thread_args = @("-threads", $threads)
 # --- Формат входных файлов ---
 $format_files_in_list = Get-ChildItem $folder_sources -Recurse -Include ($format_files_in -split "," | ForEach-Object { "*.$_" })
 
-# --- GUI-прогресс (пишем JSON-файл, если задан env FFMPEG_GUI_PROGRESS_FILE) ---
-$guiProgressFile = $env:FFMPEG_GUI_PROGRESS_FILE
-$guiCancelFile   = $env:FFMPEG_GUI_CANCEL_FILE
+# --- GUI-прогресс (переменная из Runspace или env) ---
+if (-not $guiProgressFile) { $guiProgressFile = $env:FFMPEG_GUI_PROGRESS_FILE }
+if (-not $guiCancelFile)   { $guiCancelFile   = $env:FFMPEG_GUI_CANCEL_FILE }
 
 # --- J2. Счётчики ---
 $script:totalFiles  = ($format_files_in_list | Measure-Object).Count
@@ -276,7 +288,7 @@ function Log-Msg {
 function Write-GUIProgress {
 	param([int]$FilePercent = 0, [string]$CurrentFile = "")
 	if (-not $guiProgressFile) { return }
-	$totalPct = if ($script:totalFiles -gt 0) { [int]($script:fileNum * 100 / $script:totalFiles) } else { 0 }
+	$totalPct = if ($script:totalFiles -gt 0) { [int](($script:fileNum - 1 + $FilePercent / 100) * 100 / $script:totalFiles) } else { 0 }
 	$data = [ordered]@{
 		filePercent  = $FilePercent
 		totalPercent = $totalPct
@@ -558,11 +570,15 @@ function Encode-File {
 				$fpct = 0
 				try {
 					if (Test-Path $progressTempFile) {
-						$fc = [System.IO.File]::ReadAllText($progressTempFile)
-						$m = [regex]::Matches($fc, "out_time_ms=(\d+)")
+						$fs = [System.IO.FileStream]::new($progressTempFile, 'Open', 'Read', 'ReadWrite')
+						$sr = [System.IO.StreamReader]::new($fs)
+						$fc = $sr.ReadToEnd()
+						$sr.Close()
+						$m = [regex]::Matches($fc, "out_time=(\d+):(\d+):(\d+)")
 						if ($m.Count -gt 0 -and $fileDuration -gt 0) {
-							$otms = [long]$m[$m.Count - 1].Groups[1].Value
-							$fpct = [int]($otms / 1000000 / $fileDuration * 100)
+							$last = $m[$m.Count - 1]
+							$outSec = [int]$last.Groups[1].Value * 3600 + [int]$last.Groups[2].Value * 60 + [int]$last.Groups[3].Value
+							$fpct = [int]($outSec / $fileDuration * 100)
 							$fpct = [Math]::Min($fpct, 99)
 						}
 					}
@@ -587,7 +603,9 @@ function Encode-File {
 			# E2. Обработка ошибок
 			if ($exitCode -ne 0) {
 				Log-Msg "FAIL" "$($file.Name) (exit code $exitCode, $elapsedStr)"
-				if (Test-Path $out_file) { Remove-Item $out_file -Force }
+				# Ждём освобождения файла после Kill
+				Start-Sleep -Milliseconds 500
+				if (Test-Path $out_file) { Remove-Item $out_file -Force -ErrorAction SilentlyContinue }
 				$script:countFail++
 				Write-GUIProgress -FilePercent 0 -CurrentFile $file.Name
 			} else {

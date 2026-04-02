@@ -286,8 +286,9 @@ function Log-Msg {
 
 # --- Запись GUI-прогресса ---
 function Write-GUIProgress {
-	param([int]$FilePercent = 0, [string]$CurrentFile = "")
+	param([int]$FilePercent = 0, [string]$CurrentFile = "", [string]$Command = "")
 	if (-not $guiProgressFile) { return }
+	if ($Command) { $script:_lastCommand = $Command }
 	$totalPct = if ($script:totalFiles -gt 0) { [int](($script:fileNum - 1 + $FilePercent / 100) * 100 / $script:totalFiles) } else { 0 }
 	$data = [ordered]@{
 		filePercent  = $FilePercent
@@ -298,6 +299,7 @@ function Write-GUIProgress {
 		ok           = $script:countOk
 		fail         = $script:countFail
 		skip         = $script:countSkip
+		command      = if ($script:_lastCommand) { $script:_lastCommand } else { "" }
 		pid          = 0
 	}
 	try {
@@ -343,7 +345,8 @@ function Encode-File {
 			return
 		}
 		Log-Msg "INFO" "Извлечение аудио: $($file.Name)"
-		Write-GUIProgress -FilePercent 0 -CurrentFile $file.Name
+		$_cmdStr = "$ffmpeg -hide_banner -strict -2 -i `"$full_path`" -vn -c:a copy `"$outAudio`" -y"
+		Write-GUIProgress -FilePercent 0 -CurrentFile $file.Name -Command $_cmdStr
 		& $ffmpeg -hide_banner -strict -2 -i $full_path -vn -c:a copy $outAudio -y
 		if ($LASTEXITCODE -ne 0) {
 			Log-Msg "FAIL" "$($file.Name)"
@@ -541,7 +544,8 @@ function Encode-File {
 			Write-Host "[DRY-RUN] $ffmpeg $($ffmpegArgs -join ' ')"
 		} else {
 			Log-Msg "INFO" "Кодирование: $($file.Name) -> $(Split-Path $out_file -Leaf)"
-			Write-GUIProgress -FilePercent 0 -CurrentFile $file.Name
+			$_cmdStr = "$ffmpeg $($ffmpegArgs -join ' ')"
+			Write-GUIProgress -FilePercent 0 -CurrentFile $file.Name -Command $_cmdStr
 
 			# J1. Запуск ffmpeg с прогресс-файлом
 			$progressTempFile = [System.IO.Path]::GetTempFileName()

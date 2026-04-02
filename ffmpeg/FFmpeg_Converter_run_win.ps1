@@ -113,7 +113,7 @@ $_cfg_log_file     = Read-Config "log_file"           "other" "ffmpeg_convert.lo
 # Main Form
 $form = [System.Windows.Forms.Form]::new()
 $form.Text = "Video Converter (ffmpeg)"
-$form.Size = [System.Drawing.Size]::new(820, 908)
+$form.Size = [System.Drawing.Size]::new(820, 850)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
@@ -128,7 +128,7 @@ $_mc = [System.Collections.Generic.List[System.Windows.Forms.Control]]::new()
 # Main container
 $mainContainer = [System.Windows.Forms.Panel]::new()
 $mainContainer.Location = [System.Drawing.Point]::new(10, 36)
-$mainContainer.Size = [System.Drawing.Size]::new(790, 840)
+$mainContainer.Size = [System.Drawing.Size]::new(790, 780)
 $mainContainer.AutoScroll = $true
 $_fc.Add($mainContainer)
 
@@ -369,7 +369,7 @@ $_go.Add($labelGpuPreset)
 
 $comboGpuPreset = [System.Windows.Forms.ComboBox]::new()
 $comboGpuPreset.Location = [System.Drawing.Point]::new(300, 84)
-$comboGpuPreset.Size = [System.Drawing.Size]::new(55, 21)
+$comboGpuPreset.Size = [System.Drawing.Size]::new(90, 21)
 $comboGpuPreset.Items.AddRange(@("p1", "p2", "p3", "p4", "p5", "p6", "p7"))
 $comboGpuPreset.SelectedIndex = 4
 $comboGpuPreset.Visible = $false
@@ -377,14 +377,14 @@ $_go.Add($comboGpuPreset)
 
 # GPU Tune (NVIDIA only, hidden)
 $labelGpuTune = [System.Windows.Forms.Label]::new()
-$labelGpuTune.Location = [System.Drawing.Point]::new(362, 86)
+$labelGpuTune.Location = [System.Drawing.Point]::new(397, 86)
 $labelGpuTune.Size = [System.Drawing.Size]::new(40, 16)
 $labelGpuTune.Text = "Tune:"
 $labelGpuTune.Visible = $false
 $_go.Add($labelGpuTune)
 
 $comboGpuTune = [System.Windows.Forms.ComboBox]::new()
-$comboGpuTune.Location = [System.Drawing.Point]::new(404, 84)
+$comboGpuTune.Location = [System.Drawing.Point]::new(439, 84)
 $comboGpuTune.Size = [System.Drawing.Size]::new(70, 21)
 $comboGpuTune.Items.AddRange(@("hq", "ll", "ull", "lossless"))
 $comboGpuTune.SelectedIndex = 0
@@ -393,14 +393,14 @@ $_go.Add($comboGpuTune)
 
 # GPU RC (NVIDIA only, hidden)
 $labelGpuRC = [System.Windows.Forms.Label]::new()
-$labelGpuRC.Location = [System.Drawing.Point]::new(480, 86)
+$labelGpuRC.Location = [System.Drawing.Point]::new(515, 86)
 $labelGpuRC.Size = [System.Drawing.Size]::new(28, 16)
 $labelGpuRC.Text = "RC:"
 $labelGpuRC.Visible = $false
 $_go.Add($labelGpuRC)
 
 $comboGpuRC = [System.Windows.Forms.ComboBox]::new()
-$comboGpuRC.Location = [System.Drawing.Point]::new(510, 84)
+$comboGpuRC.Location = [System.Drawing.Point]::new(545, 84)
 $comboGpuRC.Size = [System.Drawing.Size]::new(70, 21)
 $comboGpuRC.Items.AddRange(@("vbr", "cbr", "constqp"))
 $comboGpuRC.SelectedIndex = 0
@@ -464,34 +464,39 @@ $idxRC = $comboGpuRC.Items.IndexOf($_cfg_gpu_rc.value)
 if ($idxRC -ge 0) { $comboGpuRC.SelectedIndex = $idxRC }
 
 $groupOptions.Controls.AddRange($_go.ToArray())
+# Жирный заголовок, дочерние контролы — обычный шрифт
+$_regFont = $groupOptions.Font
+$groupOptions.Font = [System.Drawing.Font]::new($_regFont, [System.Drawing.FontStyle]::Bold)
+foreach ($c in $groupOptions.Controls) { $c.Font = $_regFont }
 $_mc.Add($groupOptions)
 
 # ========== Encoding Section ==========
-$yPos = 260
+$yPos = 240
 $groupEncoding = [System.Windows.Forms.GroupBox]::new()
 $groupEncoding.Location = [System.Drawing.Point]::new($xPos0, $yPos)
-$groupEncoding.Size = [System.Drawing.Size]::new(770, 205)
+$groupEncoding.Size = [System.Drawing.Size]::new(770, 130)
 $groupEncoding.Text = "Настройки кодирования"
 $_ge = [System.Collections.Generic.List[System.Windows.Forms.Control]]::new()
 
 # --- Audio column (x=8) ---
+$_ax = 8; $_achk = 105; $_ainp = 125; $_aw = 120
 
 # Audio Codec
 $labelAudioCodec = [System.Windows.Forms.Label]::new()
-$labelAudioCodec.Location = [System.Drawing.Point]::new(8, 18)
-$labelAudioCodec.Size = [System.Drawing.Size]::new(120, 16)
+$labelAudioCodec.Location = [System.Drawing.Point]::new($_ax, 18)
+$labelAudioCodec.Size = [System.Drawing.Size]::new(95, 16)
 $labelAudioCodec.Text = "Аудио кодек:"
 $_ge.Add($labelAudioCodec)
 
 $checkAudioCodec = [System.Windows.Forms.CheckBox]::new()
-$checkAudioCodec.Location = [System.Drawing.Point]::new(130, 18)
+$checkAudioCodec.Location = [System.Drawing.Point]::new($_achk, 18)
 $checkAudioCodec.Size = [System.Drawing.Size]::new(18, 18)
 $checkAudioCodec.Checked = $_cfg_audio_codec.enabled
 $_ge.Add($checkAudioCodec)
 
 $comboAudioCodec = [System.Windows.Forms.ComboBox]::new()
-$comboAudioCodec.Location = [System.Drawing.Point]::new(150, 18)
-$comboAudioCodec.Size = [System.Drawing.Size]::new(105, 21)
+$comboAudioCodec.Location = [System.Drawing.Point]::new($_ainp, 18)
+$comboAudioCodec.Size = [System.Drawing.Size]::new($_aw, 21)
 $comboAudioCodec.Items.AddRange(@("aac", "libmp3lame"))
 $_acIdx = $comboAudioCodec.Items.IndexOf($_cfg_audio_codec.value)
 $comboAudioCodec.SelectedIndex = if ($_acIdx -ge 0) { $_acIdx } else { 0 }
@@ -499,101 +504,102 @@ $_ge.Add($comboAudioCodec)
 
 # Audio Channels
 $labelAudioChannels = [System.Windows.Forms.Label]::new()
-$labelAudioChannels.Location = [System.Drawing.Point]::new(8, 40)
-$labelAudioChannels.Size = [System.Drawing.Size]::new(120, 16)
+$labelAudioChannels.Location = [System.Drawing.Point]::new($_ax, 40)
+$labelAudioChannels.Size = [System.Drawing.Size]::new(95, 16)
 $labelAudioChannels.Text = "Каналы:"
 $_ge.Add($labelAudioChannels)
 
 $checkAudioChannels = [System.Windows.Forms.CheckBox]::new()
-$checkAudioChannels.Location = [System.Drawing.Point]::new(130, 40)
+$checkAudioChannels.Location = [System.Drawing.Point]::new($_achk, 40)
 $checkAudioChannels.Size = [System.Drawing.Size]::new(18, 18)
 $checkAudioChannels.Checked = $_cfg_audio_channels.enabled
 $_ge.Add($checkAudioChannels)
 
 $comboAudioChannels = [System.Windows.Forms.ComboBox]::new()
-$comboAudioChannels.Location = [System.Drawing.Point]::new(150, 40)
-$comboAudioChannels.Size = [System.Drawing.Size]::new(105, 21)
+$comboAudioChannels.Location = [System.Drawing.Point]::new($_ainp, 40)
+$comboAudioChannels.Size = [System.Drawing.Size]::new($_aw, 21)
 $comboAudioChannels.Items.AddRange(@("1 - Mono", "2 - Stereo"))
 $comboAudioChannels.SelectedIndex = if ($_cfg_audio_channels.value -eq "1") { 0 } else { 1 }
 $_ge.Add($comboAudioChannels)
 
 # Audio Bitrate
 $labelAudioBitrate = [System.Windows.Forms.Label]::new()
-$labelAudioBitrate.Location = [System.Drawing.Point]::new(8, 62)
-$labelAudioBitrate.Size = [System.Drawing.Size]::new(120, 16)
+$labelAudioBitrate.Location = [System.Drawing.Point]::new($_ax, 62)
+$labelAudioBitrate.Size = [System.Drawing.Size]::new(95, 16)
 $labelAudioBitrate.Text = "Аудио битрейт:"
 $_ge.Add($labelAudioBitrate)
 
 $checkAudioBitrate = [System.Windows.Forms.CheckBox]::new()
-$checkAudioBitrate.Location = [System.Drawing.Point]::new(130, 62)
+$checkAudioBitrate.Location = [System.Drawing.Point]::new($_achk, 62)
 $checkAudioBitrate.Size = [System.Drawing.Size]::new(18, 18)
 $checkAudioBitrate.Checked = $_cfg_audio_bitrate.enabled
 $_ge.Add($checkAudioBitrate)
 
 $textAudioBitrate = [System.Windows.Forms.TextBox]::new()
-$textAudioBitrate.Location = [System.Drawing.Point]::new(150, 62)
-$textAudioBitrate.Size = [System.Drawing.Size]::new(105, 20)
+$textAudioBitrate.Location = [System.Drawing.Point]::new($_ainp, 62)
+$textAudioBitrate.Size = [System.Drawing.Size]::new($_aw, 20)
 $textAudioBitrate.Text = $_cfg_audio_bitrate.value
 $_ge.Add($textAudioBitrate)
 
 # Audio Sampling Rate
 $labelAudioSampleRate = [System.Windows.Forms.Label]::new()
-$labelAudioSampleRate.Location = [System.Drawing.Point]::new(8, 84)
-$labelAudioSampleRate.Size = [System.Drawing.Size]::new(120, 16)
+$labelAudioSampleRate.Location = [System.Drawing.Point]::new($_ax, 84)
+$labelAudioSampleRate.Size = [System.Drawing.Size]::new(95, 16)
 $labelAudioSampleRate.Text = "Дискретизация:"
 $_ge.Add($labelAudioSampleRate)
 
 $checkAudioSampleRate = [System.Windows.Forms.CheckBox]::new()
-$checkAudioSampleRate.Location = [System.Drawing.Point]::new(130, 84)
+$checkAudioSampleRate.Location = [System.Drawing.Point]::new($_achk, 84)
 $checkAudioSampleRate.Size = [System.Drawing.Size]::new(18, 18)
 $checkAudioSampleRate.Checked = $_cfg_audio_sample.enabled
 $_ge.Add($checkAudioSampleRate)
 
 $textAudioSampleRate = [System.Windows.Forms.TextBox]::new()
-$textAudioSampleRate.Location = [System.Drawing.Point]::new(150, 84)
-$textAudioSampleRate.Size = [System.Drawing.Size]::new(105, 20)
+$textAudioSampleRate.Location = [System.Drawing.Point]::new($_ainp, 84)
+$textAudioSampleRate.Size = [System.Drawing.Size]::new($_aw, 20)
 $textAudioSampleRate.Text = $_cfg_audio_sample.value
 $_ge.Add($textAudioSampleRate)
 
 # Audio Normalize
 $labelAudioNorm = [System.Windows.Forms.Label]::new()
-$labelAudioNorm.Location = [System.Drawing.Point]::new(8, 106)
-$labelAudioNorm.Size = [System.Drawing.Size]::new(120, 16)
+$labelAudioNorm.Location = [System.Drawing.Point]::new($_ax, 106)
+$labelAudioNorm.Size = [System.Drawing.Size]::new(95, 16)
 $labelAudioNorm.Text = "Нормализация:"
 $_ge.Add($labelAudioNorm)
 
 $checkAudioNorm = [System.Windows.Forms.CheckBox]::new()
-$checkAudioNorm.Location = [System.Drawing.Point]::new(130, 106)
+$checkAudioNorm.Location = [System.Drawing.Point]::new($_achk, 106)
 $checkAudioNorm.Size = [System.Drawing.Size]::new(18, 18)
 $checkAudioNorm.Checked = $_cfg_audio_norm.enabled
 $_ge.Add($checkAudioNorm)
 
 $comboAudioNorm = [System.Windows.Forms.ComboBox]::new()
-$comboAudioNorm.Location = [System.Drawing.Point]::new(150, 106)
-$comboAudioNorm.Size = [System.Drawing.Size]::new(105, 21)
+$comboAudioNorm.Location = [System.Drawing.Point]::new($_ainp, 106)
+$comboAudioNorm.Size = [System.Drawing.Size]::new($_aw, 21)
 $comboAudioNorm.Items.AddRange(@("loudnorm", "dynaudnorm"))
 $_anIdx = $comboAudioNorm.Items.IndexOf($_cfg_audio_norm.value)
 $comboAudioNorm.SelectedIndex = if ($_anIdx -ge 0) { $_anIdx } else { 0 }
 $_ge.Add($comboAudioNorm)
 
-# --- Video column (x=380) ---
+# --- Video column 1 (x=265) ---
+$_vx = 265; $_vchk = 365; $_vinp = 385; $_vw = 120
 
 # Video Codec
 $labelVideoCodec = [System.Windows.Forms.Label]::new()
-$labelVideoCodec.Location = [System.Drawing.Point]::new(380, 18)
-$labelVideoCodec.Size = [System.Drawing.Size]::new(110, 16)
+$labelVideoCodec.Location = [System.Drawing.Point]::new($_vx, 18)
+$labelVideoCodec.Size = [System.Drawing.Size]::new(98, 16)
 $labelVideoCodec.Text = "Видео кодек:"
 $_ge.Add($labelVideoCodec)
 
 $checkVideoCodec = [System.Windows.Forms.CheckBox]::new()
-$checkVideoCodec.Location = [System.Drawing.Point]::new(492, 18)
+$checkVideoCodec.Location = [System.Drawing.Point]::new($_vchk, 18)
 $checkVideoCodec.Size = [System.Drawing.Size]::new(18, 18)
 $checkVideoCodec.Checked = $_cfg_video_codec.enabled
 $_ge.Add($checkVideoCodec)
 
 $comboVideoCodec = [System.Windows.Forms.ComboBox]::new()
-$comboVideoCodec.Location = [System.Drawing.Point]::new(512, 18)
-$comboVideoCodec.Size = [System.Drawing.Size]::new(130, 21)
+$comboVideoCodec.Location = [System.Drawing.Point]::new($_vinp, 18)
+$comboVideoCodec.Size = [System.Drawing.Size]::new($_vw, 21)
 $comboVideoCodec.Items.AddRange(@("libx264", "libx265", "libsvtav1", "h264_nvenc", "hevc_nvenc", "av1_nvenc", "h264_qsv"))
 $_vcIdx = $comboVideoCodec.Items.IndexOf($_cfg_video_codec.value)
 $comboVideoCodec.SelectedIndex = if ($_vcIdx -ge 0) { $_vcIdx } else { 0 }
@@ -601,20 +607,20 @@ $_ge.Add($comboVideoCodec)
 
 # Video Resolution
 $labelVideoResolution = [System.Windows.Forms.Label]::new()
-$labelVideoResolution.Location = [System.Drawing.Point]::new(380, 40)
-$labelVideoResolution.Size = [System.Drawing.Size]::new(110, 16)
+$labelVideoResolution.Location = [System.Drawing.Point]::new($_vx, 40)
+$labelVideoResolution.Size = [System.Drawing.Size]::new(98, 16)
 $labelVideoResolution.Text = "Разрешение:"
 $_ge.Add($labelVideoResolution)
 
 $checkVideoResolution = [System.Windows.Forms.CheckBox]::new()
-$checkVideoResolution.Location = [System.Drawing.Point]::new(492, 40)
+$checkVideoResolution.Location = [System.Drawing.Point]::new($_vchk, 40)
 $checkVideoResolution.Size = [System.Drawing.Size]::new(18, 18)
 $checkVideoResolution.Checked = $_cfg_video_resolution.enabled
 $_ge.Add($checkVideoResolution)
 
 $comboVideoResolution = [System.Windows.Forms.ComboBox]::new()
-$comboVideoResolution.Location = [System.Drawing.Point]::new(512, 40)
-$comboVideoResolution.Size = [System.Drawing.Size]::new(130, 21)
+$comboVideoResolution.Location = [System.Drawing.Point]::new($_vinp, 40)
+$comboVideoResolution.Size = [System.Drawing.Size]::new($_vw, 21)
 $comboVideoResolution.Items.AddRange(@("1920x1080", "1280x720", "854x480", "640x360", "1440x1080", "960x720", "640x480", "480x360"))
 $_vrIdx = $comboVideoResolution.Items.IndexOf($_cfg_video_resolution.value)
 $comboVideoResolution.SelectedIndex = if ($_vrIdx -ge 0) { $_vrIdx } else { 1 }
@@ -622,123 +628,129 @@ $_ge.Add($comboVideoResolution)
 
 # Video Bitrate
 $labelVideoBitrate = [System.Windows.Forms.Label]::new()
-$labelVideoBitrate.Location = [System.Drawing.Point]::new(380, 62)
-$labelVideoBitrate.Size = [System.Drawing.Size]::new(110, 16)
+$labelVideoBitrate.Location = [System.Drawing.Point]::new($_vx, 62)
+$labelVideoBitrate.Size = [System.Drawing.Size]::new(98, 16)
 $labelVideoBitrate.Text = "Видео битрейт:"
 $_ge.Add($labelVideoBitrate)
 
 $checkVideoBitrate = [System.Windows.Forms.CheckBox]::new()
-$checkVideoBitrate.Location = [System.Drawing.Point]::new(492, 62)
+$checkVideoBitrate.Location = [System.Drawing.Point]::new($_vchk, 62)
 $checkVideoBitrate.Size = [System.Drawing.Size]::new(18, 18)
 $checkVideoBitrate.Checked = $_cfg_video_bitrate.enabled
 $_ge.Add($checkVideoBitrate)
 
 $textVideoBitrate = [System.Windows.Forms.TextBox]::new()
-$textVideoBitrate.Location = [System.Drawing.Point]::new(512, 62)
-$textVideoBitrate.Size = [System.Drawing.Size]::new(130, 20)
+$textVideoBitrate.Location = [System.Drawing.Point]::new($_vinp, 62)
+$textVideoBitrate.Size = [System.Drawing.Size]::new($_vw, 20)
 $textVideoBitrate.Text = $_cfg_video_bitrate.value
 $_ge.Add($textVideoBitrate)
 
 # Frame Rate
 $labelFrameRate = [System.Windows.Forms.Label]::new()
-$labelFrameRate.Location = [System.Drawing.Point]::new(380, 84)
-$labelFrameRate.Size = [System.Drawing.Size]::new(110, 16)
+$labelFrameRate.Location = [System.Drawing.Point]::new($_vx, 84)
+$labelFrameRate.Size = [System.Drawing.Size]::new(98, 16)
 $labelFrameRate.Text = "Кадры/с:"
 $_ge.Add($labelFrameRate)
 
 $checkFrameRate = [System.Windows.Forms.CheckBox]::new()
-$checkFrameRate.Location = [System.Drawing.Point]::new(492, 84)
+$checkFrameRate.Location = [System.Drawing.Point]::new($_vchk, 84)
 $checkFrameRate.Size = [System.Drawing.Size]::new(18, 18)
 $checkFrameRate.Checked = $_cfg_video_framerate.enabled
 $_ge.Add($checkFrameRate)
 
 $textFrameRate = [System.Windows.Forms.TextBox]::new()
-$textFrameRate.Location = [System.Drawing.Point]::new(512, 84)
-$textFrameRate.Size = [System.Drawing.Size]::new(130, 20)
+$textFrameRate.Location = [System.Drawing.Point]::new($_vinp, 84)
+$textFrameRate.Size = [System.Drawing.Size]::new($_vw, 20)
 $textFrameRate.Text = $_cfg_video_framerate.value
 $_ge.Add($textFrameRate)
 
 # Video Quality (CRF/CQ)
 $labelVideoQuality = [System.Windows.Forms.Label]::new()
-$labelVideoQuality.Location = [System.Drawing.Point]::new(380, 106)
-$labelVideoQuality.Size = [System.Drawing.Size]::new(110, 16)
+$labelVideoQuality.Location = [System.Drawing.Point]::new($_vx, 106)
+$labelVideoQuality.Size = [System.Drawing.Size]::new(98, 16)
 $labelVideoQuality.Text = "Качество (CRF):"
 $_ge.Add($labelVideoQuality)
 
 $checkVideoQuality = [System.Windows.Forms.CheckBox]::new()
-$checkVideoQuality.Location = [System.Drawing.Point]::new(492, 106)
+$checkVideoQuality.Location = [System.Drawing.Point]::new($_vchk, 106)
 $checkVideoQuality.Size = [System.Drawing.Size]::new(18, 18)
 $checkVideoQuality.Checked = $_cfg_video_quality.enabled
 $_ge.Add($checkVideoQuality)
 
 $textVideoQuality = [System.Windows.Forms.TextBox]::new()
-$textVideoQuality.Location = [System.Drawing.Point]::new(512, 106)
-$textVideoQuality.Size = [System.Drawing.Size]::new(130, 20)
+$textVideoQuality.Location = [System.Drawing.Point]::new($_vinp, 106)
+$textVideoQuality.Size = [System.Drawing.Size]::new($_vw, 20)
 $textVideoQuality.Text = $_cfg_video_quality.value
 $_ge.Add($textVideoQuality)
 
+# --- Video column 2 (x=522) ---
+$_v2x = 522; $_v2chk = 612; $_v2inp = 632; $_v2w = 130
+
 # Video Rotation
 $labelVideoRotation = [System.Windows.Forms.Label]::new()
-$labelVideoRotation.Location = [System.Drawing.Point]::new(380, 128)
-$labelVideoRotation.Size = [System.Drawing.Size]::new(110, 16)
+$labelVideoRotation.Location = [System.Drawing.Point]::new($_v2x, 18)
+$labelVideoRotation.Size = [System.Drawing.Size]::new(88, 16)
 $labelVideoRotation.Text = "Поворот:"
 $_ge.Add($labelVideoRotation)
 
 $checkVideoRotation = [System.Windows.Forms.CheckBox]::new()
-$checkVideoRotation.Location = [System.Drawing.Point]::new(492, 128)
+$checkVideoRotation.Location = [System.Drawing.Point]::new($_v2chk, 18)
 $checkVideoRotation.Size = [System.Drawing.Size]::new(18, 18)
 $checkVideoRotation.Checked = $_cfg_video_rotation.enabled
 $_ge.Add($checkVideoRotation)
 
 $comboVideoRotation = [System.Windows.Forms.ComboBox]::new()
-$comboVideoRotation.Location = [System.Drawing.Point]::new(512, 128)
-$comboVideoRotation.Size = [System.Drawing.Size]::new(160, 21)
+$comboVideoRotation.Location = [System.Drawing.Point]::new($_v2inp, 18)
+$comboVideoRotation.Size = [System.Drawing.Size]::new($_v2w, 21)
 $comboVideoRotation.Items.AddRange(@("1 - По часовой", "2 - Против часовой"))
 $comboVideoRotation.SelectedIndex = if ($_cfg_video_rotation.value -eq "1") { 0 } else { 1 }
 $_ge.Add($comboVideoRotation)
 
 # Video Subtitles
 $labelVideoSubtitles = [System.Windows.Forms.Label]::new()
-$labelVideoSubtitles.Location = [System.Drawing.Point]::new(380, 150)
-$labelVideoSubtitles.Size = [System.Drawing.Size]::new(110, 16)
+$labelVideoSubtitles.Location = [System.Drawing.Point]::new($_v2x, 40)
+$labelVideoSubtitles.Size = [System.Drawing.Size]::new(88, 16)
 $labelVideoSubtitles.Text = "Субтитры:"
 $_ge.Add($labelVideoSubtitles)
 
 $checkVideoSubtitles = [System.Windows.Forms.CheckBox]::new()
-$checkVideoSubtitles.Location = [System.Drawing.Point]::new(492, 150)
+$checkVideoSubtitles.Location = [System.Drawing.Point]::new($_v2chk, 40)
 $checkVideoSubtitles.Size = [System.Drawing.Size]::new(18, 18)
 $checkVideoSubtitles.Checked = $_cfg_video_subtitles.enabled
 $_ge.Add($checkVideoSubtitles)
 
 $comboSubtitlesMode = [System.Windows.Forms.ComboBox]::new()
-$comboSubtitlesMode.Location = [System.Drawing.Point]::new(512, 150)
-$comboSubtitlesMode.Size = [System.Drawing.Size]::new(160, 21)
+$comboSubtitlesMode.Location = [System.Drawing.Point]::new($_v2inp, 40)
+$comboSubtitlesMode.Size = [System.Drawing.Size]::new($_v2w, 21)
 $comboSubtitlesMode.Items.AddRange(@("burn - На видео", "meta - Дорожкой"))
 $comboSubtitlesMode.SelectedIndex = if ($_cfg_video_subtitles.value -eq "meta") { 1 } else { 0 }
 $_ge.Add($comboSubtitlesMode)
 
 # Output Container
 $labelContainer = [System.Windows.Forms.Label]::new()
-$labelContainer.Location = [System.Drawing.Point]::new(380, 172)
-$labelContainer.Size = [System.Drawing.Size]::new(110, 16)
+$labelContainer.Location = [System.Drawing.Point]::new($_v2x, 62)
+$labelContainer.Size = [System.Drawing.Size]::new(88, 16)
 $labelContainer.Text = "Контейнер:"
 $_ge.Add($labelContainer)
 
 $checkContainer = [System.Windows.Forms.CheckBox]::new()
-$checkContainer.Location = [System.Drawing.Point]::new(492, 172)
+$checkContainer.Location = [System.Drawing.Point]::new($_v2chk, 62)
 $checkContainer.Size = [System.Drawing.Size]::new(18, 18)
 $checkContainer.Checked = $_cfg_container.enabled
 $_ge.Add($checkContainer)
 
 $comboContainer = [System.Windows.Forms.ComboBox]::new()
-$comboContainer.Location = [System.Drawing.Point]::new(512, 172)
-$comboContainer.Size = [System.Drawing.Size]::new(130, 21)
+$comboContainer.Location = [System.Drawing.Point]::new($_v2inp, 62)
+$comboContainer.Size = [System.Drawing.Size]::new($_v2w, 21)
 $comboContainer.Items.AddRange(@("mp4", "mkv", "webm", "avi", "ts"))
 $_cntIdx = $comboContainer.Items.IndexOf($_cfg_container.value)
 $comboContainer.SelectedIndex = if ($_cntIdx -ge 0) { $_cntIdx } else { 0 }
 $_ge.Add($comboContainer)
 
 $groupEncoding.Controls.AddRange($_ge.ToArray())
+$_regFont = $groupEncoding.Font
+$groupEncoding.Font = [System.Drawing.Font]::new($_regFont, [System.Drawing.FontStyle]::Bold)
+foreach ($c in $groupEncoding.Controls) { $c.Font = $_regFont }
 $_mc.Add($groupEncoding)
 
 # ========== Взаимоисключающие опции ==========
@@ -863,7 +875,7 @@ $checkVideoQuality.Add_CheckedChanged({ Update-MutualExclusion })
 $checkVideoBitrate.Add_CheckedChanged({ Update-MutualExclusion })
 
 # ========== Playback Speed Section ==========
-$yPos = 469
+$yPos = 374
 $groupSpeed = [System.Windows.Forms.GroupBox]::new()
 $groupSpeed.Location = [System.Drawing.Point]::new($xPos0, $yPos)
 $groupSpeed.Size = [System.Drawing.Size]::new(770, 42)
@@ -891,13 +903,16 @@ $labelSpeedInfo.Font = [System.Drawing.Font]::new($labelSpeedInfo.Font.FontFamil
 $_gsp.Add($labelSpeedInfo)
 
 $groupSpeed.Controls.AddRange($_gsp.ToArray())
+$_regFont = $groupSpeed.Font
+$groupSpeed.Font = [System.Drawing.Font]::new($_regFont, [System.Drawing.FontStyle]::Bold)
+foreach ($c in $groupSpeed.Controls) { $c.Font = $_regFont }
 $_mc.Add($groupSpeed)
 
 # Начальная синхронизация взаимоисключающих опций (после создания всех контролов)
 Update-MutualExclusion
 
 # ========== Split Section ==========
-$yPos = 515
+$yPos = 420
 $groupSplit = [System.Windows.Forms.GroupBox]::new()
 $groupSplit.Location = [System.Drawing.Point]::new($xPos0, $yPos)
 $groupSplit.Size = [System.Drawing.Size]::new(770, 106)
@@ -985,10 +1000,13 @@ $labelSplitInfo.Font = [System.Drawing.Font]::new($labelSplitInfo.Font.FontFamil
 $_gspl.Add($labelSplitInfo)
 
 $groupSplit.Controls.AddRange($_gspl.ToArray())
+$_regFont = $groupSplit.Font
+$groupSplit.Font = [System.Drawing.Font]::new($_regFont, [System.Drawing.FontStyle]::Bold)
+foreach ($c in $groupSplit.Controls) { $c.Font = $_regFont }
 $_mc.Add($groupSplit)
 
 # ========== Other Settings (collapsible) ==========
-$yPos = 625
+$yPos = 530
 $groupOther = [System.Windows.Forms.GroupBox]::new()
 $groupOther.Location = [System.Drawing.Point]::new($xPos0, $yPos)
 $groupOther.Size = [System.Drawing.Size]::new(770, 18)
@@ -1042,11 +1060,14 @@ $textSubtitlesStyle.Text = $_cfg_sub_style
 $_goth.Add($textSubtitlesStyle)
 
 $groupOther.Controls.AddRange($_goth.ToArray())
+$_regFont = $groupOther.Font
+$groupOther.Font = [System.Drawing.Font]::new($_regFont, [System.Drawing.FontStyle]::Bold)
+foreach ($c in $groupOther.Controls) { $c.Font = $_regFont }
 $_mc.Add($groupOther)
 
 # ========== Buttons Row ==========
 # Centered: Run(260) + gap(12) + Stop(170) = 442 total in 770px → left = (770-442)/2 = 164 → absolute x = xPos0+164 = 174
-$yPos = 647
+$yPos = 552
 
 $buttonRun = [System.Windows.Forms.Button]::new()
 $buttonRun.Location = [System.Drawing.Point]::new(174, $yPos)
@@ -1070,10 +1091,10 @@ $buttonStop.Add_Click({
 $_mc.Add($buttonStop)
 
 # ========== Progress Section ==========
-$yPos = 681
+$yPos = 586
 $groupProgress = [System.Windows.Forms.GroupBox]::new()
 $groupProgress.Location = [System.Drawing.Point]::new($xPos0, $yPos)
-$groupProgress.Size = [System.Drawing.Size]::new(770, 132)
+$groupProgress.Size = [System.Drawing.Size]::new(770, 168)
 $groupProgress.Text = "Прогресс"
 $groupProgress.Font = [System.Drawing.Font]::new($groupProgress.Font, [System.Drawing.FontStyle]::Bold)
 $_gpr = [System.Collections.Generic.List[System.Windows.Forms.Control]]::new()
@@ -1119,6 +1140,35 @@ $labelProgressSummary.Size = [System.Drawing.Size]::new(750, 16)
 $labelProgressSummary.Text = ""
 $labelProgressSummary.Font = [System.Drawing.Font]::new($labelProgressSummary.Font.FontFamily, 8, [System.Drawing.FontStyle]::Regular)
 $_gpr.Add($labelProgressSummary)
+
+# Command line display
+$labelCmd = [System.Windows.Forms.Label]::new()
+$labelCmd.Location = [System.Drawing.Point]::new(8, 124)
+$labelCmd.Size = [System.Drawing.Size]::new(60, 16)
+$labelCmd.Text = "Команда:"
+$labelCmd.Font = [System.Drawing.Font]::new($labelCmd.Font.FontFamily, 8, [System.Drawing.FontStyle]::Regular)
+$_gpr.Add($labelCmd)
+
+$textCommand = [System.Windows.Forms.TextBox]::new()
+$textCommand.Location = [System.Drawing.Point]::new(68, 122)
+$textCommand.Size = [System.Drawing.Size]::new(620, 20)
+$textCommand.ReadOnly = $true
+$textCommand.BackColor = [System.Drawing.Color]::White
+$textCommand.Font = [System.Drawing.Font]::new("Consolas", 8, [System.Drawing.FontStyle]::Regular)
+$textCommand.Text = ""
+$_gpr.Add($textCommand)
+
+$btnCopyCmd = [System.Windows.Forms.Button]::new()
+$btnCopyCmd.Location = [System.Drawing.Point]::new(693, 121)
+$btnCopyCmd.Size = [System.Drawing.Size]::new(65, 22)
+$btnCopyCmd.Text = "Копировать"
+$btnCopyCmd.Font = [System.Drawing.Font]::new($btnCopyCmd.Font.FontFamily, 7, [System.Drawing.FontStyle]::Regular)
+$btnCopyCmd.Add_Click({
+    if ($textCommand.Text) {
+        [System.Windows.Forms.Clipboard]::SetText($textCommand.Text)
+    }
+})
+$_gpr.Add($btnCopyCmd)
 
 $groupProgress.Controls.AddRange($_gpr.ToArray())
 $_mc.Add($groupProgress)
@@ -1213,6 +1263,7 @@ $buttonRun.Add_Click({
     $labelProgressFile.Text    = "Запуск..."
     $labelProgressTotal.Text   = ""
     $labelProgressSummary.Text = ""
+    $textCommand.Text          = ""
 
     # ---- Запуск script.ps1 в фоновом Runspace ----
     $scriptPath = Join-Path $script:_appDir "FFmpeg_Converter_script.ps1"
@@ -1319,6 +1370,7 @@ $buttonRun.Add_Click({
                     $labelProgressTotal.Text = "Файл $($json.fileNum) из $($json.totalFiles)"
                 }
                 $labelProgressSummary.Text = "OK: $($json.ok)   Ошибки: $($json.fail)   Пропущено: $($json.skip)"
+                if ($json.command) { $textCommand.Text = $json.command }
             }
         } catch {}
       } catch {}

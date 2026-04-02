@@ -49,6 +49,7 @@ Invoke-ps2exe `
     -outputFile $out `
     -noConsole `
     -STA `
+    -x64 `
     -title   "Video Converter (ffmpeg)" `
     -version "1.0.0.0"
 

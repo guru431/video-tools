@@ -26,6 +26,7 @@ Invoke-ps2exe `
     -outputFile $out `
     -noConsole `
     -STA `
+    -x64 `
     -title   "Video Downloader (yt-dlp) v11" `
     -version "11.0.0.0"
 

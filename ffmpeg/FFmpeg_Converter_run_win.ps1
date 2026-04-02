@@ -1,21 +1,12 @@
 ﻿Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-# SSL bypass — ленивая инициализация (C# компиляция ~300ms, нужна только для проверки обновлений)
+# SSL bypass — ленивая инициализация (без Add-Type/C#, чтобы не триггерить AV)
 $script:_sslReady = $false
 function Ensure-SslBypass {
     if ($script:_sslReady) { return }
-    if (-not ([System.Management.Automation.PSTypeName]'TrustAllCertsPolicy').Type) {
-        Add-Type -TypeDefinition @'
-using System.Net;
-using System.Security.Cryptography.X509Certificates;
-public class TrustAllCertsPolicy : ICertificatePolicy {
-    public bool CheckValidationResult(ServicePoint sp, X509Certificate cert, WebRequest req, int prob) { return true; }
-}
-'@
-    }
-    [System.Net.ServicePointManager]::CertificatePolicy = [TrustAllCertsPolicy]::new()
-    [System.Net.ServicePointManager]::SecurityProtocol  = [Net.SecurityProtocolType]::Tls12
+    [System.Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
     $script:_sslReady = $true
 }
 
@@ -1151,24 +1142,12 @@ $_gpr.Add($labelCmd)
 
 $textCommand = [System.Windows.Forms.TextBox]::new()
 $textCommand.Location = [System.Drawing.Point]::new(68, 122)
-$textCommand.Size = [System.Drawing.Size]::new(620, 20)
+$textCommand.Size = [System.Drawing.Size]::new(690, 20)
 $textCommand.ReadOnly = $true
 $textCommand.BackColor = [System.Drawing.Color]::White
 $textCommand.Font = [System.Drawing.Font]::new("Consolas", 8, [System.Drawing.FontStyle]::Regular)
 $textCommand.Text = ""
 $_gpr.Add($textCommand)
-
-$btnCopyCmd = [System.Windows.Forms.Button]::new()
-$btnCopyCmd.Location = [System.Drawing.Point]::new(693, 121)
-$btnCopyCmd.Size = [System.Drawing.Size]::new(65, 22)
-$btnCopyCmd.Text = "Копировать"
-$btnCopyCmd.Font = [System.Drawing.Font]::new($btnCopyCmd.Font.FontFamily, 7, [System.Drawing.FontStyle]::Regular)
-$btnCopyCmd.Add_Click({
-    if ($textCommand.Text) {
-        [System.Windows.Forms.Clipboard]::SetText($textCommand.Text)
-    }
-})
-$_gpr.Add($btnCopyCmd)
 
 $groupProgress.Controls.AddRange($_gpr.ToArray())
 $_mc.Add($groupProgress)

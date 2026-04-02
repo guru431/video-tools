@@ -490,7 +490,7 @@ COOKIES:
   --voice STYLE                Голос: live (по умолчанию) / tts
   --mix                        Смешать оригинал + перевод
   --replace                    Заменить оригинал переводом
-  (по умолчанию — dual_track: 2 отдельные дорожки)
+  (по умолчанию — mix: смешать оригинал + перевод)
 
 ПРОЧЕЕ:
   --config PATH                Путь к config.ini
@@ -519,7 +519,7 @@ load_config() {
     TRANSLATE_ENABLED=$(read_config "enabled" "translation" "false")
     TRANSLATE_LANG=$(read_config "target_lang" "translation" "ru")
     TRANSLATE_VOICE=$(read_config "voice_style" "translation" "live")
-    TRANSLATE_MODE=$(read_config "mode" "translation" "dual_track")
+    TRANSLATE_MODE=$(read_config "mode" "translation" "mix")
     TRANSLATE_ORIG_VOL=$(read_config "original_volume" "translation" "0.3")
     TRANSLATE_TRANS_VOL=$(read_config "translation_volume" "translation" "1.0")
     TRANSLATE_ORIG_LANG=$(read_config "original_lang" "translation" "en")

@@ -61,7 +61,7 @@ $cfg_cookieFile    = Read-Config "file"            "cookies"  "youtube_cookies.t
 $cfg_transEnabled  = Read-Config "enabled"         "translation" "false"
 $cfg_transLang     = Read-Config "target_lang"     "translation" "ru"
 $cfg_transVoice    = Read-Config "voice_style"     "translation" "live"
-$cfg_transMode     = Read-Config "mode"            "translation" "dual_track"
+$cfg_transMode     = Read-Config "mode"            "translation" "mix"
 
 $qualityMap = @{ "720" = 3; "360" = 1; "480" = 2; "1080" = 4; "1440" = 5; "2160" = 6 }
 $defaultQualityIdx = if ($qualityMap.ContainsKey($cfg_quality)) { $qualityMap[$cfg_quality] } else { 3 }
@@ -92,7 +92,7 @@ $global:urlQueue = [System.Collections.Generic.List[hashtable]]::new()
 # ── Создание формы ────────────────────────────────────────────────────────
 $form = [System.Windows.Forms.Form]::new()
 $form.Text = "Video Downloader (yt-dlp) v11"
-$form.Size = [System.Drawing.Size]::new(830, 720)
+$form.Size = [System.Drawing.Size]::new(830, 745)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
 $form.MaximizeBox = $false
@@ -587,6 +587,24 @@ $lblStatus.Text      = "Готов к загрузке"
 $lblStatus.ForeColor = [System.Drawing.Color]::Gray
 $_fc.Add($lblStatus)
 
+# ── 11b. Команда (поле + кнопка копирования) ─────────────────────────────
+$yPos += 22; $xPos = $xPos0
+$labelCmd = [System.Windows.Forms.Label]::new()
+$labelCmd.Location = [System.Drawing.Point]::new($xPos, $yPos + 2)
+$labelCmd.Size     = [System.Drawing.Size]::new(60, 16)
+$labelCmd.Text     = "Команда:"
+$labelCmd.Font     = [System.Drawing.Font]::new($labelCmd.Font.FontFamily, 8)
+$_fc.Add($labelCmd)
+
+$textCommand = [System.Windows.Forms.TextBox]::new()
+$textCommand.Location  = [System.Drawing.Point]::new($xPos + 62, $yPos)
+$textCommand.Size      = [System.Drawing.Size]::new(718, 20)
+$textCommand.ReadOnly  = $true
+$textCommand.BackColor = [System.Drawing.Color]::White
+$textCommand.Font      = [System.Drawing.Font]::new("Consolas", 8)
+$textCommand.Text      = ""
+$_fc.Add($textCommand)
+
 # ── Глобальные переменные ─────────────────────────────────────────────────
 $global:processRunning  = $false
 $global:downloadProcess = $null
@@ -748,6 +766,7 @@ $btnStart.Add_Click({
 
             $command += $currentUrl
 
+            $textCommand.Text = "$dlp $($command -join ' ')"
             Append-Output "Команда: $dlp $($command -join ' ')" ([System.Drawing.Color]::DimGray)
 
             # Запуск процесса

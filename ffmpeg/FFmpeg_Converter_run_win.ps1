@@ -741,6 +741,127 @@ $_ge.Add($comboContainer)
 $groupEncoding.Controls.AddRange($_ge.ToArray())
 $_mc.Add($groupEncoding)
 
+# ========== Взаимоисключающие опции ==========
+# Цвет для заблокированных элементов
+$script:_disabledColor = [System.Drawing.Color]::FromArgb(200, 200, 200)
+$script:_enabledColor  = [System.Drawing.SystemColors]::WindowText
+
+# Набор видео-контролов (label + checkbox + input)
+$script:_videoControls = @(
+    @($labelVideoCodec, $checkVideoCodec, $comboVideoCodec),
+    @($labelVideoResolution, $checkVideoResolution, $comboVideoResolution),
+    @($labelVideoBitrate, $checkVideoBitrate, $textVideoBitrate),
+    @($labelFrameRate, $checkFrameRate, $textFrameRate),
+    @($labelVideoQuality, $checkVideoQuality, $textVideoQuality),
+    @($labelVideoRotation, $checkVideoRotation, $comboVideoRotation),
+    @($labelVideoSubtitles, $checkVideoSubtitles, $comboSubtitlesMode),
+    @($labelContainer, $checkContainer, $comboContainer)
+)
+$script:_audioControls = @(
+    @($labelAudioCodec, $checkAudioCodec, $comboAudioCodec),
+    @($labelAudioChannels, $checkAudioChannels, $comboAudioChannels),
+    @($labelAudioBitrate, $checkAudioBitrate, $textAudioBitrate),
+    @($labelAudioSampleRate, $checkAudioSampleRate, $textAudioSampleRate),
+    @($labelAudioNorm, $checkAudioNorm, $comboAudioNorm)
+)
+
+function Set-ControlGroupEnabled {
+    param([array]$Groups, [bool]$Enabled)
+    foreach ($grp in $Groups) {
+        $lbl = $grp[0]; $chk = $grp[1]; $inp = $grp[2]
+        $chk.Enabled = $Enabled
+        $inp.Enabled = $Enabled
+        $lbl.ForeColor = if ($Enabled) { $script:_enabledColor } else { $script:_disabledColor }
+    }
+}
+
+function Update-MutualExclusion {
+    $isCopy    = $checkCopyCodecs.Checked
+    $isAudioOnly = $checkSaveAudio.Checked
+    $isExtract = $checkExtractAudioCopy.Checked
+
+    # --- Режимы-переключатели (copy / audio_only / extract) ---
+    # Без перекодирования → всё кодирование отключено
+    if ($isCopy) {
+        Set-ControlGroupEnabled $script:_videoControls $false
+        Set-ControlGroupEnabled $script:_audioControls $false
+        $checkSpeed.Enabled = $false
+        $textSpeed.Enabled = $false
+        $comboHWAccel.Enabled = $false
+        $checkKeepAspect.Enabled = $false
+        $groupEncoding.ForeColor = $script:_disabledColor
+        $groupSpeed.ForeColor = $script:_disabledColor
+        return
+    }
+
+    # Извлечь аудио (без перекодирования) → всё кодирование отключено
+    if ($isExtract) {
+        Set-ControlGroupEnabled $script:_videoControls $false
+        Set-ControlGroupEnabled $script:_audioControls $false
+        $checkSpeed.Enabled = $false
+        $textSpeed.Enabled = $false
+        $comboHWAccel.Enabled = $false
+        $checkKeepAspect.Enabled = $false
+        $groupEncoding.ForeColor = $script:_disabledColor
+        $groupSpeed.ForeColor = $script:_disabledColor
+        return
+    }
+
+    # Всё включено по умолчанию
+    $groupEncoding.ForeColor = $script:_enabledColor
+    $groupSpeed.ForeColor = $script:_enabledColor
+    Set-ControlGroupEnabled $script:_audioControls $true
+    $checkSpeed.Enabled = $true
+    $textSpeed.Enabled = $true
+    $comboHWAccel.Enabled = $true
+    $checkKeepAspect.Enabled = $true
+
+    # Сохранить только аудио → видео-контролы отключены
+    if ($isAudioOnly) {
+        Set-ControlGroupEnabled $script:_videoControls $false
+    } else {
+        Set-ControlGroupEnabled $script:_videoControls $true
+        # CRF ↔ Видео битрейт: взаимоисключающие
+        if ($checkVideoQuality.Checked) {
+            $checkVideoBitrate.Enabled = $false
+            $textVideoBitrate.Enabled = $false
+            $labelVideoBitrate.ForeColor = $script:_disabledColor
+        }
+        if ($checkVideoBitrate.Checked) {
+            $checkVideoQuality.Enabled = $false
+            $textVideoQuality.Enabled = $false
+            $labelVideoQuality.ForeColor = $script:_disabledColor
+        }
+    }
+}
+
+# Подписка на события: режимы-переключатели
+$checkCopyCodecs.Add_CheckedChanged({
+    if ($checkCopyCodecs.Checked) {
+        $checkSaveAudio.Checked = $false
+        $checkExtractAudioCopy.Checked = $false
+    }
+    Update-MutualExclusion
+})
+$checkSaveAudio.Add_CheckedChanged({
+    if ($checkSaveAudio.Checked) {
+        $checkCopyCodecs.Checked = $false
+        $checkExtractAudioCopy.Checked = $false
+    }
+    Update-MutualExclusion
+})
+$checkExtractAudioCopy.Add_CheckedChanged({
+    if ($checkExtractAudioCopy.Checked) {
+        $checkCopyCodecs.Checked = $false
+        $checkSaveAudio.Checked = $false
+    }
+    Update-MutualExclusion
+})
+
+# CRF ↔ Видео битрейт
+$checkVideoQuality.Add_CheckedChanged({ Update-MutualExclusion })
+$checkVideoBitrate.Add_CheckedChanged({ Update-MutualExclusion })
+
 # ========== Playback Speed Section ==========
 $yPos = 469
 $groupSpeed = [System.Windows.Forms.GroupBox]::new()
@@ -771,6 +892,9 @@ $_gsp.Add($labelSpeedInfo)
 
 $groupSpeed.Controls.AddRange($_gsp.ToArray())
 $_mc.Add($groupSpeed)
+
+# Начальная синхронизация взаимоисключающих опций (после создания всех контролов)
+Update-MutualExclusion
 
 # ========== Split Section ==========
 $yPos = 515

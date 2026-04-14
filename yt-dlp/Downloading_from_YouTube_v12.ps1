@@ -55,6 +55,8 @@ if ($cfg_proxy_raw -match '^(https?|socks[45]?)://(?:([^:]+):([^@]+)@)?([^:/]+)(
 }
 $cfg_quality      = Read-Config "default_quality" "download" "720"
 $cfg_baseDir      = Read-Config "base_dir"        "output"   "_video_"
+$cfg_template     = Read-Config "template"         "output"   '%(uploader)s/%(upload_date)s - %(title).100U.%(ext)s'
+$cfg_plTemplate   = Read-Config "playlist_template" "output"  '%(uploader)s/%(playlist)s/%(playlist_index)03d - %(title).100U.%(ext)s'
 $cfg_cookieMethod  = Read-Config "method"          "cookies"  "none"
 $cfg_cookieBrowser = Read-Config "browser"         "cookies"  "chrome"
 $cfg_cookieFile    = Read-Config "file"            "cookies"  "youtube_cookies.txt"
@@ -91,7 +93,7 @@ $global:urlQueue = [System.Collections.Generic.List[hashtable]]::new()
 
 # ── Создание формы ────────────────────────────────────────────────────────
 $form = [System.Windows.Forms.Form]::new()
-$form.Text = "Video Downloader (yt-dlp) v11"
+$form.Text = "Video Downloader (yt-dlp) v12"
 $form.Size = [System.Drawing.Size]::new(830, 745)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
@@ -703,7 +705,7 @@ $btnStart.Add_Click({
 
             $progressBar.Value = 0
             $lblStatus.Text    = "Загрузка $itemNum/$totalItems  [$platform]"
-            $form.Text         = "Video Downloader (yt-dlp) v11  [$itemNum/$totalItems]"
+            $form.Text         = "Video Downloader (yt-dlp) v12  [$itemNum/$totalItems]"
             Append-Output ""
             Append-Output "═══ [$itemNum/$totalItems] [$platform]  $currentUrl" ([System.Drawing.Color]::Cyan)
 
@@ -715,7 +717,9 @@ $btnStart.Add_Click({
             $command = @("-c", "-i", "-w", "--no-check-certificate", "--windows-filenames", "--compat-options", "filename-sanitization")
             $denoExe = Join-Path $scriptDir "deno.exe"
             if (Test-Path $denoExe) { $command += "--js-runtimes", "deno:$denoExe" }
-            $command += "-o", "`"$folder\%(uploader)s\%(title)s.%(ext)s`""
+            $tpl = if ($currentUrl -match "playlist") { $cfg_plTemplate } else { $cfg_template }
+            $tpl = $tpl -replace '/', '\'
+            $command += "-o", "`"$folder\$tpl`""
 
             # Прокси
             if (-not [string]::IsNullOrWhiteSpace($textProxyHost.Text)) {
@@ -810,7 +814,7 @@ $btnStart.Add_Click({
                         $pct = [int][math]::Floor([double]$Matches[1])
                         $progressBar.Value = [math]::Min($pct, 100)
                         $lblStatus.Text    = "Загрузка $itemNum/$totalItems  [$platform]  $pct%"
-                        $form.Text         = "Video Downloader (yt-dlp) v11  [$itemNum/$totalItems]  $pct%"
+                        $form.Text         = "Video Downloader (yt-dlp) v12  [$itemNum/$totalItems]  $pct%"
                     } elseif ($line -match '\[download\] Destination:') {
                         Append-Output $line ([System.Drawing.Color]::LightGreen)
                     } elseif ($line -match '\[Merger\]|\[info\].*Merging') {
@@ -907,7 +911,7 @@ $btnStart.Add_Click({
             if ($failCount -gt 0) { $summary += "  |  Ошибки: $failCount" }
             Append-Output $summary ([System.Drawing.Color]::LightGreen)
             $lblStatus.Text = "Завершено: $successCount/$totalItems"
-            $form.Text      = "Video Downloader (yt-dlp) v11 — Готово!"
+            $form.Text      = "Video Downloader (yt-dlp) v12 — Готово!"
         } else {
             Append-Output "═══ Остановлено  |  Загружено: $successCount" ([System.Drawing.Color]::Yellow)
             $lblStatus.Text = "Остановлено"
@@ -944,7 +948,7 @@ $btnClear.Add_Click({
     $richOutput.Clear()
     $progressBar.Value = 0
     $lblStatus.Text    = "Готов к загрузке"
-    $form.Text         = "Video Downloader (yt-dlp) v11"
+    $form.Text         = "Video Downloader (yt-dlp) v12"
 })
 $_fc.Add($btnClear)
 

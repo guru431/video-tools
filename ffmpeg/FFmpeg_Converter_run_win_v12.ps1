@@ -103,7 +103,7 @@ $_cfg_log_file     = Read-Config "log_file"           "other" "ffmpeg_convert.lo
 
 # Main Form
 $form = [System.Windows.Forms.Form]::new()
-$form.Text = "Video Converter (ffmpeg)"
+$form.Text = "Video Converter (ffmpeg) v12"
 $form.Size = [System.Drawing.Size]::new(820, 850)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"

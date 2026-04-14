@@ -198,8 +198,13 @@ if %fmt%==6 (
 :format_done
 
 :: ── Шаблон пути ──────────────────────────────────────────────────────────
-set "subfolder=%%(uploader)s"
-echo "%url%" | findstr /C:"playlist" >nul && set "subfolder=%%(uploader)s\%%(playlist)s"
+set "output_tpl=%%(uploader)s\%%(upload_date)s - %%(title).100U.%%(ext)s"
+set "playlist_tpl=%%(uploader)s\%%(playlist)s\%%(playlist_index)03d - %%(title).100U.%%(ext)s"
+echo "%url%" | findstr /C:"playlist" >nul && (
+    set "file_tpl=%playlist_tpl%"
+) || (
+    set "file_tpl=%output_tpl%"
+)
 
 :: ── Прокси-аргумент ──────────────────────────────────────────────────────
 set "proxy_arg="
@@ -220,7 +225,7 @@ echo.
 set "deno_arg="
 if exist "%~dp0deno.exe" set "deno_arg=--js-runtimes deno:%~dp0deno.exe"
 
-%dlp% --no-check-certificate %proxy_arg% %cookie_arg% %deno_arg% -c -i -w --windows-filenames --compat-options filename-sanitization -o "%folder%\%subfolder%\%%(title)s.%%(ext)s" %save_settings% "%url%"
+%dlp% --no-check-certificate %proxy_arg% %cookie_arg% %deno_arg% -c -i -w --windows-filenames --compat-options filename-sanitization -o "%folder%\%file_tpl%" %save_settings% "%url%"
 
 set "dl_errorlevel=%errorlevel%"
 if %dl_errorlevel%==0 (

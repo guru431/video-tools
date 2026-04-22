@@ -96,9 +96,14 @@ if %translate_choice%==2 (set "translate_lang=ru" & set "translate_mode=mix")
 if %translate_choice%==3 (set "translate_lang=ru" & set "translate_mode=replace")
 if %translate_choice%==4 (set "translate_lang=en" & set "translate_mode=dual_track")
 
+:: ── Определение платформы по URL ────────────────────────────────────────
+set "platform=other"
+echo "%url%" | findstr /I /C:"youtube.com" /C:"youtu.be" >nul 2>&1
+if not errorlevel 1 set "platform=youtube"
+
 :: ── Пресет формата ───────────────────────────────────────────────────────
 echo.
-echo Формат (по умолчанию: 0):
+echo Формат (по умолчанию: 7):
 echo   0  - avc1_best (авто лучший AVC1)
 echo   1  - avc1_https (HTTPS, 30fps)
 echo   2  - avc1_m3u8 (HLS, 30fps)
@@ -106,9 +111,13 @@ echo   3  - avc1_https_60fps (HTTPS, 60fps)
 echo   4  - avc1_m3u8_60fps (HLS, 60fps)
 echo   5  - avc1_https_60fps_hdr (HTTPS, 60fps, HDR)
 echo   6  - old_combo (классические ID)
+echo   7  - auto (YouTube=avc1_best, прочие=простой best)
 echo.
 set /p "fmt=Выберите номер: "
-if "%fmt%"=="" set fmt=0
+if "%fmt%"=="" set fmt=7
+
+:: auto для YouTube = avc1_best
+if %fmt%==7 if "%platform%"=="youtube" set "fmt=0"
 
 :: ── Формат + Качество ───────────────────────────────────────────────────
 set "save_settings="
@@ -194,6 +203,16 @@ if %fmt%==6 (
     if %quality%==4 set "save_settings=-f 24/22/20/18"
     if %quality%==5 set "save_settings=-f 26/24/22/20/18"
     if %quality%==6 set "save_settings=-f 28/26/24/22/20/18"
+)
+:: auto для не-YouTube — простой best (один поток, быстро для VK/RuTube/...)
+if %fmt%==7 (
+    if %quality%==0 set "save_settings=-f bestaudio/best"
+    if %quality%==1 set "save_settings=-f "best[height<=360]/best""
+    if %quality%==2 set "save_settings=-f "best[height<=480]/best""
+    if %quality%==3 set "save_settings=-f "best[height<=720]/best""
+    if %quality%==4 set "save_settings=-f "best[height<=1080]/best""
+    if %quality%==5 set "save_settings=-f "best[height<=1440]/best""
+    if %quality%==6 set "save_settings=-f "best[height<=2160]/best""
 )
 :format_done
 

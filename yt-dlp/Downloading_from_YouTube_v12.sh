@@ -141,10 +141,44 @@ build_cookie_args() {
     esac
 }
 
+# ── Определение платформы по URL ───────────────────────────────────────────
+detect_platform() {
+    local url="$1"
+    case "$url" in
+        *youtube.com*|*youtu.be*) echo "youtube" ;;
+        *vk.com*)                 echo "vk" ;;
+        *rutube.ru*)              echo "rutube" ;;
+        *twitch.tv*)              echo "twitch" ;;
+        *vimeo.com*)              echo "vimeo" ;;
+        *dailymotion.com*)        echo "dailymotion" ;;
+        *)                        echo "other" ;;
+    esac
+}
+
 # ── Формирование аргументов формата ────────────────────────────────────────
 build_format_args() {
     local quality="$1"
-    local preset="${2:-avc1_best}"
+    local preset="${2:-auto}"
+    local platform="${3:-youtube}"
+
+    # auto: для YouTube — avc1_best, для остальных — простой best[height<=N]
+    if [ "$preset" = "auto" ]; then
+        if [ "$platform" = "youtube" ]; then
+            preset="avc1_best"
+        else
+            case "$quality" in
+                audio) echo "-f \"bestaudio/best\"" ;;
+                360)   echo "-f \"best[height<=360]/best\"" ;;
+                480)   echo "-f \"best[height<=480]/best\"" ;;
+                720)   echo "-f \"best[height<=720]/best\"" ;;
+                1080)  echo "-f \"best[height<=1080]/best\"" ;;
+                1440)  echo "-f \"best[height<=1440]/best\"" ;;
+                2160)  echo "-f \"best[height<=2160]/best\"" ;;
+                *)     echo "-f \"best[height<=720]/best\"" ;;
+            esac
+            return
+        fi
+    fi
 
     case "$preset" in
         avc1_best)
@@ -261,7 +295,7 @@ download_url() {
     if [ "$subs_only" = "true" ]; then
         cmd+=" --sub-lang $SUB_LANG --write-auto-sub --sub-format $SUB_FORMAT --skip-download"
     else
-        cmd+=" $(build_format_args "$quality" "$FORMAT_PRESET")"
+        cmd+=" $(build_format_args "$quality" "$FORMAT_PRESET" "$(detect_platform "$url")")"
     fi
 
     cmd+=" \"$url\""
@@ -415,7 +449,7 @@ download_batch() {
         if [ "$subs_only" = "true" ]; then
             batch_args+=" --sub-lang $SUB_LANG --write-auto-sub --sub-format $SUB_FORMAT --skip-download"
         else
-            batch_args+=" $(build_format_args "$QUALITY" "$FORMAT_PRESET")"
+            batch_args+=" $(build_format_args "$QUALITY" "$FORMAT_PRESET" "youtube")"
         fi
 
         if [ "$mode" = "playlists" ]; then
@@ -471,7 +505,9 @@ show_help() {
 
 КАЧЕСТВО:
   --quality NUM                360, 480, 720 (по умолчанию), 1080, 1440, 2160, audio
-  --format PRESET              avc1_best (по умолчанию), avc1_https, avc1_m3u8,
+  --format PRESET              auto (по умолчанию; для YouTube = avc1_best,
+                               для VK/RuTube/др. = простой best[height<=N]),
+                               avc1_best, avc1_https, avc1_m3u8,
                                avc1_https_60fps, avc1_m3u8_60fps,
                                avc1_https_60fps_hdr, old_combo
 
@@ -508,7 +544,7 @@ load_config() {
     OUTPUT_TEMPLATE=$(read_config "template" "output" '%(uploader)s/%(upload_date)s - %(title).100U.%(ext)s')
     PLAYLIST_TEMPLATE=$(read_config "playlist_template" "output" '%(uploader)s/%(playlist)s/%(playlist_index)03d - %(title).100U.%(ext)s')
     QUALITY=$(read_config "default_quality" "download" "720")
-    FORMAT_PRESET=$(read_config "format_preset" "download" "avc1_best")
+    FORMAT_PRESET=$(read_config "format_preset" "download" "auto")
     CONTINUE_ON_ERROR=$(read_config "continue_on_error" "download" "true")
     USE_ARCHIVE=$(read_config "use_archive" "download" "true")
     ARCHIVE_FILE=$(read_config "archive_file" "download" "download_archive.txt")

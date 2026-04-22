@@ -133,7 +133,7 @@ $btnCheckUpdate.Add_Click({
             Headers         = @{ "User-Agent" = "yt-dlp-gui/1.0" }
         }
         # Прокси если задан
-        if (-not [string]::IsNullOrWhiteSpace($textProxyHost.Text)) {
+        if (([string]$comboProxyType.SelectedItem -ne "нет") -and -not [string]::IsNullOrWhiteSpace($textProxyHost.Text)) {
             $pType = $comboProxyType.SelectedItem
             $pHost = $textProxyHost.Text
             $pPort = $textProxyPort.Text
@@ -335,11 +335,11 @@ $comboFormat.Location      = [System.Drawing.Point]::new($xPos, $yPos)
 $comboFormat.Size          = [System.Drawing.Size]::new(235, 25)
 $comboFormat.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
 $comboFormat.Items.AddRange(@(
-    "avc1_best", "avc1_https", "avc1_m3u8",
+    "auto", "avc1_best", "avc1_https", "avc1_m3u8",
     "avc1_https_60fps", "avc1_m3u8_60fps",
     "avc1_https_60fps_hdr", "old_combo"
 ))
-$cfg_format = Read-Config "format_preset" "download" "avc1_best"
+$cfg_format = Read-Config "format_preset" "download" "auto"
 $fmtIdx = $comboFormat.Items.IndexOf($cfg_format)
 $comboFormat.SelectedIndex = if ($fmtIdx -ge 0) { $fmtIdx } else { 0 }
 $_fc.Add($comboFormat)
@@ -384,9 +384,13 @@ $comboProxyType = [System.Windows.Forms.ComboBox]::new()
 $comboProxyType.Location      = [System.Drawing.Point]::new($xPos, $yPos)
 $comboProxyType.Size          = [System.Drawing.Size]::new(75, 25)
 $comboProxyType.DropDownStyle = "DropDownList"
-$comboProxyType.Items.AddRange(@("https", "http", "socks5", "socks4"))
-$comboProxyType.SelectedItem  = $cfg_proxyType
-if ($comboProxyType.SelectedIndex -lt 0) { $comboProxyType.SelectedIndex = 0 }
+$comboProxyType.Items.AddRange(@("нет", "https", "http", "socks5", "socks4"))
+if ([string]::IsNullOrWhiteSpace($cfg_proxy_raw) -or [string]::IsNullOrWhiteSpace($cfg_proxyHost)) {
+    $comboProxyType.SelectedIndex = 0
+} else {
+    $comboProxyType.SelectedItem = $cfg_proxyType
+    if ($comboProxyType.SelectedIndex -lt 0) { $comboProxyType.SelectedIndex = 1 }
+}
 $_fc.Add($comboProxyType)
 
 $xPos += 80
@@ -431,6 +435,17 @@ $textProxyPass.Size                  = [System.Drawing.Size]::new(144, 25)
 $textProxyPass.Text                  = $cfg_proxyPass
 $textProxyPass.UseSystemPasswordChar = $true
 $_fc.Add($textProxyPass)
+
+# Блокировка полей прокси при выборе "нет"
+$updateProxyFieldsState = {
+    $isNone = ([string]$comboProxyType.SelectedItem -eq "нет")
+    $textProxyHost.Enabled = -not $isNone
+    $textProxyPort.Enabled = -not $isNone
+    $textProxyUser.Enabled = -not $isNone
+    $textProxyPass.Enabled = -not $isNone
+}
+$comboProxyType.Add_SelectedIndexChanged($updateProxyFieldsState)
+& $updateProxyFieldsState
 
 # ── 7. Cookies ────────────────────────────────────────────────────────────
 $yPos += 30; $xPos = $xPos0
@@ -722,7 +737,7 @@ $btnStart.Add_Click({
             $command += "-o", "`"$folder\$tpl`""
 
             # Прокси
-            if (-not [string]::IsNullOrWhiteSpace($textProxyHost.Text)) {
+            if (([string]$comboProxyType.SelectedItem -ne "нет") -and -not [string]::IsNullOrWhiteSpace($textProxyHost.Text)) {
                 $pType = $comboProxyType.SelectedItem
                 $pHost = $textProxyHost.Text
                 $pPort = $textProxyPort.Text
@@ -750,9 +765,32 @@ $btnStart.Add_Click({
             # Формат
             $qi          = $comboQuality.SelectedIndex
             $selectedFmt = $comboFormat.SelectedItem
+            # auto: для YouTube -> avc1_best, для остальных платформ -> простой best[height<=N]
+            $effectiveFmt = $selectedFmt
+            if ($selectedFmt -eq "auto") {
+                if ($platform -eq "YouTube") {
+                    $effectiveFmt = "avc1_best"
+                } else {
+                    $simpleBest = @(
+                        "bestaudio/best",
+                        "`"best[height<=360]/best`"",
+                        "`"best[height<=480]/best`"",
+                        "`"best[height<=720]/best`"",
+                        "`"best[height<=1080]/best`"",
+                        "`"best[height<=1440]/best`"",
+                        "`"best[height<=2160]/best`""
+                    )
+                    if ($qi -ge 0 -and $qi -le 6) {
+                        $command += "-f", $simpleBest[$qi]
+                    }
+                    $effectiveFmt = ""  # отметка: уже добавили
+                }
+            }
             switch ($qi) {
                 { $_ -ge 0 -and $_ -le 6 } {
-                    $command += "-f", $formatPresets[$selectedFmt][$qi]
+                    if ($effectiveFmt) {
+                        $command += "-f", $formatPresets[$effectiveFmt][$qi]
+                    }
                 }
                 7 { $command += "--sub-lang", "ru", "--write-auto-sub", "--sub-format", "vtt", "--skip-download" }
                 8 { $command += "--sub-lang", "en", "--write-auto-sub", "--sub-format", "vtt", "--skip-download" }

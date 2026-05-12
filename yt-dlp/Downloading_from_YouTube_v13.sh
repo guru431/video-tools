@@ -15,6 +15,9 @@ set -uo pipefail
 #   ./download.sh --cookies file URL            # cookies из файла
 #   ./download.sh --translate ru URL            # + AI-перевод аудио
 #   ./download.sh --translate ru --mix URL      # перевод поверх оригинала
+#   ./download.sh --trim-start 00:10 URL        # с 00:10 до конца ролика
+#   ./download.sh --trim-end 00:30 URL          # с начала до 00:30
+#   ./download.sh --trim-start 1:00 --trim-end 2:00 URL  # фрагмент 1:00-2:00
 #   ./download.sh --help                        # справка
 # ============================================================================
 
@@ -272,6 +275,11 @@ download_url() {
     local proxy_url="$5"
     local cookie_args="$6"
     local archive_arg="$7"
+    local trim_start_on="${8:-false}"
+    local trim_start_val="${9:-}"
+    local trim_end_on="${10:-false}"
+    local trim_end_val="${11:-}"
+    local force_kf="${12:-false}"
 
     local cmd="yt-dlp -c -i -w --compat-options filename-sanitization"
 
@@ -296,6 +304,17 @@ download_url() {
         cmd+=" --sub-lang $SUB_LANG --write-auto-sub --sub-format $SUB_FORMAT --skip-download"
     else
         cmd+=" $(build_format_args "$quality" "$FORMAT_PRESET" "$(detect_platform "$url")")"
+    fi
+
+    # Фрагмент: только start = с TIME до конца; только end = с начала до TIME;
+    # оба = фрагмент TIME1..TIME2; ни один = весь ролик.
+    if [ "$trim_start_on" = "true" ] || [ "$trim_end_on" = "true" ]; then
+        local from="0"
+        local to="inf"
+        [ "$trim_start_on" = "true" ] && [ -n "$trim_start_val" ] && from="$trim_start_val"
+        [ "$trim_end_on"   = "true" ] && [ -n "$trim_end_val"   ] && to="$trim_end_val"
+        cmd+=" --download-sections \"*${from}-${to}\""
+        [ "$force_kf" = "true" ] && cmd+=" --force-keyframes-at-cuts"
     fi
 
     cmd+=" \"$url\""
@@ -528,6 +547,14 @@ COOKIES:
   --replace                    Заменить оригинал переводом
   (по умолчанию — mix: смешать оригинал + перевод)
 
+ФРАГМЕНТ (только для одиночных URL):
+  --trim-start TIME            Начало фрагмента (ЧЧ:ММ:СС, М:СС или секунды).
+  --trim-end TIME              Конец фрагмента. Комбинации:
+                                 только --trim-start  = с TIME до конца ролика
+                                 только --trim-end    = с начала до TIME
+                                 оба                  = фрагмент TIME1..TIME2
+  --force-keyframes            Точная обрезка по границам (требует перекодирования концов).
+
 ПРОЧЕЕ:
   --config PATH                Путь к config.ini
   --help                       Показать эту справку
@@ -548,6 +575,18 @@ load_config() {
     CONTINUE_ON_ERROR=$(read_config "continue_on_error" "download" "true")
     USE_ARCHIVE=$(read_config "use_archive" "download" "true")
     ARCHIVE_FILE=$(read_config "archive_file" "download" "download_archive.txt")
+
+    # Trim: парсим +/-VALUE из [trim]
+    local raw
+    raw=$(read_config "start" "trim" "-00:00:00")
+    if [[ "$raw" == +* ]]; then TRIM_START_ON="true"; TRIM_START_VAL="${raw:1}"
+    elif [[ "$raw" == -* ]]; then TRIM_START_ON="false"; TRIM_START_VAL="${raw:1}"
+    else TRIM_START_ON="false"; TRIM_START_VAL="$raw"; fi
+    raw=$(read_config "end" "trim" "-00:01:00")
+    if [[ "$raw" == +* ]]; then TRIM_END_ON="true"; TRIM_END_VAL="${raw:1}"
+    elif [[ "$raw" == -* ]]; then TRIM_END_ON="false"; TRIM_END_VAL="${raw:1}"
+    else TRIM_END_ON="false"; TRIM_END_VAL="$raw"; fi
+    FORCE_KEYFRAMES=$(read_config "force_keyframes" "trim" "false")
     SUB_LANG=$(read_config "lang" "subtitles" "ru")
     SUB_FORMAT=$(read_config "format" "subtitles" "vtt")
 
@@ -628,6 +667,15 @@ parse_args() {
             --dual-track)
                 TRANSLATE_MODE_CLI="dual_track"; shift
                 ;;
+            --trim-start)
+                TRIM_START_ON="true"; TRIM_START_VAL="$2"; shift 2
+                ;;
+            --trim-end)
+                TRIM_END_ON="true"; TRIM_END_VAL="$2"; shift 2
+                ;;
+            --force-keyframes)
+                FORCE_KEYFRAMES="true"; shift
+                ;;
             -*)
                 log_error "Неизвестный флаг: $1"
                 show_help
@@ -682,7 +730,8 @@ main() {
             archive_arg="--download-archive \"${BASE_DIR}/${ARCHIVE_FILE}\""
         fi
 
-        download_url "$URL" "$template" "$QUALITY" "$SUBS_ONLY" "$PROXY_URL" "$COOKIE_ARGS" "$archive_arg"
+        download_url "$URL" "$template" "$QUALITY" "$SUBS_ONLY" "$PROXY_URL" "$COOKIE_ARGS" "$archive_arg" \
+            "$TRIM_START_ON" "$TRIM_START_VAL" "$TRIM_END_ON" "$TRIM_END_VAL" "$FORCE_KEYFRAMES"
 
         # AI-перевод если включён и не только субтитры
         if [ "$TRANSLATE_ENABLED" = "true" ] && [ "$SUBS_ONLY" != "true" ]; then

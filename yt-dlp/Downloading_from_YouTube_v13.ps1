@@ -64,6 +64,17 @@ $cfg_transEnabled  = Read-Config "enabled"         "translation" "false"
 $cfg_transLang     = Read-Config "target_lang"     "translation" "ru"
 $cfg_transVoice    = Read-Config "voice_style"     "translation" "live"
 $cfg_transMode     = Read-Config "mode"            "translation" "mix"
+# Trim: парсим "+/-VALUE" в (enabled, value)
+function Parse-TrimFlag {
+    param([string]$Raw, [string]$DefaultVal)
+    if ($Raw -match '^\+(.*)$') { return @{ enabled = $true;  value = $Matches[1] } }
+    if ($Raw -match '^-(.*)$')  { return @{ enabled = $false; value = $Matches[1] } }
+    $val = if ($Raw) { $Raw } else { $DefaultVal }
+    return @{ enabled = $false; value = $val }
+}
+$cfg_trim_start = Parse-TrimFlag (Read-Config "start" "trim" "-00:00:00") "00:00:00"
+$cfg_trim_end   = Parse-TrimFlag (Read-Config "end"   "trim" "-00:01:00") "00:01:00"
+$cfg_forceKf    = Read-Config "force_keyframes" "trim" "false"
 
 $qualityMap = @{ "720" = 3; "360" = 1; "480" = 2; "1080" = 4; "1440" = 5; "2160" = 6 }
 $defaultQualityIdx = if ($qualityMap.ContainsKey($cfg_quality)) { $qualityMap[$cfg_quality] } else { 3 }
@@ -93,8 +104,8 @@ $global:urlQueue = [System.Collections.Generic.List[hashtable]]::new()
 
 # ── Создание формы ────────────────────────────────────────────────────────
 $form = [System.Windows.Forms.Form]::new()
-$form.Text = "Video Downloader (yt-dlp) v12"
-$form.Size = [System.Drawing.Size]::new(830, 745)
+$form.Text = "Video Downloader (yt-dlp) v13"
+$form.Size = [System.Drawing.Size]::new(830, 775)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
 $form.MaximizeBox = $false
@@ -370,6 +381,71 @@ $textBoxEnd = [System.Windows.Forms.TextBox]::new()
 $textBoxEnd.Location = [System.Drawing.Point]::new($xPos, $yPos)
 $textBoxEnd.Size     = [System.Drawing.Size]::new(50, 25)
 $_fc.Add($textBoxEnd)
+
+# ── 5b. Фрагмент видео (Trim) ─────────────────────────────────────────────
+$yPos += 30; $xPos = $xPos0
+$lbl = [System.Windows.Forms.Label]::new()
+$lbl.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$lbl.Size     = [System.Drawing.Size]::new(110, 20)
+$lbl.Text     = "Фрагмент с:"
+$_fc.Add($lbl)
+
+$xPos += 110
+$chkTrimStart = [System.Windows.Forms.CheckBox]::new()
+$chkTrimStart.Location = [System.Drawing.Point]::new($xPos, ($yPos + 4))
+$chkTrimStart.Size     = [System.Drawing.Size]::new(18, 18)
+$chkTrimStart.Checked  = $cfg_trim_start.enabled
+$_fc.Add($chkTrimStart)
+
+$xPos += 22
+$textTrimStart = [System.Windows.Forms.TextBox]::new()
+$textTrimStart.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$textTrimStart.Size     = [System.Drawing.Size]::new(75, 25)
+$textTrimStart.Text     = $cfg_trim_start.value
+$_fc.Add($textTrimStart)
+
+$xPos += 82
+$lbl = [System.Windows.Forms.Label]::new()
+$lbl.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$lbl.Size     = [System.Drawing.Size]::new(30, 20)
+$lbl.Text     = "по:"
+$_fc.Add($lbl)
+
+$xPos += 30
+$chkTrimEnd = [System.Windows.Forms.CheckBox]::new()
+$chkTrimEnd.Location = [System.Drawing.Point]::new($xPos, ($yPos + 4))
+$chkTrimEnd.Size     = [System.Drawing.Size]::new(18, 18)
+$chkTrimEnd.Checked  = $cfg_trim_end.enabled
+$_fc.Add($chkTrimEnd)
+
+$xPos += 22
+$textTrimEnd = [System.Windows.Forms.TextBox]::new()
+$textTrimEnd.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$textTrimEnd.Size     = [System.Drawing.Size]::new(75, 25)
+$textTrimEnd.Text     = $cfg_trim_end.value
+$_fc.Add($textTrimEnd)
+
+$xPos += 90
+$chkForceKf = [System.Windows.Forms.CheckBox]::new()
+$chkForceKf.Location = [System.Drawing.Point]::new($xPos, ($yPos + 2))
+$chkForceKf.Size     = [System.Drawing.Size]::new(335, 22)
+$chkForceKf.Text     = "Точная обрезка (потребуется перекодирование)"
+$chkForceKf.Checked  = ($cfg_forceKf -eq "true")
+$tipKf = New-Object System.Windows.Forms.ToolTip
+$tipKf.SetToolTip($chkForceKf,
+    "Без этого фрагмент режется по ближайшему ключевому кадру:`r`n" +
+    "  быстро (без перекодирования), но границы могут уехать на ±1-10 сек.`r`n" +
+    "С галочкой: перекодируются только концы фрагмента — точно до секунды,`r`n" +
+    "но медленнее и небольшая потеря качества на стыках.")
+$_fc.Add($chkForceKf)
+
+$tipTrim = New-Object System.Windows.Forms.ToolTip
+$tipTrim.SetToolTip($textTrimStart,
+    "Формат: ЧЧ:ММ:СС, М:СС или секунды. Галочкой можно выключить.`r`n" +
+    "Если выкл — качать с начала ролика.")
+$tipTrim.SetToolTip($textTrimEnd,
+    "Формат: ЧЧ:ММ:СС, М:СС или секунды. Галочкой можно выключить.`r`n" +
+    "Если выкл — качать до конца ролика.")
 
 # ── 6. Прокси (5 полей) ───────────────────────────────────────────────────
 $yPos += 30; $xPos = $xPos0
@@ -720,7 +796,7 @@ $btnStart.Add_Click({
 
             $progressBar.Value = 0
             $lblStatus.Text    = "Загрузка $itemNum/$totalItems  [$platform]"
-            $form.Text         = "Video Downloader (yt-dlp) v12  [$itemNum/$totalItems]"
+            $form.Text         = "Video Downloader (yt-dlp) v13  [$itemNum/$totalItems]"
             Append-Output ""
             Append-Output "═══ [$itemNum/$totalItems] [$platform]  $currentUrl" ([System.Drawing.Color]::Cyan)
 
@@ -806,6 +882,15 @@ $btnStart.Add_Click({
                 }
             }
 
+            # Фрагмент: только start = с TIME до конца; только end = с начала до TIME;
+            # оба = фрагмент TIME1..TIME2; ни один = весь ролик.
+            if ($chkTrimStart.Checked -or $chkTrimEnd.Checked) {
+                $tFrom = if ($chkTrimStart.Checked -and -not [string]::IsNullOrWhiteSpace($textTrimStart.Text)) { $textTrimStart.Text.Trim() } else { "0" }
+                $tTo   = if ($chkTrimEnd.Checked   -and -not [string]::IsNullOrWhiteSpace($textTrimEnd.Text))   { $textTrimEnd.Text.Trim()   } else { "inf" }
+                $command += "--download-sections", "`"*${tFrom}-${tTo}`""
+                if ($chkForceKf.Checked) { $command += "--force-keyframes-at-cuts" }
+            }
+
             $command += $currentUrl
 
             $textCommand.Text = "$dlp $($command -join ' ')"
@@ -852,7 +937,7 @@ $btnStart.Add_Click({
                         $pct = [int][math]::Floor([double]$Matches[1])
                         $progressBar.Value = [math]::Min($pct, 100)
                         $lblStatus.Text    = "Загрузка $itemNum/$totalItems  [$platform]  $pct%"
-                        $form.Text         = "Video Downloader (yt-dlp) v12  [$itemNum/$totalItems]  $pct%"
+                        $form.Text         = "Video Downloader (yt-dlp) v13  [$itemNum/$totalItems]  $pct%"
                     } elseif ($line -match '\[download\] Destination:') {
                         Append-Output $line ([System.Drawing.Color]::LightGreen)
                     } elseif ($line -match '\[Merger\]|\[info\].*Merging') {
@@ -949,7 +1034,7 @@ $btnStart.Add_Click({
             if ($failCount -gt 0) { $summary += "  |  Ошибки: $failCount" }
             Append-Output $summary ([System.Drawing.Color]::LightGreen)
             $lblStatus.Text = "Завершено: $successCount/$totalItems"
-            $form.Text      = "Video Downloader (yt-dlp) v12 — Готово!"
+            $form.Text      = "Video Downloader (yt-dlp) v13 — Готово!"
         } else {
             Append-Output "═══ Остановлено  |  Загружено: $successCount" ([System.Drawing.Color]::Yellow)
             $lblStatus.Text = "Остановлено"
@@ -986,7 +1071,7 @@ $btnClear.Add_Click({
     $richOutput.Clear()
     $progressBar.Value = 0
     $lblStatus.Text    = "Готов к загрузке"
-    $form.Text         = "Video Downloader (yt-dlp) v12"
+    $form.Text         = "Video Downloader (yt-dlp) v13"
 })
 $_fc.Add($btnClear)
 

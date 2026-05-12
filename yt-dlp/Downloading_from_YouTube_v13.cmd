@@ -77,6 +77,30 @@ if %cookie_choice%==4 (
 echo.
 set /p "proxy=Прокси (Enter для пропуска): "
 
+:: ── Фрагмент (начало + конец, каждое опционально) ────────────────────────
+echo.
+echo Скачать фрагмент ролика (формат: ЧЧ:ММ:СС, М:СС или секунды).
+echo   Enter в обоих полях = весь ролик целиком
+echo   только начало       = с TIME до конца ролика
+echo   только конец        = с начала до TIME
+echo   оба                 = вырезать фрагмент TIME1..TIME2
+echo.
+set "trim_start="
+set "trim_end="
+set /p "trim_start=Начало (Enter = с 0): "
+set /p "trim_end=Конец  (Enter = до конца): "
+set "sections_arg="
+if not "%trim_start%%trim_end%"=="" (
+    set "kf="
+    set /p "kf=Точная обрезка (потребуется перекодирование)? [y/N]: "
+    set "_from=0"
+    set "_to=inf"
+    if not "%trim_start%"=="" set "_from=%trim_start%"
+    if not "%trim_end%"==""   set "_to=%trim_end%"
+    set "sections_arg= --download-sections "*!_from!-!_to!""
+    if /I "!kf!"=="y" set "sections_arg=!sections_arg! --force-keyframes-at-cuts"
+)
+
 :: ── AI-перевод ───────────────────────────────────────────────────────────
 echo.
 echo AI-перевод аудио (по умолчанию: 0):
@@ -244,7 +268,7 @@ echo.
 set "deno_arg="
 if exist "%~dp0deno.exe" set "deno_arg=--js-runtimes deno:%~dp0deno.exe"
 
-%dlp% --no-check-certificate %proxy_arg% %cookie_arg% %deno_arg% -c -i -w --windows-filenames --compat-options filename-sanitization -o "%folder%\%file_tpl%" %save_settings% "%url%"
+%dlp% --no-check-certificate %proxy_arg% %cookie_arg% %deno_arg% -c -i -w --windows-filenames --compat-options filename-sanitization -o "%folder%\%file_tpl%" %save_settings%%sections_arg% "%url%"
 
 set "dl_errorlevel=%errorlevel%"
 if %dl_errorlevel%==0 (

@@ -1,5 +1,5 @@
-$src      = 'S:\Private2\_task\LLM\_VSC\video\yt-dlp\Downloading_from_YouTube_v12.ps1'
-$out      = 'S:\Private2\_task\LLM\_VSC\video\yt-dlp\_VideoDownloader_v12.exe'
+$src      = 'S:\Private2\_task\LLM\_VSC\video\yt-dlp\Downloading_from_YouTube_v13.ps1'
+$out      = 'S:\Private2\_task\LLM\_VSC\video\yt-dlp\_VideoDownloader_v13.exe'
 $ps2exePs = 'S:\Private2\_task\LLM\_VSC\video\yt-dlp\ps2exe_tool.ps1'
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -27,8 +27,8 @@ Invoke-ps2exe `
     -noConsole `
     -STA `
     -x64 `
-    -title   "Video Downloader (yt-dlp) v12" `
-    -version "12.0.0.0"
+    -title   "Video Downloader (yt-dlp) v13" `
+    -version "13.0.0.0"
 
 if (Test-Path $out) {
     $size = [math]::Round((Get-Item $out).Length / 1KB)

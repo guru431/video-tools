@@ -812,20 +812,21 @@ $btnStart.Add_Click({
             $tpl = $tpl -replace '/', '\'
             $command += "-o", "`"$folder\$tpl`""
 
-            # Прокси
+            # Прокси: используем переменные окружения вместо --proxy,
+            # чтобы пароль не попадал в Get-Process | CommandLine.
+            $proxyEnvVal = $null
             if (([string]$comboProxyType.SelectedItem -ne "нет") -and -not [string]::IsNullOrWhiteSpace($textProxyHost.Text)) {
                 $pType = $comboProxyType.SelectedItem
                 $pHost = $textProxyHost.Text
                 $pPort = $textProxyPort.Text
                 $pUser = $textProxyUser.Text
                 $pPass = $textProxyPass.Text
-                $proxyVal = if (-not [string]::IsNullOrWhiteSpace($pUser) -and -not [string]::IsNullOrWhiteSpace($pPass)) {
+                $proxyEnvVal = if (-not [string]::IsNullOrWhiteSpace($pUser) -and -not [string]::IsNullOrWhiteSpace($pPass)) {
                     "${pType}://${pUser}:${pPass}@${pHost}"
                 } else {
                     "${pType}://${pHost}"
                 }
-                if (-not [string]::IsNullOrWhiteSpace($pPort)) { $proxyVal += ":${pPort}" }
-                $command += "--proxy", "`"$proxyVal`""
+                if (-not [string]::IsNullOrWhiteSpace($pPort)) { $proxyEnvVal += ":${pPort}" }
             }
 
             # Cookies
@@ -905,6 +906,11 @@ $btnStart.Add_Click({
             $psi.UseShellExecute        = $false
             $psi.CreateNoWindow         = $true
             $psi.WorkingDirectory       = $PWD.Path
+            if ($proxyEnvVal) {
+                $psi.EnvironmentVariables["HTTP_PROXY"]  = $proxyEnvVal
+                $psi.EnvironmentVariables["HTTPS_PROXY"] = $proxyEnvVal
+                $psi.EnvironmentVariables["ALL_PROXY"]   = $proxyEnvVal
+            }
 
             $global:downloadProcess = New-Object System.Diagnostics.Process
             $global:downloadProcess.StartInfo        = $psi
@@ -988,9 +994,10 @@ $btnStart.Add_Click({
                         $tempDir = Join-Path $env:TEMP "yt-dlp-translate-$(Get-Random)"
                         New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 
+                        # Вызов через & + массив аргументов — URL не парсится как PowerShell-код.
                         $env:NODE_TLS_REJECT_UNAUTHORIZED = "0"
-                        $votCmd = "& `"$votBin`" --output=`"$tempDir`" --voice-style=$transVoice --reslang=$transLang `"$currentUrl`""
-                        Invoke-Expression $votCmd 2>&1 | Out-Null
+                        $votArgs = @("--output=$tempDir", "--voice-style=$transVoice", "--reslang=$transLang", $currentUrl)
+                        & $votBin @votArgs 2>&1 | Out-Null
                         $env:NODE_TLS_REJECT_UNAUTHORIZED = "1"
 
                         $transFile = Get-ChildItem -Path $tempDir -Filter "*.mp3" -File | Select-Object -First 1
@@ -1001,12 +1008,24 @@ $btnStart.Add_Click({
                             if ($latestVideo) {
                                 $outputFile = $latestVideo.FullName -replace '\.mp4$', '_translated.mp4'
                                 Append-Output "Мерж аудиодорожек ($transMode)..." ([System.Drawing.Color]::Cyan)
-                                $ffmpegCmd = switch ($transMode) {
-                                    "dual_track" { "ffmpeg -y -i `"$($latestVideo.FullName)`" -i `"$($transFile.FullName)`" -map 0:v -map 0:a -map 1:a -c:v copy -c:a:0 copy -c:a:1 aac -b:a:1 192k -metadata:s:a:0 language=eng -metadata:s:a:0 title=`"Original`" -metadata:s:a:1 language=$transLang -metadata:s:a:1 title=`"AI Translation`" -disposition:a:0 default `"$outputFile`"" }
-                                    "replace"    { "ffmpeg -y -i `"$($latestVideo.FullName)`" -i `"$($transFile.FullName)`" -map 0:v -map 1:a -c:v copy -c:a aac -b:a 192k `"$outputFile`"" }
-                                    "mix"        { "ffmpeg -y -i `"$($latestVideo.FullName)`" -i `"$($transFile.FullName)`" -filter_complex `"[0:a]volume=0.3[a0];[1:a]volume=1.0[a1];[a0][a1]amix=inputs=2:duration=longest[aout]`" -map 0:v -map `"[aout]`" -c:v copy -c:a aac -b:a 192k `"$outputFile`"" }
+                                $ffArgs = switch ($transMode) {
+                                    "dual_track" { @("-y", "-i", $latestVideo.FullName, "-i", $transFile.FullName,
+                                                     "-map", "0:v", "-map", "0:a", "-map", "1:a",
+                                                     "-c:v", "copy", "-c:a:0", "copy", "-c:a:1", "aac", "-b:a:1", "192k",
+                                                     "-metadata:s:a:0", "language=eng",
+                                                     "-metadata:s:a:0", "title=Original",
+                                                     "-metadata:s:a:1", "language=$transLang",
+                                                     "-metadata:s:a:1", "title=AI Translation",
+                                                     "-disposition:a:0", "default", $outputFile) }
+                                    "replace"    { @("-y", "-i", $latestVideo.FullName, "-i", $transFile.FullName,
+                                                     "-map", "0:v", "-map", "1:a",
+                                                     "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", $outputFile) }
+                                    "mix"        { @("-y", "-i", $latestVideo.FullName, "-i", $transFile.FullName,
+                                                     "-filter_complex", "[0:a]volume=0.3[a0];[1:a]volume=1.0[a1];[a0][a1]amix=inputs=2:duration=longest[aout]",
+                                                     "-map", "0:v", "-map", "[aout]",
+                                                     "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", $outputFile) }
                                 }
-                                Invoke-Expression $ffmpegCmd 2>&1 | Out-Null
+                                & ffmpeg @ffArgs 2>&1 | Out-Null
                                 if (Test-Path $outputFile) {
                                     Move-Item -Path $outputFile -Destination $latestVideo.FullName -Force
                                     Append-Output "Перевод добавлен!" ([System.Drawing.Color]::LightGreen)

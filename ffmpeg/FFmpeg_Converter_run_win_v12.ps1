@@ -1,13 +1,27 @@
 ﻿Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-# SSL bypass — ленивая инициализация (без Add-Type/C#, чтобы не триггерить AV)
+# Включаем только TLS 1.2 (PS 5.1 default = SSL3/TLS1.0). Проверку сертификата
+# НЕ отключаем: gyan.dev имеет валидный cert, глобальный bypass отравит весь процесс.
 $script:_sslReady = $false
 function Ensure-SslBypass {
     if ($script:_sslReady) { return }
     [System.Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
     $script:_sslReady = $true
+}
+
+# Реальный probe доступности GPU-энкодера (а не просто наличие в списке): пробуем
+# короткий тестовый encode 64×64. Ловит случай ВМ без GPU, отсутствия драйвера и др.
+function Test-GpuEncoder {
+    param([string]$Bin, [string]$Encoder)
+    try {
+        & $Bin -hide_banner -loglevel error `
+            -f lavfi -i "color=size=64x64:duration=0.1:rate=1" `
+            -c:v $Encoder -f null - 2>&1 | Out-Null
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        return $false
+    }
 }
 
 # --- Фallback для $PSScriptRoot при запуске из ps2exe-экзешника ---
@@ -1379,6 +1393,22 @@ $form.Add_Shown({
                 $script:ffmpegCurrentVersion = $Matches[1]
                 $lblFfmpegVersion.Text      = "ffmpeg: $($Matches[1])"
                 $lblFfmpegVersion.ForeColor = [System.Drawing.Color]::DarkGreen
+
+                # Probe выбранного GPU-энкодера — на VM/без драйвера откатываемся на CPU
+                $selIdx = $comboHWAccel.SelectedIndex
+                if ($selIdx -eq 1) {
+                    if (-not (Test-GpuEncoder $ffmpegBin "h264_nvenc")) {
+                        $comboHWAccel.SelectedIndex = 0
+                        $labelHWInfo.Text = "NVIDIA NVENC недоступен (нет GPU/драйвера) — переключено на CPU"
+                        $labelHWInfo.ForeColor = [System.Drawing.Color]::Firebrick
+                    }
+                } elseif ($selIdx -eq 2) {
+                    if (-not (Test-GpuEncoder $ffmpegBin "h264_qsv")) {
+                        $comboHWAccel.SelectedIndex = 0
+                        $labelHWInfo.Text = "Intel QSV недоступен (нет GPU/драйвера) — переключено на CPU"
+                        $labelHWInfo.ForeColor = [System.Drawing.Color]::Firebrick
+                    }
+                }
             } else {
                 $lblFfmpegVersion.Text      = "ffmpeg: не найден в PATH"
                 $lblFfmpegVersion.ForeColor = [System.Drawing.Color]::Firebrick

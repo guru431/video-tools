@@ -119,22 +119,26 @@ check_translate_deps() {
     return $missing
 }
 
-# ── Формирование аргументов cookies ────────────────────────────────────────
+# ── Формирование аргументов cookies (записывает в global COOKIE_ARGS_ARR) ──
+# Глобальный массив вместо строки — чтобы пути с пробелами/спецсимволами
+# проходили в yt-dlp как отдельные argv-элементы (без eval, без injection).
+COOKIE_ARGS_ARR=()
 build_cookie_args() {
     local method="$1"
     local cookie_file="$2"
     local cookie_browser="$3"
+    COOKIE_ARGS_ARR=()
 
     case "$method" in
         file)
             if [ -f "$cookie_file" ]; then
-                echo "--cookies \"$cookie_file\""
+                COOKIE_ARGS_ARR=(--cookies "$cookie_file")
             else
                 log_warn "Файл cookies не найден: $cookie_file"
             fi
             ;;
         browser)
-            echo "--cookies-from-browser $cookie_browser"
+            COOKIE_ARGS_ARR=(--cookies-from-browser "$cookie_browser")
             ;;
         none|"")
             ;;
@@ -158,11 +162,15 @@ detect_platform() {
     esac
 }
 
-# ── Формирование аргументов формата ────────────────────────────────────────
+# ── Формирование аргументов формата (записывает в global FMT_ARGS_ARR) ─────
+# Один спецификатор (даже с `<=`, `^=`, `[]`) — единый argv-токен; bash array
+# гарантирует это без shell-injection через eval.
+FMT_ARGS_ARR=()
 build_format_args() {
     local quality="$1"
     local preset="${2:-auto}"
     local platform="${3:-youtube}"
+    local fmt=""
 
     # auto: для YouTube — avc1_best, для остальных — простой best[height<=N]
     if [ "$preset" = "auto" ]; then
@@ -170,15 +178,16 @@ build_format_args() {
             preset="avc1_best"
         else
             case "$quality" in
-                audio) echo "-f \"bestaudio/best\"" ;;
-                360)   echo "-f \"best[height<=360]/best\"" ;;
-                480)   echo "-f \"best[height<=480]/best\"" ;;
-                720)   echo "-f \"best[height<=720]/best\"" ;;
-                1080)  echo "-f \"best[height<=1080]/best\"" ;;
-                1440)  echo "-f \"best[height<=1440]/best\"" ;;
-                2160)  echo "-f \"best[height<=2160]/best\"" ;;
-                *)     echo "-f \"best[height<=720]/best\"" ;;
+                audio) fmt="bestaudio/best" ;;
+                360)   fmt="best[height<=360]/best" ;;
+                480)   fmt="best[height<=480]/best" ;;
+                720)   fmt="best[height<=720]/best" ;;
+                1080)  fmt="best[height<=1080]/best" ;;
+                1440)  fmt="best[height<=1440]/best" ;;
+                2160)  fmt="best[height<=2160]/best" ;;
+                *)     fmt="best[height<=720]/best" ;;
             esac
+            FMT_ARGS_ARR=(-f "$fmt")
             return
         fi
     fi
@@ -186,124 +195,130 @@ build_format_args() {
     case "$preset" in
         avc1_best)
             case "$quality" in
-                audio) echo "-f bestaudio[ext!=webm]" ;;
-                360)   echo "-f \"bestaudio[ext!=webm]+bestvideo[height<=360][vcodec^=avc1]\"" ;;
-                480)   echo "-f \"bestaudio[ext!=webm]+bestvideo[height<=480][vcodec^=avc1]\"" ;;
-                720)   echo "-f \"bestaudio[ext!=webm]+bestvideo[height<=720][vcodec^=avc1]\"" ;;
-                1080)  echo "-f \"bestaudio[ext!=webm]+bestvideo[height<=1080][vcodec^=avc1]\"" ;;
-                1440)  echo "-f \"bestaudio[ext!=webm]+bestvideo[height<=1440][vcodec^=avc1]\"" ;;
-                2160)  echo "-f \"bestaudio[ext!=webm]+bestvideo[height<=2160][vcodec^=avc1]\"" ;;
-                *)     echo "-f \"bestaudio[ext!=webm]+bestvideo[height<=720][vcodec^=avc1]\"" ;;
+                audio) fmt="bestaudio[ext!=webm]" ;;
+                360)   fmt="bestaudio[ext!=webm]+bestvideo[height<=360][vcodec^=avc1]" ;;
+                480)   fmt="bestaudio[ext!=webm]+bestvideo[height<=480][vcodec^=avc1]" ;;
+                720)   fmt="bestaudio[ext!=webm]+bestvideo[height<=720][vcodec^=avc1]" ;;
+                1080)  fmt="bestaudio[ext!=webm]+bestvideo[height<=1080][vcodec^=avc1]" ;;
+                1440)  fmt="bestaudio[ext!=webm]+bestvideo[height<=1440][vcodec^=avc1]" ;;
+                2160)  fmt="bestaudio[ext!=webm]+bestvideo[height<=2160][vcodec^=avc1]" ;;
+                *)     fmt="bestaudio[ext!=webm]+bestvideo[height<=720][vcodec^=avc1]" ;;
             esac ;;
         avc1_https)
             case "$quality" in
-                audio) echo "-f 140" ;;
-                360)   echo "-f 140+134" ;;
-                480)   echo "-f 140+135/134" ;;
-                720)   echo "-f 140+136/135/134" ;;
-                1080)  echo "-f 140+137/136/135/134" ;;
-                1440)  echo "-f 140+138/137/136/135/134" ;;
-                2160)  echo "-f 140+139/138/137/136/135/134" ;;
-                *)     echo "-f 140+136/135/134" ;;
+                audio) fmt="140" ;;
+                360)   fmt="140+134" ;;
+                480)   fmt="140+135/134" ;;
+                720)   fmt="140+136/135/134" ;;
+                1080)  fmt="140+137/136/135/134" ;;
+                1440)  fmt="140+138/137/136/135/134" ;;
+                2160)  fmt="140+139/138/137/136/135/134" ;;
+                *)     fmt="140+136/135/134" ;;
             esac ;;
         avc1_m3u8)
             case "$quality" in
-                audio) echo "-f 234" ;;
-                360)   echo "-f 234+230" ;;
-                480)   echo "-f 234+231/230" ;;
-                720)   echo "-f 234+232/231/230" ;;
-                1080)  echo "-f 234+233/232/231/230" ;;
-                1440)  echo "-f 234+234/233/232/231/230" ;;
-                2160)  echo "-f 234+235/234/233/232/231/230" ;;
-                *)     echo "-f 234+232/231/230" ;;
+                audio) fmt="234" ;;
+                360)   fmt="234+230" ;;
+                480)   fmt="234+231/230" ;;
+                720)   fmt="234+232/231/230" ;;
+                1080)  fmt="234+233/232/231/230" ;;
+                1440)  fmt="234+234/233/232/231/230" ;;
+                2160)  fmt="234+235/234/233/232/231/230" ;;
+                *)     fmt="234+232/231/230" ;;
             esac ;;
         avc1_https_60fps)
             case "$quality" in
-                audio) echo "-f 234" ;;
-                360)   echo "-f 234+296" ;;
-                480)   echo "-f 234+297/296" ;;
-                720)   echo "-f 234+298/297/296" ;;
-                1080)  echo "-f 234+299/298/297/296" ;;
-                1440)  echo "-f 234+300/299/298/297/296" ;;
-                2160)  echo "-f 234+301/300/299/298/297/296" ;;
-                *)     echo "-f 234+298/297/296" ;;
+                audio) fmt="234" ;;
+                360)   fmt="234+296" ;;
+                480)   fmt="234+297/296" ;;
+                720)   fmt="234+298/297/296" ;;
+                1080)  fmt="234+299/298/297/296" ;;
+                1440)  fmt="234+300/299/298/297/296" ;;
+                2160)  fmt="234+301/300/299/298/297/296" ;;
+                *)     fmt="234+298/297/296" ;;
             esac ;;
         avc1_m3u8_60fps)
             case "$quality" in
-                audio) echo "-f 234" ;;
-                360)   echo "-f 234+309" ;;
-                480)   echo "-f 234+310/309" ;;
-                720)   echo "-f 234+311/310/309" ;;
-                1080)  echo "-f 234+312/311/310/309" ;;
-                1440)  echo "-f 234+313/312/311/310/309" ;;
-                2160)  echo "-f 234+314/313/312/311/310/309" ;;
-                *)     echo "-f 234+311/310/309" ;;
+                audio) fmt="234" ;;
+                360)   fmt="234+309" ;;
+                480)   fmt="234+310/309" ;;
+                720)   fmt="234+311/310/309" ;;
+                1080)  fmt="234+312/311/310/309" ;;
+                1440)  fmt="234+313/312/311/310/309" ;;
+                2160)  fmt="234+314/313/312/311/310/309" ;;
+                *)     fmt="234+311/310/309" ;;
             esac ;;
         avc1_https_60fps_hdr)
             case "$quality" in
-                audio) echo "-f 234" ;;
-                360)   echo "-f 234+696" ;;
-                480)   echo "-f 234+697/696" ;;
-                720)   echo "-f 234+698/697/696" ;;
-                1080)  echo "-f 234+699/698/697/696" ;;
-                1440)  echo "-f 234+700/699/698/697/696" ;;
-                2160)  echo "-f 234+701/700/699/698/697/696" ;;
-                *)     echo "-f 234+698/697/696" ;;
+                audio) fmt="234" ;;
+                360)   fmt="234+696" ;;
+                480)   fmt="234+697/696" ;;
+                720)   fmt="234+698/697/696" ;;
+                1080)  fmt="234+699/698/697/696" ;;
+                1440)  fmt="234+700/699/698/697/696" ;;
+                2160)  fmt="234+701/700/699/698/697/696" ;;
+                *)     fmt="234+698/697/696" ;;
             esac ;;
         old_combo)
             case "$quality" in
-                audio) echo "-f 140" ;;
-                360)   echo "-f 18" ;;
-                480)   echo "-f 20/18" ;;
-                720)   echo "-f 22/20/18" ;;
-                1080)  echo "-f 24/22/20/18" ;;
-                1440)  echo "-f 26/24/22/20/18" ;;
-                2160)  echo "-f 28/26/24/22/20/18" ;;
-                *)     echo "-f 22/20/18" ;;
+                audio) fmt="140" ;;
+                360)   fmt="18" ;;
+                480)   fmt="20/18" ;;
+                720)   fmt="22/20/18" ;;
+                1080)  fmt="24/22/20/18" ;;
+                1440)  fmt="26/24/22/20/18" ;;
+                2160)  fmt="28/26/24/22/20/18" ;;
+                *)     fmt="22/20/18" ;;
             esac ;;
         *)
-            echo "-f \"bestaudio[ext!=webm]+bestvideo[height<=720][vcodec^=avc1]\"" ;;
+            fmt="bestaudio[ext!=webm]+bestvideo[height<=720][vcodec^=avc1]" ;;
     esac
+    FMT_ARGS_ARR=(-f "$fmt")
 }
 
 # ── Скачивание одного URL ──────────────────────────────────────────────────
+# Прокси-URL передаётся через global PROXY_URL (не в argv) — пароль не утекает
+# в `ps aux`. Cookies и формат — через global *_ARR массивы, заполненные
+# build_*-функциями. Команда выполняется напрямую через "${cmd[@]}", без eval.
 download_url() {
     local url="$1"
     local output_template="$2"
     local quality="$3"
     local subs_only="$4"
-    local proxy_url="$5"
-    local cookie_args="$6"
-    local archive_arg="$7"
-    local trim_start_on="${8:-false}"
-    local trim_start_val="${9:-}"
-    local trim_end_on="${10:-false}"
-    local trim_end_val="${11:-}"
-    local force_kf="${12:-false}"
+    local archive_path="${5:-}"
+    local trim_start_on="${6:-false}"
+    local trim_start_val="${7:-}"
+    local trim_end_on="${8:-false}"
+    local trim_end_val="${9:-}"
+    local force_kf="${10:-false}"
 
-    local cmd="yt-dlp -c -i -w --compat-options filename-sanitization"
+    local -a cmd=(yt-dlp -c -i -w --compat-options filename-sanitization)
 
     # Deno рядом со скриптом
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    [ -x "$script_dir/deno" ] && cmd+=" --js-runtimes deno:$script_dir/deno"
+    [ -x "$script_dir/deno" ] && cmd+=(--js-runtimes "deno:$script_dir/deno")
 
-    # Прокси
-    [ -n "$proxy_url" ] && cmd+=" --proxy \"$proxy_url\""
+    # Прокси через переменную окружения — пароль не виден в ps aux
+    local -a env_prefix=()
+    if [ -n "${PROXY_URL:-}" ]; then
+        env_prefix=(env "HTTP_PROXY=$PROXY_URL" "HTTPS_PROXY=$PROXY_URL" "ALL_PROXY=$PROXY_URL")
+    fi
 
-    # Cookies
-    [ -n "$cookie_args" ] && cmd+=" $cookie_args"
+    # Cookies (массив, заполнен build_cookie_args)
+    [ "${#COOKIE_ARGS_ARR[@]}" -gt 0 ] && cmd+=("${COOKIE_ARGS_ARR[@]}")
 
     # Архив скачанного
-    [ -n "$archive_arg" ] && cmd+=" $archive_arg"
+    [ -n "$archive_path" ] && cmd+=(--download-archive "$archive_path")
 
     # Шаблон вывода
-    cmd+=" -o \"$output_template\""
+    cmd+=(-o "$output_template")
 
     if [ "$subs_only" = "true" ]; then
-        cmd+=" --sub-lang $SUB_LANG --write-auto-sub --sub-format $SUB_FORMAT --skip-download"
+        cmd+=(--sub-lang "$SUB_LANG" --write-auto-sub --sub-format "$SUB_FORMAT" --skip-download)
     else
-        cmd+=" $(build_format_args "$quality" "$FORMAT_PRESET" "$(detect_platform "$url")")"
+        build_format_args "$quality" "$FORMAT_PRESET" "$(detect_platform "$url")"
+        cmd+=("${FMT_ARGS_ARR[@]}")
     fi
 
     # Фрагмент: только start = с TIME до конца; только end = с начала до TIME;
@@ -313,15 +328,15 @@ download_url() {
         local to="inf"
         [ "$trim_start_on" = "true" ] && [ -n "$trim_start_val" ] && from="$trim_start_val"
         [ "$trim_end_on"   = "true" ] && [ -n "$trim_end_val"   ] && to="$trim_end_val"
-        cmd+=" --download-sections \"*${from}-${to}\""
-        [ "$force_kf" = "true" ] && cmd+=" --force-keyframes-at-cuts"
+        cmd+=(--download-sections "*${from}-${to}")
+        [ "$force_kf" = "true" ] && cmd+=(--force-keyframes-at-cuts)
     fi
 
-    cmd+=" \"$url\""
+    cmd+=("$url")
 
-    log_info "Команда: $cmd"
+    log_info "Команда: ${cmd[*]}"
 
-    if eval $cmd; then
+    if "${env_prefix[@]}" "${cmd[@]}"; then
         log_ok "Загрузка завершена: $url"
         COUNT_OK=$((COUNT_OK + 1))
         return 0
@@ -349,10 +364,9 @@ translate_audio() {
 
     local temp_dir
     temp_dir=$(mktemp -d)
-    local vot_cmd="\"$VOT_BIN\" --output=\"$temp_dir\" --voice-style=$voice_style --reslang=$target_lang"
-    vot_cmd+=" \"$url\""
+    local -a vot_cmd=("$VOT_BIN" "--output=$temp_dir" "--voice-style=$voice_style" "--reslang=$target_lang" "$url")
 
-    if ! NODE_TLS_REJECT_UNAUTHORIZED=0 eval $vot_cmd; then
+    if ! NODE_TLS_REJECT_UNAUTHORIZED=0 "${vot_cmd[@]}"; then
         log_error "Не удалось получить перевод для: $url"
         rm -rf "$temp_dir"
         return 1
@@ -435,24 +449,24 @@ download_batch() {
             template="${BASE_DIR}/${category}/${OUTPUT_TEMPLATE}"
         fi
 
-        local archive_arg=""
-        if [ "$USE_ARCHIVE" = "true" ]; then
-            archive_arg="--download-archive \"${BASE_DIR}/${ARCHIVE_FILE}\""
-        fi
-
-        local batch_args="-c -i -w --compat-options filename-sanitization"
+        local -a cmd=(yt-dlp -c -i -w --compat-options filename-sanitization)
         local sdir
         sdir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-        [ -x "$sdir/deno" ] && batch_args+=" --js-runtimes deno:$sdir/deno"
-        [ -n "$PROXY_URL" ] && batch_args+=" --proxy \"$PROXY_URL\""
-        [ -n "$COOKIE_ARGS" ] && batch_args+=" $COOKIE_ARGS"
-        [ -n "$archive_arg" ] && batch_args+=" $archive_arg"
-        batch_args+=" -o \"$template\""
+        [ -x "$sdir/deno" ] && cmd+=(--js-runtimes "deno:$sdir/deno")
+
+        local -a env_prefix=()
+        if [ -n "${PROXY_URL:-}" ]; then
+            env_prefix=(env "HTTP_PROXY=$PROXY_URL" "HTTPS_PROXY=$PROXY_URL" "ALL_PROXY=$PROXY_URL")
+        fi
+
+        [ "${#COOKIE_ARGS_ARR[@]}" -gt 0 ] && cmd+=("${COOKIE_ARGS_ARR[@]}")
+        [ "$USE_ARCHIVE" = "true" ] && cmd+=(--download-archive "${BASE_DIR}/${ARCHIVE_FILE}")
+        cmd+=(-o "$template")
 
         # Дата
         local date_range
         date_range=$(read_config "date_range" "batch" "now-6months")
-        batch_args+=" --dateafter $date_range"
+        cmd+=(--dateafter "$date_range")
 
         # Задержки
         local sleep_req sleep_int max_sleep_int sleep_sub
@@ -460,30 +474,30 @@ download_batch() {
         sleep_int=$(read_config "sleep_interval" "batch" "8")
         max_sleep_int=$(read_config "max_sleep_interval" "batch" "22")
         sleep_sub=$(read_config "sleep_subtitles" "batch" "4")
-        batch_args+=" --sleep-requests $sleep_req"
-        batch_args+=" --sleep-interval $sleep_int"
-        batch_args+=" --max-sleep-interval $max_sleep_int"
-        batch_args+=" --sleep-subtitles $sleep_sub"
+        cmd+=(--sleep-requests "$sleep_req")
+        cmd+=(--sleep-interval "$sleep_int")
+        cmd+=(--max-sleep-interval "$max_sleep_int")
+        cmd+=(--sleep-subtitles "$sleep_sub")
 
         if [ "$subs_only" = "true" ]; then
-            batch_args+=" --sub-lang $SUB_LANG --write-auto-sub --sub-format $SUB_FORMAT --skip-download"
+            cmd+=(--sub-lang "$SUB_LANG" --write-auto-sub --sub-format "$SUB_FORMAT" --skip-download)
         else
-            batch_args+=" $(build_format_args "$QUALITY" "$FORMAT_PRESET" "youtube")"
+            build_format_args "$QUALITY" "$FORMAT_PRESET" "youtube"
+            cmd+=("${FMT_ARGS_ARR[@]}")
         fi
 
         if [ "$mode" = "playlists" ]; then
-            batch_args+=" --yes-playlist"
+            cmd+=(--yes-playlist)
         else
-            batch_args+=" --playlist-reverse"
+            cmd+=(--playlist-reverse)
         fi
 
         local url="https://www.youtube.com/@${handle}/${mode}"
-        batch_args+=" \"$url\""
+        cmd+=("$url")
 
-        local cmd="yt-dlp $batch_args"
-        log_info "Команда: $cmd"
+        log_info "Команда: ${cmd[*]}"
 
-        if eval $cmd; then
+        if "${env_prefix[@]}" "${cmd[@]}"; then
             log_ok "Канал $handle завершён"
             COUNT_OK=$((COUNT_OK + 1))
         else
@@ -695,8 +709,8 @@ parse_args() {
     [ -n "$TRANSLATE_MODE_CLI" ] && TRANSLATE_MODE="$TRANSLATE_MODE_CLI"
     [ -n "$TRANSLATE_VOICE_CLI" ] && TRANSLATE_VOICE="$TRANSLATE_VOICE_CLI"
 
-    # Сформировать cookie args
-    COOKIE_ARGS=$(build_cookie_args "$COOKIE_METHOD" "$COOKIE_FILE_PATH" "$COOKIE_BROWSER")
+    # Сформировать cookie args (заполняет global COOKIE_ARGS_ARR)
+    build_cookie_args "$COOKIE_METHOD" "$COOKIE_FILE_PATH" "$COOKIE_BROWSER"
 }
 
 # ── MAIN ───────────────────────────────────────────────────────────────────
@@ -725,12 +739,12 @@ main() {
             template="${BASE_DIR}/${OUTPUT_TEMPLATE}"
         fi
 
-        local archive_arg=""
+        local archive_path=""
         if [ "$USE_ARCHIVE" = "true" ]; then
-            archive_arg="--download-archive \"${BASE_DIR}/${ARCHIVE_FILE}\""
+            archive_path="${BASE_DIR}/${ARCHIVE_FILE}"
         fi
 
-        download_url "$URL" "$template" "$QUALITY" "$SUBS_ONLY" "$PROXY_URL" "$COOKIE_ARGS" "$archive_arg" \
+        download_url "$URL" "$template" "$QUALITY" "$SUBS_ONLY" "$archive_path" \
             "$TRIM_START_ON" "$TRIM_START_VAL" "$TRIM_END_ON" "$TRIM_END_VAL" "$FORCE_KEYFRAMES"
 
         # AI-перевод если включён и не только субтитры

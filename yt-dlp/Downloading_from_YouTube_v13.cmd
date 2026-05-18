@@ -159,14 +159,17 @@ if %quality%==92 (
 :: avc1_best (по умолчанию)
 :: Примечание: избегаем ext!=webm — символ ! съедается delayed expansion.
 :: Используем ext=m4a с fallback на bestaudio (эквивалентно для YouTube).
+:: CMD не умеет хранить < в значении SET без срабатывания редиректа при
+:: %save_settings%-расширении — используем плейсхолдеры (LE для <=, Q для ")
+:: и подменяем через string substitution после блока IF.
 if %fmt%==0 (
     if %quality%==0 set "save_settings=-f bestaudio[ext=m4a]/bestaudio"
-    if %quality%==1 set "save_settings=-f "bestaudio[ext=m4a]+bestvideo[height<=360][vcodec^=avc1]/bestaudio+bestvideo[height<=360][vcodec^=avc1]""
-    if %quality%==2 set "save_settings=-f "bestaudio[ext=m4a]+bestvideo[height<=480][vcodec^=avc1]/bestaudio+bestvideo[height<=480][vcodec^=avc1]""
-    if %quality%==3 set "save_settings=-f "bestaudio[ext=m4a]+bestvideo[height<=720][vcodec^=avc1]/bestaudio+bestvideo[height<=720][vcodec^=avc1]""
-    if %quality%==4 set "save_settings=-f "bestaudio[ext=m4a]+bestvideo[height<=1080][vcodec^=avc1]/bestaudio+bestvideo[height<=1080][vcodec^=avc1]""
-    if %quality%==5 set "save_settings=-f "bestaudio[ext=m4a]+bestvideo[height<=1440][vcodec^=avc1]/bestaudio+bestvideo[height<=1440][vcodec^=avc1]""
-    if %quality%==6 set "save_settings=-f "bestaudio[ext=m4a]+bestvideo[height<=2160][vcodec^=avc1]/bestaudio+bestvideo[height<=2160][vcodec^=avc1]""
+    if %quality%==1 set "save_settings=-f Qbestaudio[ext=m4a]+bestvideo[heightLE360][vcodec^=avc1]/bestaudio+bestvideo[heightLE360][vcodec^=avc1]Q"
+    if %quality%==2 set "save_settings=-f Qbestaudio[ext=m4a]+bestvideo[heightLE480][vcodec^=avc1]/bestaudio+bestvideo[heightLE480][vcodec^=avc1]Q"
+    if %quality%==3 set "save_settings=-f Qbestaudio[ext=m4a]+bestvideo[heightLE720][vcodec^=avc1]/bestaudio+bestvideo[heightLE720][vcodec^=avc1]Q"
+    if %quality%==4 set "save_settings=-f Qbestaudio[ext=m4a]+bestvideo[heightLE1080][vcodec^=avc1]/bestaudio+bestvideo[heightLE1080][vcodec^=avc1]Q"
+    if %quality%==5 set "save_settings=-f Qbestaudio[ext=m4a]+bestvideo[heightLE1440][vcodec^=avc1]/bestaudio+bestvideo[heightLE1440][vcodec^=avc1]Q"
+    if %quality%==6 set "save_settings=-f Qbestaudio[ext=m4a]+bestvideo[heightLE2160][vcodec^=avc1]/bestaudio+bestvideo[heightLE2160][vcodec^=avc1]Q"
 )
 :: avc1_https
 if %fmt%==1 (
@@ -231,14 +234,19 @@ if %fmt%==6 (
 :: auto для не-YouTube — простой best (один поток, быстро для VK/RuTube/...)
 if %fmt%==7 (
     if %quality%==0 set "save_settings=-f bestaudio/best"
-    if %quality%==1 set "save_settings=-f "best[height<=360]/best""
-    if %quality%==2 set "save_settings=-f "best[height<=480]/best""
-    if %quality%==3 set "save_settings=-f "best[height<=720]/best""
-    if %quality%==4 set "save_settings=-f "best[height<=1080]/best""
-    if %quality%==5 set "save_settings=-f "best[height<=1440]/best""
-    if %quality%==6 set "save_settings=-f "best[height<=2160]/best""
+    if %quality%==1 set "save_settings=-f Qbest[heightLE360]/bestQ"
+    if %quality%==2 set "save_settings=-f Qbest[heightLE480]/bestQ"
+    if %quality%==3 set "save_settings=-f Qbest[heightLE720]/bestQ"
+    if %quality%==4 set "save_settings=-f Qbest[heightLE1080]/bestQ"
+    if %quality%==5 set "save_settings=-f Qbest[heightLE1440]/bestQ"
+    if %quality%==6 set "save_settings=-f Qbest[heightLE2160]/bestQ"
 )
 :format_done
+:: Подмена плейсхолдеров (см. примечание в блоке fmt=0)
+if defined save_settings (
+    set "save_settings=!save_settings:LE=<=!"
+    set "save_settings=!save_settings:Q="!"
+)
 
 :: ── Шаблон пути ──────────────────────────────────────────────────────────
 set "output_tpl=%%(uploader)s\%%(upload_date)s - %%(title).100U.%%(ext)s"
@@ -249,15 +257,18 @@ echo "%url%" | findstr /C:"playlist" >nul && (
     set "file_tpl=%output_tpl%"
 )
 
-:: ── Прокси-аргумент ──────────────────────────────────────────────────────
-set "proxy_arg="
-if not "%proxy%"=="" set "proxy_arg=--proxy %proxy%"
+:: ── Прокси через переменные окружения (пароль не виден в tasklist /v) ────
+if not "%proxy%"=="" (
+    set "HTTP_PROXY=%proxy%"
+    set "HTTPS_PROXY=%proxy%"
+    set "ALL_PROXY=%proxy%"
+)
 
 :: ── Получение названия видео ─────────────────────────────────────────────
 echo.
 echo ─────────────────────────────────────────
 echo Получение информации о видео...
-%dlp% --no-check-certificate %proxy_arg% %cookie_arg% --get-title "%url%" 2>nul
+%dlp% --no-check-certificate %cookie_arg% --get-title "%url%" 2>nul
 echo ─────────────────────────────────────────
 echo.
 
@@ -268,7 +279,7 @@ echo.
 set "deno_arg="
 if exist "%~dp0deno.exe" set "deno_arg=--js-runtimes deno:%~dp0deno.exe"
 
-%dlp% --no-check-certificate %proxy_arg% %cookie_arg% %deno_arg% -c -i -w --windows-filenames --compat-options filename-sanitization -o "%folder%\%file_tpl%" %save_settings%%sections_arg% "%url%"
+%dlp% --no-check-certificate %cookie_arg% %deno_arg% -c -i -w --windows-filenames --compat-options filename-sanitization -o "%folder%\%file_tpl%" %save_settings%%sections_arg% "%url%"
 
 set "dl_errorlevel=%errorlevel%"
 if %dl_errorlevel%==0 (

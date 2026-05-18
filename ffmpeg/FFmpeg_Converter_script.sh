@@ -153,7 +153,7 @@ else
 		if [ "$keep_aspect_ratio_status" = "+" ] && [ "$keep_aspect_ratio_value" = "yes" ]; then
 			case "$hw_accel_type" in
 				nvidia) vf_chain="${vf_chain:+$vf_chain,}scale_cuda=${res_w}:${res_h}:force_original_aspect_ratio=decrease" ;;
-				intel)  vf_chain="${vf_chain:+$vf_chain,}scale_qsv=${res_w}:${res_h}" ;;
+				intel)  vf_chain="${vf_chain:+$vf_chain,}scale_qsv=${res_w}:${res_h}:force_original_aspect_ratio=decrease" ;;
 				*)      vf_chain="${vf_chain:+$vf_chain,}scale=${res_w}:${res_h}:force_original_aspect_ratio=decrease,pad=${res_w}:${res_h}:(ow-iw)/2:(oh-ih)/2" ;;
 			esac
 		else
@@ -311,7 +311,7 @@ encode_file() {
 		esac
 		out_audio="${folder_destination}${file_path}${file_name}.${ext}"
 		if [ -f "$out_audio" ]; then
-			echo "skip" > "$results_dir/r_$$_$(date +%s%N 2>/dev/null || date +%s)_$RANDOM"
+			echo "skip" > "$(mktemp "$results_dir/r_XXXXXXXX")"
 			return
 		fi
 		log_msg "INFO" "Извлечение аудио: $(basename "$full_path")"
@@ -319,13 +319,13 @@ encode_file() {
 		if [ $? -ne 0 ]; then
 			log_msg "FAIL" "$(basename "$full_path")"
 			rm -f "$out_audio"
-			echo "fail" > "$results_dir/r_$$_$(date +%s%N 2>/dev/null || date +%s)_$RANDOM"
+			echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
 		else
 			local out_sz in_sz
 			out_sz=$(stat -c%s "$out_audio" 2>/dev/null || echo 0)
 			in_sz=$(stat -c%s "$full_path" 2>/dev/null || echo 0)
 			log_msg "OK" "$(basename "$full_path") -> $(basename "$out_audio")"
-			echo "ok:${out_sz}:${in_sz}" > "$results_dir/r_$$_$(date +%s%N 2>/dev/null || date +%s)_$RANDOM"
+			echo "ok:${out_sz}:${in_sz}" > "$(mktemp "$results_dir/r_XXXXXXXX")"
 		fi
 		return
 	fi
@@ -343,7 +343,7 @@ encode_file() {
 	if [ -f "${folder_destination}${file_path}${file_name}.${current_format_out}" ]; then
 		# E3. Проверка валидности существующего файла
 		if "$ffmpeg" -v error -i "${folder_destination}${file_path}${file_name}.${current_format_out}" -f null - 2>/dev/null; then
-			echo "skip" > "$results_dir/r_$$_$(date +%s%N 2>/dev/null || date +%s)_$RANDOM"
+			echo "skip" > "$(mktemp "$results_dir/r_XXXXXXXX")"
 			return
 		else
 			log_msg "WARN" "Удаление битого файла: ${folder_destination}${file_path}${file_name}.${current_format_out}"
@@ -351,7 +351,7 @@ encode_file() {
 		fi
 	fi
 	if [ -f "${folder_destination}${file_path}${file_name} (part.1).${current_format_out}" ]; then
-		echo "skip" > "$results_dir/r_$$_$(date +%s%N 2>/dev/null || date +%s)_$RANDOM"
+		echo "skip" > "$(mktemp "$results_dir/r_XXXXXXXX")"
 		return
 	fi
 
@@ -497,9 +497,11 @@ encode_file() {
 		local out_file="${folder_destination}${file_path}${file_name}${pref}.${current_format_out}"
 
 		# D7. Dry-run
+		# -ss располагается ДО -i: ffmpeg делает fast seek по контейнеру (мгновенно),
+		# а не декодирует файл от 0 до start_coding_value (могут быть минуты для крупных видео).
 		if [ "$dry_run" = "yes" ]; then
 			local dry_seek=""; if [ "$b" -gt 0 ] 2>/dev/null; then dry_seek="-ss $b"; fi
-			echo "[DRY-RUN] $ffmpeg -hide_banner -strict -2 $hw_decode_args -i \"$full_path\" ${subtitles_params[*]} $convert_settings $thread_args $vf_args $af_args $dry_seek $current_set_length \"$out_file\""
+			echo "[DRY-RUN] $ffmpeg -hide_banner -strict -2 $hw_decode_args $dry_seek -i \"$full_path\" ${subtitles_params[*]} $convert_settings $thread_args $vf_args $af_args $current_set_length \"$out_file\""
 		else
 			log_msg "INFO" "Кодирование: $(basename "$full_path") -> $(basename "$out_file")"
 			local encode_start=$(date +%s)
@@ -513,9 +515,9 @@ encode_file() {
 			if [ "$b" -gt 0 ] 2>/dev/null; then seek_arg="-ss $b"; fi
 
 			"$ffmpeg" -hide_banner -strict -2 $hw_decode_args \
-				-i "$full_path" "${subtitles_params[@]}" \
+				$seek_arg -i "$full_path" "${subtitles_params[@]}" \
 				$convert_settings $thread_args $vf_args $af_args \
-				$seek_arg $current_set_length \
+				$current_set_length \
 				-progress "$progress_file" -nostats \
 				"$out_file" -y 2>"$err_file" &
 			local ffmpeg_pid=$!
@@ -560,13 +562,13 @@ encode_file() {
 					done
 				fi
 				rm -f "$out_file"
-				echo "fail" > "$results_dir/r_$$_$(date +%s%N 2>/dev/null || date +%s)_$RANDOM"
+				echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
 			else
 				log_msg "OK" "$(basename "$full_path") -> $(basename "$out_file") (${elapsed_min}m ${elapsed_sec}s)"
 				local out_sz in_sz
 				out_sz=$(stat -c%s "$out_file" 2>/dev/null || echo 0)
 				in_sz=$(stat -c%s "$full_path" 2>/dev/null || echo 0)
-				echo "ok:${out_sz}:${in_sz}" > "$results_dir/r_$$_$(date +%s%N 2>/dev/null || date +%s)_$RANDOM"
+				echo "ok:${out_sz}:${in_sz}" > "$(mktemp "$results_dir/r_XXXXXXXX")"
 			fi
 			rm -f "$err_file"
 		fi

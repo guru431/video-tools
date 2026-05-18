@@ -161,7 +161,7 @@ if ($audio_only -eq "yes") {
 		if ($keep_aspect_ratio_status -eq "+" -and $keep_aspect_ratio_value -eq "yes") {
 			switch ($hw_accel_type) {
 				"nvidia" { $vf_parts += "scale_cuda=${res_w}:${res_h}:force_original_aspect_ratio=decrease" }
-				"intel"  { $vf_parts += "scale_qsv=${res_w}:${res_h}" }
+				"intel"  { $vf_parts += "scale_qsv=${res_w}:${res_h}:force_original_aspect_ratio=decrease" }
 				default  { $vf_parts += "scale=${res_w}:${res_h}:force_original_aspect_ratio=decrease,pad=${res_w}:${res_h}:(ow-iw)/2:(oh-ih)/2" }
 			}
 		} else {
@@ -525,16 +525,17 @@ function Encode-File {
 
 		$out_file = "$out_base$pref.$current_format_out"
 
-		# Сборка аргументов (A5 — без Split, через массив)
+		# Сборка аргументов (A5 — без Split, через массив).
+		# -ss располагается ДО -i: fast seek по контейнеру вместо декодирования от 0.
 		$ffmpegArgs = @("-hide_banner", "-strict", "-2")
 		$ffmpegArgs += $hw_decode_args
+		if ($b -ne 0 -or $set_start_coding) { $ffmpegArgs += @("-ss", "$b") }
 		$ffmpegArgs += @("-i", $full_path)
 		$ffmpegArgs += $subtitles_args
 		$ffmpegArgs += $convert_args
 		$ffmpegArgs += $thread_args
 		$ffmpegArgs += $vf_args
 		$ffmpegArgs += $af_args
-		if ($b -ne 0 -or $set_start_coding) { $ffmpegArgs += @("-ss", "$b") }
 		if ($current_set_length) { $ffmpegArgs += $current_set_length -split ' ' }
 		$ffmpegArgs += @($out_file, "-y")
 		$ffmpegArgs = $ffmpegArgs | Where-Object { $_ -ne "" -and $_ -ne $null }

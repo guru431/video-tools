@@ -80,7 +80,7 @@ set "hw_decode_args="
 if "!hw_accel_status!"=="+" (
 	if "!hw_accel_value!"=="nvidia" (
 		set "encoder_check="
-		for /f "tokens=*" %%i in ('%ffmpeg% -encoders 2^>^&1 ^| findstr /i "nvenc"') do set "encoder_check=%%i"
+		for /f "tokens=*" %%i in ('%ffmpeg% -encoders 2^>^&1 ^| findstr /i "h264_nvenc hevc_nvenc av1_nvenc"') do set "encoder_check=%%i"
 		if defined encoder_check (
 			set "use_hw_accel=yes"
 			set "hw_accel_type=nvidia"
@@ -92,7 +92,7 @@ if "!hw_accel_status!"=="+" (
 	)
 	if "!hw_accel_value!"=="intel" (
 		set "encoder_check="
-		for /f "tokens=*" %%i in ('%ffmpeg% -encoders 2^>^&1 ^| findstr /i "qsv"') do set "encoder_check=%%i"
+		for /f "tokens=*" %%i in ('%ffmpeg% -encoders 2^>^&1 ^| findstr /i "h264_qsv hevc_qsv av1_qsv"') do set "encoder_check=%%i"
 		if defined encoder_check (
 			set "use_hw_accel=yes"
 			set "hw_accel_type=intel"
@@ -190,10 +190,24 @@ if "%audio_only%"=="yes" (
 
 :: D6. Скорость воспроизведения (аудио)
 set "af_chain="
-:: NOTE: atempo supports range 0.5-2.0; cascade for values outside this range
-:: is not implemented in CMD (no float math). Use .sh or .ps1 for speeds >2.0 or <0.5
+:: atempo supports range 0.5-2.0. Каскадирование для значений вне диапазона
+:: не реализовано в CMD (нет float math). При попытке — предупреждение и пропуск,
+:: чтобы ffmpeg не падал. Для скоростей >2.0 или <0.5 используйте .sh или .ps1.
 if "!playback_speed_status!"=="+" if not "!playback_speed_value!"=="1.0" (
-	set "af_chain=atempo=!playback_speed_value!"
+	for /f "tokens=1,2 delims=." %%a in ("!playback_speed_value!") do (
+		set "_int=%%a"
+		set "_frac=%%b"
+	)
+	if not defined _frac set "_frac=0"
+	set "_oor=0"
+	if !_int! geq 3 set "_oor=1"
+	if !_int!==2 if not "!_frac!"=="0" set "_oor=1"
+	if !_int!==0 if !_frac! lss 5 set "_oor=1"
+	if "!_oor!"=="1" (
+		echo [WARN] atempo=!playback_speed_value! вне диапазона 0.5-2.0; пропуск ^(используйте .sh/.ps1 для каскада^)
+	) else (
+		set "af_chain=atempo=!playback_speed_value!"
+	)
 )
 
 :: D5. Нормализация звука
@@ -410,12 +424,13 @@ if "%merge_files%"=="yes" (
 					set "out_file=%folder_destination%!file_path!!file_name!!pref!.!current_format_out!"
 
 					:: D7. Dry-run
+					:: -ss располагается ДО -i: fast seek по контейнеру вместо декодирования от 0.
 					if %%b==0 (set "seek_arg=") else (set "seek_arg=-ss %%b")
 					if "%dry_run%"=="yes" (
-						echo [DRY-RUN] %ffmpeg% -hide_banner -strict -2 !hw_decode_args! -i "!full_path!" !subtitles_params! !convert_settings! !thread_args! !vf_args! !af_args! !seek_arg! !current_set_length! "!out_file!"
+						echo [DRY-RUN] %ffmpeg% -hide_banner -strict -2 !hw_decode_args! !seek_arg! -i "!full_path!" !subtitles_params! !convert_settings! !thread_args! !vf_args! !af_args! !current_set_length! "!out_file!"
 					) else (
 						echo [INFO] Кодирование: !full_path!
-						%ffmpeg% -hide_banner -strict -2 !hw_decode_args! -i "!full_path!" !subtitles_params! !convert_settings! !thread_args! !vf_args! !af_args! !seek_arg! !current_set_length! "!out_file!" -y
+						%ffmpeg% -hide_banner -strict -2 !hw_decode_args! !seek_arg! -i "!full_path!" !subtitles_params! !convert_settings! !thread_args! !vf_args! !af_args! !current_set_length! "!out_file!" -y
 						if errorlevel 1 (
 							echo [FAIL] !full_path!
 							if exist "!out_file!" del "!out_file!"

@@ -807,7 +807,7 @@ $btnStart.Add_Click({
 
             $command = @("-c", "-i", "-w", "--no-check-certificate", "--windows-filenames", "--compat-options", "filename-sanitization")
             $denoExe = Join-Path $scriptDir "deno.exe"
-            if (Test-Path $denoExe) { $command += "--js-runtimes", "deno:$denoExe" }
+            if (Test-Path $denoExe) { $command += "--js-runtimes", "`"deno:$denoExe`"" }
             $tpl = if ($currentUrl -match "playlist") { $cfg_plTemplate } else { $cfg_template }
             $tpl = $tpl -replace '/', '\'
             $command += "-o", "`"$folder\$tpl`""
@@ -892,7 +892,8 @@ $btnStart.Add_Click({
                 if ($chkForceKf.Checked) { $command += "--force-keyframes-at-cuts" }
             }
 
-            $command += $currentUrl
+            # URL квотируем — может содержать & ? = и пр.
+            $command += "`"$currentUrl`""
 
             $textCommand.Text = "$dlp $($command -join ' ')"
             Append-Output "Команда: $dlp $($command -join ' ')" ([System.Drawing.Color]::DimGray)
@@ -960,6 +961,21 @@ $btnStart.Add_Click({
                 Start-Sleep -Milliseconds 100
             }
 
+            # WaitForExit() гарантирует, что все OutputDataReceived события успели
+            # отработать (иначе последние строки yt-dlp могут остаться в очереди).
+            $global:downloadProcess.WaitForExit()
+            $line = $null
+            while ($stdoutQueue.TryDequeue([ref]$line)) {
+                if (-not [string]::IsNullOrWhiteSpace($line)) {
+                    Append-Output $line
+                }
+            }
+            while ($stderrQueue.TryDequeue([ref]$line)) {
+                if ($line -match 'WARNING|ERROR') {
+                    Append-Output $line ([System.Drawing.Color]::Yellow)
+                }
+            }
+
             if ($global:downloadProcess.HasExited -and $global:downloadProcess.ExitCode -eq 0) {
                 $progressBar.Value = 100
                 $successCount++
@@ -995,10 +1011,20 @@ $btnStart.Add_Click({
                         New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 
                         # Вызов через & + массив аргументов — URL не парсится как PowerShell-код.
+                        # NODE_TLS_REJECT_UNAUTHORIZED скоупим: сохраняем прежнее значение и восстанавливаем
+                        # (или удаляем переменную если её не было), чтобы не оставлять процесс с отключённой проверкой TLS.
+                        $prevTls = $env:NODE_TLS_REJECT_UNAUTHORIZED
                         $env:NODE_TLS_REJECT_UNAUTHORIZED = "0"
-                        $votArgs = @("--output=$tempDir", "--voice-style=$transVoice", "--reslang=$transLang", $currentUrl)
-                        & $votBin @votArgs 2>&1 | Out-Null
-                        $env:NODE_TLS_REJECT_UNAUTHORIZED = "1"
+                        try {
+                            $votArgs = @("--output=$tempDir", "--voice-style=$transVoice", "--reslang=$transLang", $currentUrl)
+                            & $votBin @votArgs 2>&1 | Out-Null
+                        } finally {
+                            if ($null -eq $prevTls) {
+                                Remove-Item Env:\NODE_TLS_REJECT_UNAUTHORIZED -ErrorAction SilentlyContinue
+                            } else {
+                                $env:NODE_TLS_REJECT_UNAUTHORIZED = $prevTls
+                            }
+                        }
 
                         $transFile = Get-ChildItem -Path $tempDir -Filter "*.mp3" -File | Select-Object -First 1
 

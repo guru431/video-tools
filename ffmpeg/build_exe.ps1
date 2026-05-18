@@ -1,6 +1,6 @@
-$src       = 'S:\Private2\_task\LLM\_VSC\video\ffmpeg\FFmpeg_Converter_run_win_v12.ps1'
+$src       = 'S:\Private2\_task\LLM\_VSC\video\ffmpeg\FFmpeg_Converter_run_win_v13.ps1'
 $scriptPs1 = 'S:\Private2\_task\LLM\_VSC\video\ffmpeg\FFmpeg_Converter_script.ps1'
-$out       = 'S:\Private2\_task\LLM\_VSC\video\ffmpeg\_VideoConverter_v12.exe'
+$out       = 'S:\Private2\_task\LLM\_VSC\video\ffmpeg\_VideoConverter_v13.exe'
 $ps2exePs  = 'S:\Private2\_task\LLM\_VSC\video\ffmpeg\ps2exe_tool.ps1'
 $tmpSrc    = 'S:\Private2\_task\LLM\_VSC\video\ffmpeg\_build_tmp.ps1'
 
@@ -50,8 +50,8 @@ Invoke-ps2exe `
     -noConsole `
     -STA `
     -x64 `
-    -title   "Video Converter (ffmpeg) v12" `
-    -version "12.0.0.0"
+    -title   "Video Converter (ffmpeg) v13" `
+    -version "13.0.0.0"
 
 Remove-Item $tmpSrc -Force -ErrorAction SilentlyContinue
 

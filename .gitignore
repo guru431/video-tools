@@ -3,6 +3,10 @@ ffmpeg/ffmpeg.exe
 yt-dlp/deno.exe
 yt-dlp/vot-cli-live.exe
 
+# Local config with secrets (proxy credentials, cookies path, etc).
+# Template committed as yt-dlp/config.ini.example
+yt-dlp/config.ini
+
 # ps2exe build artifacts
 _build_tmp.ps1
 

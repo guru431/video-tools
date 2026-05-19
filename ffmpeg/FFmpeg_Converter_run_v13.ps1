@@ -71,7 +71,7 @@ $output_container    = To-Flag (Read-Config "container"        "video" "+mp4")  
 $multithreads    = To-Flag (Read-Config "threads"        "performance" "+4") ":+:4"
 $parallel_files  = To-Flag (Read-Config "parallel_files" "performance" "-2") ":-:2"
 
-$hw_accel   = To-Flag (Read-Config "hw_accel" "gpu" "-nvidia") ":-:nvidia"
+$hw_accel   = To-Flag (Read-Config "hw_accel" "gpu" "-intel") ":-:intel"
 $gpu_preset = To-Flag (Read-Config "preset"   "gpu" "-p5")     ":-:p5"
 $gpu_tune   = To-Flag (Read-Config "tune"     "gpu" "-hq")     ":-:hq"
 $gpu_rc     = To-Flag (Read-Config "rc"       "gpu" "-vbr")    ":-:vbr"

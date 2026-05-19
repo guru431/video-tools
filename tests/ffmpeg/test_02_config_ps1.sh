@@ -144,8 +144,15 @@ container = +mkv
 hw_accel = -nvidia
 EOF
 
-# Загружаем bash read_config
-source "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run.sh" 2>/dev/null
+# Загружаем bash read_config. Имя файла менялось v11→v13 — берём первое существующее,
+# иначе тест бесшумно пропускает сравнение и даёт ложный fail на пустых значениях.
+RUN_SH=""
+for cand in "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v13.sh" "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run.sh"; do
+    [ -f "$cand" ] && RUN_SH="$cand" && break
+done
+if [ -n "$RUN_SH" ]; then
+    source "$RUN_SH" 2>/dev/null
+fi
 
 bash_audio_codec="$audio_codec"
 bash_video_codec="$video_codec"

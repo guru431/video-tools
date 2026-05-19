@@ -305,12 +305,21 @@ if "%merge_files%"=="yes" (
 
 		if not exist "%folder_destination%!file_path!!file_name!.!format_files_out!" (
 			if not exist "%folder_destination%!file_path!!file_name! (part.1).!format_files_out!" (
-				:: E4. Получение битрейта
+				:: E4. Получение битрейта.
+				:: tokens=6 хрупкий — если ffmpeg вернёт N/A или формат изменится, %%i
+				:: будет не-числом и `if lss` сравнит лексически. Fallback ниже гарантирует,
+				:: что -b:v всегда задан, иначе ffmpeg уйдёт в дефолт/неограниченный битрейт.
 				set "set_video_bitrate_final="
 				if "!video_bitrate_status!"=="+" if not "!video_quality_status!"=="+" (
 					for /f "tokens=6 delims= " %%i in ('"%ffmpeg% -i "!full_path!" 2>&1>nul | find /i "bitrate:""') do (
-						if %%i lss !set_video_bitrate_orig! (set "set_video_bitrate_final=-b:v %%ik") else (set "set_video_bitrate_final=-b:v !set_video_bitrate_orig!k")
+						set "_br_raw=%%i"
+						set "_br_digits="
+						for /f "delims=0123456789" %%n in ("!_br_raw!a") do set "_br_digits=%%n"
+						if "!_br_digits!"=="a" (
+							if !_br_raw! lss !set_video_bitrate_orig! (set "set_video_bitrate_final=-b:v !_br_raw!k") else (set "set_video_bitrate_final=-b:v !set_video_bitrate_orig!k")
+						)
 					)
+					if not defined set_video_bitrate_final set "set_video_bitrate_final=-b:v !set_video_bitrate_orig!k"
 				)
 
 				if "%copy_codecs%"=="yes" (
@@ -328,8 +337,19 @@ if "%merge_files%"=="yes" (
 				set "current_af=!af_chain!"
 
 				if "!length_coding_status!"=="+" (
+					:: Парсинг Duration. Если ffmpeg вернёт "Duration: N/A" (бывает на потоках/
+					:: повреждённых контейнерах), %%i будет нечисловым ("N") → set /a даст 0
+					:: или ошибку. Проверяем что результат цифровой; иначе duration=0, и split
+					:: пропускается (файл обрабатывается целиком).
+					set "x=" & set "y=" & set "z="
 					for /f "tokens=2,3,4 delims=:. " %%i in ('"%ffmpeg% -i "!full_path!" 2>&1>nul | find /i "Duration:""') do set "x=1%%i" & set "y=1%%j" & set "z=1%%k"
-					set /a "duration=(x-100)*3600+(y-100)*60+(z-100)"
+					set "duration=0"
+					if defined x if defined y if defined z (
+						set "_dur_check="
+						for /f "delims=0123456789" %%n in ("!x!!y!!z!a") do set "_dur_check=%%n"
+						if "!_dur_check!"=="a" set /a "duration=(x-100)*3600+(y-100)*60+(z-100)"
+					)
+					if !duration! lss 1 echo [WARN] Длительность не определена, разбиение пропущено: !full_path!
 
 					if "!split_by_silence!"=="yes" (
 						echo.
@@ -396,9 +416,14 @@ if "%merge_files%"=="yes" (
 								set "sub_file=!folder_sources!!file_path!!file_name!.%%e"
 								if exist "!sub_file!" (
 									if "!video_subtitles_value!"=="burn" (
+										:: Экранирование пути для subtitles=:
+										:: \ : ' — спецсимволы внутри значения фильтра;
+										:: [ ] — спецсимволы graph-синтаксиса (разделители labels).
 										set "sub_escaped=!sub_file:\=\\\\!"
 										set "sub_escaped=!sub_escaped:'=\\\'!"
 										set "sub_escaped=!sub_escaped::=\'\:!"
+										set "sub_escaped=!sub_escaped:[=\[!"
+										set "sub_escaped=!sub_escaped:]=\]!"
 										if defined subtitles_style (
 											if defined current_vf (set "current_vf=!current_vf!,subtitles='!sub_escaped!':force_style='!subtitles_style!'") else (set "current_vf=subtitles='!sub_escaped!':force_style='!subtitles_style!'")
 										) else (

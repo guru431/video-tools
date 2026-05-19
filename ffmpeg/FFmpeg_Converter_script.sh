@@ -322,8 +322,8 @@ encode_file() {
 			echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
 		else
 			local out_sz in_sz
-			out_sz=$(stat -c%s "$out_audio" 2>/dev/null || echo 0)
-			in_sz=$(stat -c%s "$full_path" 2>/dev/null || echo 0)
+			out_sz=$(stat -c%s "$out_audio" 2>/dev/null || stat -f%z "$out_audio" 2>/dev/null || echo 0)
+			in_sz=$(stat -c%s "$full_path" 2>/dev/null || stat -f%z "$full_path" 2>/dev/null || echo 0)
 			log_msg "OK" "$(basename "$full_path") -> $(basename "$out_audio")"
 			echo "ok:${out_sz}:${in_sz}" > "$(mktemp "$results_dir/r_XXXXXXXX")"
 		fi
@@ -393,10 +393,10 @@ encode_file() {
 	if [ "$length_coding_status" = "+" ]; then
 		local duration="$file_duration"
 
+		local -a split_points=()
 		if [ "$split_by_silence" = "yes" ]; then
 			echo -e "\n\nЖдите! Идёт поиск пауз в файле:\n$full_path\n"
 			local search_silence=$("$ffmpeg" -i "$full_path" -nostats -af "silencedetect=n=${silence_threshold}:d=${silence_duration}" -f null - 2>&1 | grep -i silence_)
-			split_points=()
 			local silence_start_val=""
 			while IFS= read -r line; do
 				if [[ "$line" == *"silence_start"* ]]; then
@@ -409,11 +409,14 @@ encode_file() {
 			done <<< "$search_silence"
 		fi
 
-		num=()
+		# length_silent[i] хранит длительность i-го куска (для split_by_silence).
+		# Локальный массив вместо eval-генерированных глобалов length_coding_value_silent${i} —
+		# при экспорте функции для xargs они не дублируются и не пересекаются между файлами.
+		local -a num=()
+		local -a length_silent=()
 		for ((i=0; i<=999; i++)); do
 			local lcv=$((length_coding_value + length_coding_value * (i - 1)))
 			if (( i == 0 )); then lcv=0; fi
-			eval "length_coding_value_idx${i}=$lcv"
 			if ((duration > lcv)); then
 				local part_start=$lcv
 				if [ "$split_by_silence" = "yes" ] && [ ${#split_points[@]} -gt 0 ]; then
@@ -428,14 +431,14 @@ encode_file() {
 						fi
 					done
 					local half_length=$((length_coding_value/2))
+					local new_part_start
 					if (( best_diff <= half_length )); then
-						local new_part_start=$best_point
+						new_part_start=$best_point
 					else
-						local new_part_start=$part_start
+						new_part_start=$part_start
 					fi
 					num+=("$new_part_start")
-					eval "length_coding_value_silent${i}=$((length_coding_value-(part_start-new_part_start)))"
-					eval "length_coding_value_idx${i}=$new_part_start"
+					length_silent[$i]=$((length_coding_value-(part_start-new_part_start)))
 				else
 					num+=("$part_start")
 				fi
@@ -444,7 +447,7 @@ encode_file() {
 			fi
 		done
 	else
-		num=(0)
+		local -a num=(0)
 	fi
 
 	if [ "$start_coding_status" = "+" ]; then num=($start_coding_value); fi
@@ -459,7 +462,9 @@ encode_file() {
 		local current_set_length="$set_length_coding"
 		if [ "$split_by_silence" = "yes" ] && [ "$length_coding_status" = "+" ]; then
 			local silent_idx=$((c-1))
-			eval "current_set_length=\"-t \$length_coding_value_silent${silent_idx}\""
+			if [ -n "${length_silent[$silent_idx]:-}" ]; then
+				current_set_length="-t ${length_silent[$silent_idx]}"
+			fi
 		fi
 
 		# B2. Субтитры с subtitles_style
@@ -566,8 +571,8 @@ encode_file() {
 			else
 				log_msg "OK" "$(basename "$full_path") -> $(basename "$out_file") (${elapsed_min}m ${elapsed_sec}s)"
 				local out_sz in_sz
-				out_sz=$(stat -c%s "$out_file" 2>/dev/null || echo 0)
-				in_sz=$(stat -c%s "$full_path" 2>/dev/null || echo 0)
+				out_sz=$(stat -c%s "$out_file" 2>/dev/null || stat -f%z "$out_file" 2>/dev/null || echo 0)
+				in_sz=$(stat -c%s "$full_path" 2>/dev/null || stat -f%z "$full_path" 2>/dev/null || echo 0)
 				echo "ok:${out_sz}:${in_sz}" > "$(mktemp "$results_dir/r_XXXXXXXX")"
 			fi
 			rm -f "$err_file"

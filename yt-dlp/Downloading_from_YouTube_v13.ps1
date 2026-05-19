@@ -1010,21 +1010,29 @@ $btnStart.Add_Click({
                         $tempDir = Join-Path $env:TEMP "yt-dlp-translate-$(Get-Random)"
                         New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 
-                        # Вызов через & + массив аргументов — URL не парсится как PowerShell-код.
-                        # NODE_TLS_REJECT_UNAUTHORIZED скоупим: сохраняем прежнее значение и восстанавливаем
-                        # (или удаляем переменную если её не было), чтобы не оставлять процесс с отключённой проверкой TLS.
-                        $prevTls = $env:NODE_TLS_REJECT_UNAUTHORIZED
-                        $env:NODE_TLS_REJECT_UNAUTHORIZED = "0"
-                        try {
-                            $votArgs = @("--output=$tempDir", "--voice-style=$transVoice", "--reslang=$transLang", $currentUrl)
-                            & $votBin @votArgs 2>&1 | Out-Null
-                        } finally {
-                            if ($null -eq $prevTls) {
-                                Remove-Item Env:\NODE_TLS_REJECT_UNAUTHORIZED -ErrorAction SilentlyContinue
-                            } else {
-                                $env:NODE_TLS_REJECT_UNAUTHORIZED = $prevTls
-                            }
-                        }
+                        # NODE_TLS_REJECT_UNAUTHORIZED=0 нужен только vot-cli-live (внутренний
+                        # node.js процесс ходит к translate-сервису с самоподписанным сертификатом).
+                        # Передаём env только в дочерний процесс через ProcessStartInfo, чтобы
+                        # переменная не висела на PowerShell-процессе и не влияла на параллельный
+                        # код (Invoke-RestMethod при проверке обновлений, и т.п.).
+                        $votPsi = New-Object System.Diagnostics.ProcessStartInfo
+                        $votPsi.FileName               = $votBin
+                        $votPsi.RedirectStandardOutput = $true
+                        $votPsi.RedirectStandardError  = $true
+                        $votPsi.UseShellExecute        = $false
+                        $votPsi.CreateNoWindow         = $true
+                        $votPsi.EnvironmentVariables["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
+                        # Quoting: vot-cli-live принимает --key=value, поэтому простое join работает,
+                        # но URL может содержать пробелы/спецсимволы — экранируем как в основном вызове.
+                        $votArgs = @("--output=$tempDir", "--voice-style=$transVoice", "--reslang=$transLang", $currentUrl)
+                        $votPsi.Arguments = ($votArgs | ForEach-Object {
+                            if ($_ -match '[ "\\]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
+                        }) -join " "
+                        $votProc = [System.Diagnostics.Process]::Start($votPsi)
+                        # Сливаем stdout/stderr, чтобы пайпы не блокировали процесс на больших объёмах.
+                        $null = $votProc.StandardOutput.ReadToEnd()
+                        $null = $votProc.StandardError.ReadToEnd()
+                        $votProc.WaitForExit()
 
                         $transFile = Get-ChildItem -Path $tempDir -Filter "*.mp3" -File | Select-Object -First 1
 

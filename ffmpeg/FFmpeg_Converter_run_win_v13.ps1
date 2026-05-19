@@ -1197,7 +1197,10 @@ $buttonRun.Add_Click({
     $script:video_resolution     = if ($checkVideoResolution.Checked) { ":+:$($comboVideoResolution.SelectedItem)" } else { ":-:$($comboVideoResolution.SelectedItem)" }
     $script:video_bitrate        = if ($checkVideoBitrate.Checked)    { ":+:$($textVideoBitrate.Text)" }           else { ":-:$($textVideoBitrate.Text)" }
     $script:video_number_frames  = if ($checkFrameRate.Checked)       { ":+:$($textFrameRate.Text)" }              else { ":-:$($textFrameRate.Text)" }
-    $script:video_rotation       = if ($checkVideoRotation.Checked)   { ":+:$($comboVideoRotation.SelectedIndex + 1)" } else { ":-:$($comboVideoRotation.SelectedIndex + 1)" }
+    # Значение rotation берём из первой цифры текста ("1 - По часовой" → "1"),
+    # а не SelectedIndex+1: при перестановке/добавлении пунктов в список маппинг сломается.
+    $_rotVal = ([string]$comboVideoRotation.SelectedItem -split ' ')[0]
+    $script:video_rotation       = if ($checkVideoRotation.Checked)   { ":+:$_rotVal" } else { ":-:$_rotVal" }
     $script:video_quality        = if ($checkVideoQuality.Checked)    { ":+:$($textVideoQuality.Text)" }           else { ":-:$($textVideoQuality.Text)" }
     $script:keep_aspect_ratio    = if ($checkKeepAspect.Checked)      { ":+:yes" }                                 else { ":-:no" }
     $script:output_container     = if ($checkContainer.Checked)       { ":+:$($comboContainer.SelectedItem)" }     else { ":-:$($comboContainer.SelectedItem)" }

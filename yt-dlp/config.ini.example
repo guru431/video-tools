@@ -1,6 +1,8 @@
 [proxy]
 # Оставить пустым если прокси не нужен
-url = https://user:pass@host:port
+# Формат: [scheme]://[user:pass@]host[:port]
+# Пример: https://username:password@proxy.example.com:443
+url =
 
 [cookies]
 # Метод: none, file, browser

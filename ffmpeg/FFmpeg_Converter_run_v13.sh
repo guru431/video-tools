@@ -97,7 +97,7 @@ output_container="$(to_flag "$(read_config "container" "video" "+mp4")" ":+:mp4"
 multithreads="$(to_flag "$(read_config "threads" "performance" "+4")" ":+:4")"
 parallel_files="$(to_flag "$(read_config "parallel_files" "performance" "-2")" ":-:2")"
 
-hw_accel="$(to_flag "$(read_config "hw_accel" "gpu" "-nvidia")" ":-:nvidia")"
+hw_accel="$(to_flag "$(read_config "hw_accel" "gpu" "-intel")" ":-:intel")"
 gpu_preset="$(to_flag "$(read_config "preset" "gpu" "-p5")" ":-:p5")"
 gpu_tune="$(to_flag "$(read_config "tune" "gpu" "-hq")" ":-:hq")"
 gpu_rc="$(to_flag "$(read_config "rc" "gpu" "-vbr")" ":-:vbr")"

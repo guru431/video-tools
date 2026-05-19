@@ -79,13 +79,37 @@ if [ -n "$PROGRESS_FILE" ] && [ "$PROGRESS_FILE" != "pipe:1" ]; then
     } > "$PROGRESS_FILE"
 fi
 
-# Создать выходной файл (если указан -i и выходной аргумент)
-# Последний аргумент не начинающийся с - = выходной файл
+# Создать выходной файл (если указан -i и выходной аргумент).
+# Последний non-flag аргумент = выходной файл, КРОМЕ:
+#   - значений опций после -f (null/lavfi/...) и -v (verbose/error/...);
+#     иначе E3-валидация `-f null -` в script.sh создаёт файл `null` в cwd.
+#   - special outputs: `-` (stdout), `pipe:N`.
 LAST_ARG=""
+PREV=""
+SKIP_OPTS=("-f" "-v" "-loglevel" "-c" "-c:v" "-c:a" "-c:s" "-b:v" "-b:a" "-ac" "-ar"
+           "-r" "-t" "-ss" "-to" "-threads" "-preset" "-tune" "-rc" "-cq" "-crf"
+           "-global_quality" "-vf" "-af" "-filter_complex" "-map" "-progress"
+           "-hwaccel" "-hwaccel_output_format" "-i" "-metadata" "-metadata:s:s:0"
+           "-disposition:a:0" "-strict" "-pix_fmt" "-s")
+is_opt_value=0
 for arg in "$@"; do
-    [[ "$arg" != -* ]] && LAST_ARG="$arg"
+    if [ "$is_opt_value" = "1" ]; then
+        is_opt_value=0
+        PREV="$arg"
+        continue
+    fi
+    for o in "${SKIP_OPTS[@]}"; do
+        if [ "$arg" = "$o" ]; then is_opt_value=1; break; fi
+    done
+    if [ "$is_opt_value" = "0" ] && [[ "$arg" != -* ]]; then
+        LAST_ARG="$arg"
+    fi
+    PREV="$arg"
 done
-if [ -n "$LAST_ARG" ] && [[ "$LAST_ARG" != *"pipe:"* ]]; then
+if [ -n "$LAST_ARG" ] \
+   && [[ "$LAST_ARG" != *"pipe:"* ]] \
+   && [ "$LAST_ARG" != "-" ] \
+   && [ "$LAST_ARG" != "null" ]; then
     touch "$LAST_ARG" 2>/dev/null || true
 fi
 

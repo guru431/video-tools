@@ -29,7 +29,11 @@ read_config() {
 
 	local in_section=false
 	while IFS= read -r line || [ -n "$line" ]; do
-		line=$(echo "$line" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+		# Trim через bash parameter expansion (см. yt-dlp/Downloading_from_YouTube_v13.sh
+		# — sed-fork на Windows Git Bash слишком медленный из-за cygwin overhead).
+		line="${line#"${line%%[![:space:]]*}"}"
+		line="${line%"${line##*[![:space:]]}"}"
+		line="${line%$'\r'}"
 		[[ -z "$line" || "$line" == \#* ]] && continue
 
 		if [[ "$line" =~ ^\[([^]]+)\]$ ]]; then
@@ -43,7 +47,9 @@ read_config() {
 
 		if $in_section && [[ "$line" =~ ^${key}[[:space:]]*=[[:space:]]*(.*) ]]; then
 			local value="${BASH_REMATCH[1]}"
-			value=$(echo "$value" | sed 's/[[:space:]]*#.*//')
+			if [[ "$value" =~ ^(.*[^[:space:]])[[:space:]]+#.*$ ]]; then
+				value="${BASH_REMATCH[1]}"
+			fi
 			echo "$value"
 			return
 		fi

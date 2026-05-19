@@ -60,8 +60,13 @@ read_config() {
     local in_section=false
     local value=""
     while IFS= read -r line || [ -n "$line" ]; do
-        # Убрать пробелы
-        line=$(echo "$line" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+        # Trim через bash parameter expansion. На Windows Git Bash sed-fork ~500ms/вызов
+        # (cygwin overhead) × 2 на строку × 30 строк × 20 ключей ≈ 10+ минут.
+        # Bash builtin — мгновенно.
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        # \r из CRLF-файлов (config.ini на Windows может быть CRLF)
+        line="${line%$'\r'}"
         # Пропустить комментарии и пустые строки
         [[ -z "$line" || "$line" == \#* ]] && continue
 
@@ -78,8 +83,11 @@ read_config() {
         # Ключ=значение внутри нужной секции
         if $in_section && [[ "$line" =~ ^${key}[[:space:]]*=[[:space:]]*(.*) ]]; then
             value="${BASH_REMATCH[1]}"
-            # Убрать inline-комментарии
-            value=$(echo "$value" | sed 's/[[:space:]]*#.*//')
+            # Inline-комментарий: " # ..." (с пробелом перед #) — режем через bash regex.
+            # `val#ue` без пробела не комментарий, остаётся как есть.
+            if [[ "$value" =~ ^(.*[^[:space:]])[[:space:]]+#.*$ ]]; then
+                value="${BASH_REMATCH[1]}"
+            fi
             echo "$value"
             return
         fi

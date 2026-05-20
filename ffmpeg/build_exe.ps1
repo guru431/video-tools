@@ -1,8 +1,8 @@
-$src       = 'S:\Private2\_task\LLM\_VSC\video\ffmpeg\FFmpeg_Converter_run_win_v13.ps1'
-$scriptPs1 = 'S:\Private2\_task\LLM\_VSC\video\ffmpeg\FFmpeg_Converter_script.ps1'
-$out       = 'S:\Private2\_task\LLM\_VSC\video\ffmpeg\_VideoConverter_v13.exe'
-$ps2exePs  = 'S:\Private2\_task\LLM\_VSC\video\ffmpeg\ps2exe_tool.ps1'
-$tmpSrc    = 'S:\Private2\_task\LLM\_VSC\video\ffmpeg\_build_tmp.ps1'
+$src       = Join-Path $PSScriptRoot 'FFmpeg_Converter_run_win_v13.ps1'
+$scriptPs1 = Join-Path $PSScriptRoot 'FFmpeg_Converter_script.ps1'
+$out       = Join-Path $PSScriptRoot '_VideoConverter_v13.exe'
+$ps2exePs  = Join-Path $PSScriptRoot 'ps2exe_tool.ps1'
+$tmpSrc    = Join-Path $PSScriptRoot '_build_tmp.ps1'
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 

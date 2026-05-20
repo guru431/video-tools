@@ -1,6 +1,6 @@
-$src      = 'S:\Private2\_task\LLM\_VSC\video\yt-dlp\Downloading_from_YouTube_v13.ps1'
-$out      = 'S:\Private2\_task\LLM\_VSC\video\yt-dlp\_VideoDownloader_v13.exe'
-$ps2exePs = 'S:\Private2\_task\LLM\_VSC\video\yt-dlp\ps2exe_tool.ps1'
+$src      = Join-Path $PSScriptRoot 'Downloading_from_YouTube_v13.ps1'
+$out      = Join-Path $PSScriptRoot '_VideoDownloader_v13.exe'
+$ps2exePs = Join-Path $PSScriptRoot 'ps2exe_tool.ps1'
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 

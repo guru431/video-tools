@@ -1,5 +1,6 @@
-# Large third-party binaries (download separately)
+# Large third-party binaries (download separately — see README)
 ffmpeg/ffmpeg.exe
+yt-dlp/yt-dlp.exe
 yt-dlp/deno.exe
 yt-dlp/vot-cli-live.exe
 
@@ -9,9 +10,12 @@ yt-dlp/config.ini
 
 # ps2exe build artifacts
 _build_tmp.ps1
-
-# ps2exe temp
 ps2exe_tool.ps1
 
-# Claude Code
+# Claude Code / agent-side files
 .claude/
+AGENTS.md
+CLAUDE.md
+FINDINGS.md
+PLAN.md
+tests/PLAN_TESTS.md

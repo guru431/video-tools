@@ -355,9 +355,13 @@ encode_file() {
 		return
 	fi
 
-	# E4. Получение битрейта
+	# E4 + J1. Один вызов ffmpeg -i для получения битрейта и длительности (раньше
+	# запускались два отдельных pipeline'а на тот же файл — лишняя задержка для больших библиотек).
+	local ffmpeg_info
+	ffmpeg_info=$("$ffmpeg" -i "$full_path" 2>&1)
+
 	local src_bitrate=""
-	src_bitrate=$("$ffmpeg" -i "$full_path" 2>&1 | grep -i 'bitrate:' | head -1 | grep -o 'bitrate: [0-9]*' | sed 's/bitrate: //')
+	src_bitrate=$(echo "$ffmpeg_info" | grep -i 'bitrate:' | head -1 | grep -o 'bitrate: [0-9]*' | sed 's/bitrate: //')
 
 	local set_video_bitrate_final=""
 	if [ "$video_bitrate_status" = "+" ] && [ "$video_quality_status" != "+" ]; then
@@ -376,9 +380,8 @@ encode_file() {
 		convert_settings="$video_settings $set_video_bitrate_final $audio_settings"
 	fi
 
-	# --- J1. Получение длительности (для прогресс-бара и split) ---
 	local file_duration=0
-	local dur_str=$("$ffmpeg" -i "$full_path" 2>&1 | grep -i Duration: | grep -o '[0-9][0-9]*:[0-9][0-9]*:[0-9][0-9]*')
+	local dur_str=$(echo "$ffmpeg_info" | grep -i Duration: | grep -o '[0-9][0-9]*:[0-9][0-9]*:[0-9][0-9]*')
 	if [ -n "$dur_str" ]; then
 		IFS=':' read -r x y z <<< "$dur_str"
 		file_duration=$((${x#0}*3600+${y#0}*60+${z#0}))
@@ -389,6 +392,12 @@ encode_file() {
 	local current_vf_chain="$vf_chain"
 	local af_args=""
 	local current_af_chain="$af_chain"
+	# Снимки до per-part модификаций (subtitles burn / meta -map). Восстанавливаются
+	# в начале каждой итерации цикла по частям, иначе между частями накапливаются
+	# "subtitles=...,subtitles=..." в vf_chain и "-map 0 -map 1 -map 0 -map 1" в convert_settings.
+	local convert_settings_base="$convert_settings"
+	local vf_chain_base="$current_vf_chain"
+	local af_chain_base="$current_af_chain"
 
 	if [ "$length_coding_status" = "+" ]; then
 		local duration="$file_duration"
@@ -459,6 +468,11 @@ encode_file() {
 			pref=" (part.$c)"
 		fi
 
+		# Сброс из базы — см. _base снимки выше.
+		convert_settings="$convert_settings_base"
+		current_vf_chain="$vf_chain_base"
+		current_af_chain="$af_chain_base"
+
 		local current_set_length="$set_length_coding"
 		if [ "$split_by_silence" = "yes" ] && [ "$length_coding_status" = "+" ]; then
 			local silent_idx=$((c-1))
@@ -476,7 +490,9 @@ encode_file() {
 					local sub_file="${folder_sources}${file_path}${file_name}.${ext}"
 					if [ -f "$sub_file" ]; then
 						if [ "$video_subtitles_value" = "burn" ]; then
-							local sub_escaped=$(echo "$sub_file" | sed "s/'/\\\\'/g" | sed 's/:/\\:/g')
+							# Экранирование пути для subtitles=: ' : — спецсимволы значения,
+							# [ ] ; — разделители graph-синтаксиса фильтров, % — timecode-плейсхолдер.
+							local sub_escaped=$(echo "$sub_file" | sed -e "s/'/\\\\'/g" -e 's/:/\\:/g' -e 's/\[/\\[/g' -e 's/\]/\\]/g' -e 's/;/\\;/g' -e 's/%/\\%/g')
 							if [ -n "$subtitles_style" ]; then
 								current_vf_chain="${current_vf_chain:+$current_vf_chain,}subtitles='${sub_escaped}':force_style='${subtitles_style}'"
 							else

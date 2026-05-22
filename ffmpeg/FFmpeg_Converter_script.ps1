@@ -391,9 +391,12 @@ function Encode-File {
 		return
 	}
 
-	# E4. Получение битрейта
+	# E4 + J1. Один вызов ffmpeg -i для битрейта и длительности (раньше запускались
+	# два отдельных pipeline'а на тот же файл — лишняя задержка для больших библиотек).
+	$ffmpeg_info = (& $ffmpeg -i $full_path 2>&1 | Out-String)
+
 	$src_bitrate = $null
-	$bitrate_match = [regex]::Match((& $ffmpeg -i $full_path 2>&1 | Out-String), "bitrate:\s+(\d+)\s*kb/s")
+	$bitrate_match = [regex]::Match($ffmpeg_info, "bitrate:\s+(\d+)\s*kb/s")
 	if ($bitrate_match.Success) { $src_bitrate = [int]$bitrate_match.Groups[1].Value }
 
 	$set_video_bitrate_final = @()
@@ -415,14 +418,18 @@ function Encode-File {
 		$convert_args += $audio_settings_args
 	}
 
-	# --- J1. Получение длительности (для прогресс-бара и split) ---
 	$fileDuration = 0
-	$dur_match = [regex]::Match((& $ffmpeg -i $full_path 2>&1 | Out-String), "Duration:\s+(\d+):(\d+):(\d+)")
+	$dur_match = [regex]::Match($ffmpeg_info, "Duration:\s+(\d+):(\d+):(\d+)")
 	if ($dur_match.Success) {
 		$fileDuration = [int]$dur_match.Groups[1].Value * 3600 + [int]$dur_match.Groups[2].Value * 60 + [int]$dur_match.Groups[3].Value
 	}
 
-	# Видео/аудио фильтры для текущего файла
+	# Видео/аудио фильтры для текущего файла. _base — снимок до per-part модификаций
+	# (subtitles burn / meta -map). Восстанавливается в начале каждой итерации цикла
+	# по частям, иначе значения накапливаются между частями.
+	$convert_args_base = @() + $convert_args
+	$vf_parts_base = @() + $vf_parts
+	$af_parts_base = @() + $af_parts
 	$current_vf_parts = [System.Collections.ArrayList]@($vf_parts)
 	$current_af_parts = [System.Collections.ArrayList]@($af_parts)
 
@@ -481,6 +488,11 @@ function Encode-File {
 		$pref = ""
 		if ($num.Count -gt 1 -or $num[0] -ne 0) { $pref = " (part.$c)" }
 
+		# Сброс из базы — см. _base снимки выше.
+		$convert_args = @() + $convert_args_base
+		$current_vf_parts = [System.Collections.ArrayList]@($vf_parts_base)
+		$current_af_parts = [System.Collections.ArrayList]@($af_parts_base)
+
 		$current_set_length = $set_length_coding
 		if ($split_by_silence -eq "yes" -and $length_coding_status -eq "+") {
 			$silent_idx = $c - 1
@@ -498,7 +510,7 @@ function Encode-File {
 					$sub_file = "$folder_sources$file_path$file_name.$ext"
 					if (Test-Path $sub_file) {
 						if ($video_subtitles_value -eq "burn") {
-							$sub_escaped = $sub_file -replace '\\', '\\\\' -replace "'", "\\\'" -replace ":", "\:"
+							$sub_escaped = $sub_file -replace '\\', '\\\\' -replace "'", "\\\'" -replace ":", "\:" -replace '\[', '\[' -replace '\]', '\]' -replace ';', '\;' -replace '%', '\%'
 							if ($subtitles_style) {
 								$current_vf_parts.Add("subtitles='${sub_escaped}':force_style='${subtitles_style}'") | Out-Null
 							} else {

@@ -741,7 +741,7 @@ main() {
     elif [ -n "$URL" ]; then
         # Определить шаблон
         local template
-        if echo "$URL" | grep -qi "playlist"; then
+        if echo "$URL" | grep -qi '[?&]list='; then
             template="${BASE_DIR}/${PLAYLIST_TEMPLATE}"
         else
             template="${BASE_DIR}/${OUTPUT_TEMPLATE}"

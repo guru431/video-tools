@@ -808,7 +808,7 @@ $btnStart.Add_Click({
             $command = @("-c", "-i", "-w", "--no-check-certificate", "--windows-filenames", "--compat-options", "filename-sanitization")
             $denoExe = Join-Path $scriptDir "deno.exe"
             if (Test-Path $denoExe) { $command += "--js-runtimes", "`"deno:$denoExe`"" }
-            $tpl = if ($currentUrl -match "playlist") { $cfg_plTemplate } else { $cfg_template }
+            $tpl = if ($currentUrl -match '[?&]list=') { $cfg_plTemplate } else { $cfg_template }
             $tpl = $tpl -replace '/', '\'
             $command += "-o", "`"$folder\$tpl`""
 
@@ -874,7 +874,7 @@ $btnStart.Add_Click({
             }
 
             # Плейлист
-            if ($currentUrl -match "playlist") {
+            if ($currentUrl -match '[?&]list=') {
                 if (-not [string]::IsNullOrWhiteSpace($textBoxStart.Text)) {
                     $command += "--playlist-start", $textBoxStart.Text
                 }

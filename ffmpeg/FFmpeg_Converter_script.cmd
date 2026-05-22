@@ -25,7 +25,7 @@ if not exist "%folder_destination%\" (
 	)
 )
 
-%ffmpeg% -version >nul 2>&1
+"%ffmpeg%" -version >nul 2>&1
 if errorlevel 1 (
 	echo.
 	echo [ОШИБКА] ffmpeg не найден: %ffmpeg%
@@ -80,7 +80,7 @@ set "hw_decode_args="
 if "!hw_accel_status!"=="+" (
 	if "!hw_accel_value!"=="nvidia" (
 		set "encoder_check="
-		for /f "tokens=*" %%i in ('%ffmpeg% -encoders 2^>^&1 ^| findstr /i "h264_nvenc hevc_nvenc av1_nvenc"') do set "encoder_check=%%i"
+		for /f "tokens=*" %%i in ('""%ffmpeg%" -encoders 2^>^&1 ^| findstr /i "h264_nvenc hevc_nvenc av1_nvenc""') do set "encoder_check=%%i"
 		if defined encoder_check (
 			set "use_hw_accel=yes"
 			set "hw_accel_type=nvidia"
@@ -92,7 +92,7 @@ if "!hw_accel_status!"=="+" (
 	)
 	if "!hw_accel_value!"=="intel" (
 		set "encoder_check="
-		for /f "tokens=*" %%i in ('%ffmpeg% -encoders 2^>^&1 ^| findstr /i "h264_qsv hevc_qsv av1_qsv"') do set "encoder_check=%%i"
+		for /f "tokens=*" %%i in ('""%ffmpeg%" -encoders 2^>^&1 ^| findstr /i "h264_qsv hevc_qsv av1_qsv""') do set "encoder_check=%%i"
 		if defined encoder_check (
 			set "use_hw_accel=yes"
 			set "hw_accel_type=intel"
@@ -242,7 +242,7 @@ if "%merge_files%"=="yes" (
 		cmd /u /c "(for /r "%folder_sources%" %%a in (%format_files_in_pattern%) do @echo file '%%a')" > "!full_path!.u16"
 		powershell "[System.IO.File]::WriteAllLines('!full_path!', (Get-Content -Encoding unicode '!full_path!.u16'))"
 		echo [INFO] Объединение файлов
-		%ffmpeg% -hide_banner -strict -2 -f concat -safe 0 -i "!full_path!" -c copy -map 0 "%folder_destination%\!fname!"
+		"%ffmpeg%" -hide_banner -strict -2 -f concat -safe 0 -i "!full_path!" -c copy -map 0 "%folder_destination%\!fname!"
 		if errorlevel 1 (
 			echo [FAIL] Объединение файлов
 			set /a "total_fail+=1"
@@ -267,7 +267,7 @@ if "%merge_files%"=="yes" (
 		if "%extract_audio_copy%"=="yes" (
 			set "audio_ext=mka"
 			set "audio_line="
-			for /f "delims=" %%c in ('%ffmpeg% -i "!full_path!" 2^>^&1 ^| find "Audio:"') do set "audio_line=%%c"
+			for /f "delims=" %%c in ('""%ffmpeg%" -i "!full_path!" 2^>^&1 ^| find "Audio:""') do set "audio_line=%%c"
 			if not "!audio_line!"=="" (
 				if not "!audio_line:Audio: aac=!"=="!audio_line!" set "audio_ext=m4a"
 				if not "!audio_line:Audio: mp3=!"=="!audio_line!" set "audio_ext=mp3"
@@ -279,7 +279,7 @@ if "%merge_files%"=="yes" (
 			set "out_audio=%folder_destination%!file_path!!file_name!.!audio_ext!"
 			if not exist "!out_audio!" (
 				echo [INFO] Извлечение аудио: !file_name!
-				%ffmpeg% -hide_banner -strict -2 -i "!full_path!" -vn -c:a copy "!out_audio!" -y
+				"%ffmpeg%" -hide_banner -strict -2 -i "!full_path!" -vn -c:a copy "!out_audio!" -y
 				if errorlevel 1 (
 					echo [FAIL] !file_name!
 					if exist "!out_audio!" del "!out_audio!"
@@ -298,20 +298,24 @@ if "%merge_files%"=="yes" (
 			if not exist "%folder_destination%!file_path!!file_name!" (
 				md "%folder_destination%!file_path!!file_name!"
 				echo [INFO] Извлечение кадров: !full_path!
-				%ffmpeg% -hide_banner -strict -2 -i "!full_path!" -r 1/1 "%folder_destination%!file_path!!file_name!\!file_name!_%%05d.png"
+				"%ffmpeg%" -hide_banner -strict -2 -i "!full_path!" -r 1/1 "%folder_destination%!file_path!!file_name!\!file_name!_%%05d.png"
 			)
 			goto :continue_next_file
 		)
 
 		if not exist "%folder_destination%!file_path!!file_name!.!format_files_out!" (
 			if not exist "%folder_destination%!file_path!!file_name! (part.1).!format_files_out!" (
+				:: P3. Один вызов ffmpeg -i на файл (раньше было 2: bitrate + Duration).
+				:: ffmpeg печатает metadata в stderr → перенаправляем в файл, stdout → nul.
+				set "_ff_info_tmp=%temp%\ffinfo_!random!.txt"
+				"%ffmpeg%" -i "!full_path!" 1>nul 2>"!_ff_info_tmp!"
 				:: E4. Получение битрейта.
 				:: tokens=6 хрупкий — если ffmpeg вернёт N/A или формат изменится, %%i
 				:: будет не-числом и `if lss` сравнит лексически. Fallback ниже гарантирует,
 				:: что -b:v всегда задан, иначе ffmpeg уйдёт в дефолт/неограниченный битрейт.
 				set "set_video_bitrate_final="
 				if "!video_bitrate_status!"=="+" if not "!video_quality_status!"=="+" (
-					for /f "tokens=6 delims= " %%i in ('"%ffmpeg% -i "!full_path!" 2>&1>nul | find /i "bitrate:""') do (
+					for /f "tokens=6 delims= " %%i in ('findstr /i "bitrate:" "!_ff_info_tmp!"') do (
 						set "_br_raw=%%i"
 						set "_br_digits="
 						for /f "delims=0123456789" %%n in ("!_br_raw!a") do set "_br_digits=%%n"
@@ -324,7 +328,10 @@ if "%merge_files%"=="yes" (
 
 				if "%copy_codecs%"=="yes" (
 					set "convert_settings=-c copy -map 0"
+					:: %%~xa возвращает расширение с ведущей точкой (".mp4"); ниже out_file
+					:: собирается как "<name>.<current_format_out>", поэтому точку убираем.
 					set "current_format_out=%%~xa"
+					if defined current_format_out set "current_format_out=!current_format_out:~1!"
 				) else (
 					set "convert_settings=!video_settings! !set_video_bitrate_final! !audio_settings!"
 					set "current_format_out=!format_files_out!"
@@ -335,6 +342,12 @@ if "%merge_files%"=="yes" (
 				set "current_vf=!vf_chain!"
 				set "af_args="
 				set "current_af=!af_chain!"
+				:: База до per-part модификаций (subtitles burn / meta -map). Восстанавливается
+				:: в начале каждой итерации цикла по частям, иначе значения накапливаются:
+				:: для части 2 получится "<base>,subtitles=...,subtitles=..." и "-map 0 -map 1 -map 0 -map 1".
+				set "_cs_base=!convert_settings!"
+				set "_vf_base=!current_vf!"
+				set "_af_base=!current_af!"
 
 				if "!length_coding_status!"=="+" (
 					:: Парсинг Duration. Если ffmpeg вернёт "Duration: N/A" (бывает на потоках/
@@ -342,7 +355,7 @@ if "%merge_files%"=="yes" (
 					:: или ошибку. Проверяем что результат цифровой; иначе duration=0, и split
 					:: пропускается (файл обрабатывается целиком).
 					set "x=" & set "y=" & set "z="
-					for /f "tokens=2,3,4 delims=:. " %%i in ('"%ffmpeg% -i "!full_path!" 2>&1>nul | find /i "Duration:""') do set "x=1%%i" & set "y=1%%j" & set "z=1%%k"
+					for /f "tokens=2,3,4 delims=:. " %%i in ('findstr /i "Duration:" "!_ff_info_tmp!"') do set "x=1%%i" & set "y=1%%j" & set "z=1%%k"
 					set "duration=0"
 					if defined x if defined y if defined z (
 						set "_dur_check="
@@ -356,7 +369,7 @@ if "%merge_files%"=="yes" (
 						echo Ждите! Идёт поиск пауз в файле:
 						echo !full_path!
 						echo.
-						for /f "tokens=4-5 delims=: " %%a in ('"%ffmpeg% -i "!full_path!" -nostats -af "silencedetect^=n^=!silence_threshold!:d^=!silence_duration!" -f null - 2>&1>nul | find /i "silence_""') do (
+						for /f "tokens=4-5 delims=: " %%a in ('""%ffmpeg%" -i "!full_path!" -nostats -af "silencedetect^=n^=!silence_threshold!:d^=!silence_duration!" -f null - 2>&1>nul | find /i "silence_""') do (
 							if "%%a"=="silence_start" (set "silence_start=%%b")
 							if "%%a"=="silence_end" (
 								set "silence_end=%%b"
@@ -400,9 +413,17 @@ if "%merge_files%"=="yes" (
 				) else (set "num=0")
 				if "!start_coding_status!"=="+" (set "num=!start_coding_value!")
 
+				:: P3. _ff_info_tmp больше не нужен — bitrate и Duration уже прочитаны.
+				if defined _ff_info_tmp del "!_ff_info_tmp!" 2>nul
+
 				set "c=1"
 				for %%b in (!num!) do (
 					if "!num!"=="0" (set "pref=") else (set "pref= (part.!c!)")
+
+					:: Сброс из базы — см. _cs_base / _vf_base / _af_base выше.
+					set "convert_settings=!_cs_base!"
+					set "current_vf=!_vf_base!"
+					set "current_af=!_af_base!"
 
 					set "current_set_length=!set_length_coding!"
 					if "!split_by_silence!"=="yes" (set /a "cc=c-1" & call set "current_set_length=-t %%lcv_silent!cc!%%")
@@ -418,12 +439,15 @@ if "%merge_files%"=="yes" (
 									if "!video_subtitles_value!"=="burn" (
 										:: Экранирование пути для subtitles=:
 										:: \ : ' — спецсимволы внутри значения фильтра;
-										:: [ ] — спецсимволы graph-синтаксиса (разделители labels).
+										:: [ ] ; — спецсимволы graph-синтаксиса (разделители labels и фильтров);
+										:: % — раскрывается ffmpeg как timecode-плейсхолдер.
 										set "sub_escaped=!sub_file:\=\\\\!"
 										set "sub_escaped=!sub_escaped:'=\\\'!"
 										set "sub_escaped=!sub_escaped::=\'\:!"
 										set "sub_escaped=!sub_escaped:[=\[!"
 										set "sub_escaped=!sub_escaped:]=\]!"
+										set "sub_escaped=!sub_escaped:;=\;!"
+										set "sub_escaped=!sub_escaped:%%=\%%!"
 										if defined subtitles_style (
 											if defined current_vf (set "current_vf=!current_vf!,subtitles='!sub_escaped!':force_style='!subtitles_style!'") else (set "current_vf=subtitles='!sub_escaped!':force_style='!subtitles_style!'")
 										) else (
@@ -452,10 +476,10 @@ if "%merge_files%"=="yes" (
 					:: -ss располагается ДО -i: fast seek по контейнеру вместо декодирования от 0.
 					if %%b==0 (set "seek_arg=") else (set "seek_arg=-ss %%b")
 					if "%dry_run%"=="yes" (
-						echo [DRY-RUN] %ffmpeg% -hide_banner -strict -2 !hw_decode_args! !seek_arg! -i "!full_path!" !subtitles_params! !convert_settings! !thread_args! !vf_args! !af_args! !current_set_length! "!out_file!"
+						echo [DRY-RUN] "%ffmpeg%" -hide_banner -strict -2 !hw_decode_args! !seek_arg! -i "!full_path!" !subtitles_params! !convert_settings! !thread_args! !vf_args! !af_args! !current_set_length! "!out_file!"
 					) else (
 						echo [INFO] Кодирование: !full_path!
-						%ffmpeg% -hide_banner -strict -2 !hw_decode_args! !seek_arg! -i "!full_path!" !subtitles_params! !convert_settings! !thread_args! !vf_args! !af_args! !current_set_length! "!out_file!" -y
+						"%ffmpeg%" -hide_banner -strict -2 !hw_decode_args! !seek_arg! -i "!full_path!" !subtitles_params! !convert_settings! !thread_args! !vf_args! !af_args! !current_set_length! "!out_file!" -y
 						if errorlevel 1 (
 							echo [FAIL] !full_path!
 							if exist "!out_file!" del "!out_file!"

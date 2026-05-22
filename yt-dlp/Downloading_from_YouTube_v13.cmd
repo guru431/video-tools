@@ -251,7 +251,7 @@ if defined save_settings (
 :: ── Шаблон пути ──────────────────────────────────────────────────────────
 set "output_tpl=%%(uploader)s\%%(upload_date)s - %%(title).100U.%%(ext)s"
 set "playlist_tpl=%%(uploader)s\%%(playlist)s\%%(playlist_index)03d - %%(title).100U.%%(ext)s"
-echo "%url%" | findstr /C:"playlist" >nul && (
+echo "%url%" | findstr /R /C:"[?&]list=" >nul && (
     set "file_tpl=%playlist_tpl%"
 ) || (
     set "file_tpl=%output_tpl%"

@@ -96,7 +96,7 @@ $_cfg_keep_aspect      = Parse-Flag (Read-Config "keep_aspect_ratio" "video" "+y
 $_cfg_container        = Parse-Flag (Read-Config "container"        "video" "+mp4")
 
 $_cfg_threads  = Parse-Flag (Read-Config "threads"        "performance" "+4")
-$_cfg_hw_accel  = Parse-Flag (Read-Config "hw_accel"       "gpu"         "-nvidia")
+$_cfg_hw_accel  = Parse-Flag (Read-Config "hw_accel"       "gpu"         "+intel")
 $_cfg_gpu_preset = Parse-Flag (Read-Config "preset"        "gpu"         "-p5")
 $_cfg_gpu_tune   = Parse-Flag (Read-Config "tune"          "gpu"         "-hq")
 $_cfg_gpu_rc     = Parse-Flag (Read-Config "rc"            "gpu"         "-vbr")

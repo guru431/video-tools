@@ -1245,9 +1245,10 @@ $buttonRun.Add_Click({
     }
 
     # ---- Подготовка прогресса ----
+    # progressFile создаётся сразу (worker читает); cancelFile — только путь
+    # (Guid: имя уникально без необходимости создавать-и-удалять).
     $progressFile = [System.IO.Path]::GetTempFileName()
-    $cancelFile   = [System.IO.Path]::GetTempFileName()
-    Remove-Item $cancelFile -Force -ErrorAction SilentlyContinue  # удаляем, пусть не существует
+    $cancelFile   = Join-Path ([System.IO.Path]::GetTempPath()) ("ffmpeg-cancel-" + [Guid]::NewGuid().ToString("N") + ".tmp")
 
     $env:FFMPEG_GUI_PROGRESS_FILE = $progressFile
     $env:FFMPEG_GUI_CANCEL_FILE   = $cancelFile

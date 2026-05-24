@@ -752,6 +752,12 @@ main() {
             archive_path="${BASE_DIR}/${ARCHIVE_FILE}"
         fi
 
+        # Marker для надёжного поиска свежескачанных файлов через -newer:
+        # сравнение с $0 (mtime скрипта) ломалось при недавней модификации скрипта.
+        local dl_marker
+        dl_marker=$(mktemp 2>/dev/null) || dl_marker="/tmp/ytdlp_marker_$$"
+        : > "$dl_marker"
+
         download_url "$URL" "$template" "$QUALITY" "$SUBS_ONLY" "$archive_path" \
             "$TRIM_START_ON" "$TRIM_START_VAL" "$TRIM_END_ON" "$TRIM_END_VAL" "$FORCE_KEYFRAMES"
 
@@ -759,13 +765,14 @@ main() {
         if [ "$TRANSLATE_ENABLED" = "true" ] && [ "$SUBS_ONLY" != "true" ]; then
             # Найти последний скачанный файл
             local latest
-            latest=$(find "$BASE_DIR" -name "*.mp4" -newer "$0" -type f 2>/dev/null | head -1)
+            latest=$(find "$BASE_DIR" -name "*.mp4" -newer "$dl_marker" -type f 2>/dev/null | head -1)
             if [ -n "$latest" ]; then
                 translate_audio "$latest" "$URL" "$TRANSLATE_LANG" "$TRANSLATE_VOICE" \
                     "$TRANSLATE_MODE" "$TRANSLATE_ORIG_LANG" \
                     "$TRANSLATE_ORIG_VOL" "$TRANSLATE_TRANS_VOL" "$PROXY_URL"
             fi
         fi
+        rm -f "$dl_marker" 2>/dev/null
     else
         log_error "Укажите URL или используйте --batch"
         echo ""

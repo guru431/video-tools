@@ -19,3 +19,6 @@ CLAUDE.md
 FINDINGS.md
 PLAN.md
 tests/PLAN_TESTS.md
+
+# local-only secret denylist for pre-commit hook (never commit)
+.sanitize-patterns

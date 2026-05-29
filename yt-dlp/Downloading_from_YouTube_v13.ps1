@@ -580,6 +580,12 @@ $comboCookies.Add_SelectedIndexChanged({
     $btnCookieBrowse.Visible    = ($comboCookies.SelectedIndex -eq 2)
 })
 
+# Проверка наличия ffmpeg (нужен для мержа AI-перевода). Зеркалит runtime-проверку
+# в блоке перевода ниже — ищем ffmpeg в PATH через Get-Command.
+function Test-FfmpegAvailable {
+    return [bool](Get-Command "ffmpeg" -ErrorAction SilentlyContinue)
+}
+
 # ── 8. AI-перевод ─────────────────────────────────────────────────────────
 $yPos += 30; $xPos = $xPos0
 $chkTranslate = [System.Windows.Forms.CheckBox]::new()
@@ -639,6 +645,28 @@ $comboTransVoice.Items.AddRange(@("live", "tts"))
 $voiceIdx = if ($cfg_transVoice -eq "tts") { 1 } else { 0 }
 $comboTransVoice.SelectedIndex = $voiceIdx
 $_fc.Add($comboTransVoice)
+
+# Предупреждение об отсутствии ffmpeg (аналог GPU-проверки в FFmpeg GUI)
+$xPos += 95
+$lblTransFfmpeg = [System.Windows.Forms.Label]::new()
+$lblTransFfmpeg.Location  = [System.Drawing.Point]::new($xPos, $yPos)
+$lblTransFfmpeg.AutoSize  = $true
+$lblTransFfmpeg.ForeColor = [System.Drawing.Color]::Firebrick
+$lblTransFfmpeg.Text      = ""
+$_fc.Add($lblTransFfmpeg)
+
+# При включении галочки проверяем ffmpeg и показываем уведомление, если его нет
+$chkTranslate.Add_CheckedChanged({
+    if ($chkTranslate.Checked -and -not (Test-FfmpegAvailable)) {
+        $lblTransFfmpeg.Text = "ffmpeg не найден!"
+    } else {
+        $lblTransFfmpeg.Text = ""
+    }
+})
+# Стартовая проверка, если перевод уже включён в config.ini
+if ($chkTranslate.Checked -and -not (Test-FfmpegAvailable)) {
+    $lblTransFfmpeg.Text = "ffmpeg не найден!"
+}
 
 # ── 9. Прогресс-бар ───────────────────────────────────────────────────────
 $yPos += 30; $xPos = $xPos0

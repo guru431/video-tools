@@ -41,8 +41,8 @@ function To-Flag {
 }
 
 # --- Загрузка настроек из config.ini ---
-$folder_sources      = Read-Config "source"      "folders" "m:\ffmpeg\0"
-$folder_destination  = Read-Config "destination"  "folders" "m:\ffmpeg\1"
+$folder_sources      = Read-Config "source"      "folders" "_video_\0"
+$folder_destination  = Read-Config "destination"  "folders" "_video_\1"
 if (-not [System.IO.Path]::IsPathRooted($folder_sources))     { $folder_sources     = Join-Path $PSScriptRoot $folder_sources }
 if (-not [System.IO.Path]::IsPathRooted($folder_destination)) { $folder_destination = Join-Path $PSScriptRoot $folder_destination }
 

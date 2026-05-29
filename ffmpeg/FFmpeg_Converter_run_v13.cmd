@@ -10,8 +10,8 @@ setlocal enabledelayedexpansion
 if exist "%~dp0ffmpeg.exe" (set "ffmpeg=%~dp0ffmpeg.exe") else (set "ffmpeg=ffmpeg")
 
 :: --- Значения по умолчанию ---
-set "folder_sources=m:\ffmpeg\0"
-set "folder_destination=m:\ffmpeg\1"
+set "folder_sources=_video_\0"
+set "folder_destination=_video_\1"
 set "audio_only=no"
 set "merge_files=no"
 set "create_frame=no"

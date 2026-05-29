@@ -599,14 +599,21 @@ encode_file() {
 
 # --- Основная логика ---
 if [ "$merge_files" = "yes" ]; then
+	# fname сбрасывается явно: переменная не локальна (merge — top-level, не функция),
+	# при повторном source старое значение иначе осталось бы.
+	fname=""
 	while IFS= read -r -d '' full_path; do
 		if [ -z "$fname" ]; then fname=$(basename "$full_path"); break; fi
 	done < <(find "$folder_sources" \( $format_files_in_pattern \) -print0)
 	if [ ! -f "${folder_destination}/${fname}" ]; then
-		full_path=$(mktemp)
-		find "$folder_sources" \( $format_files_in_pattern \) -printf "file '%p'\n" > "$full_path"
+		concat_list=$(mktemp)
+		# -printf — GNU-расширение (нет на macOS/BSD). Портативно: -print0 + read.
+		# Имена с ' экранируем для concat-формата ffmpeg: ' -> '\''
+		while IFS= read -r -d '' mf; do
+			printf "file '%s'\n" "${mf//\'/\'\\\'\'}" >> "$concat_list"
+		done < <(find "$folder_sources" \( $format_files_in_pattern \) -print0)
 		log_msg "INFO" "Объединение файлов -> ${folder_destination}/${fname}"
-		"$ffmpeg" -hide_banner -strict -2 -f concat -safe 0 -i "$full_path" -c copy -map 0 "$folder_destination/$fname"
+		"$ffmpeg" -hide_banner -strict -2 -f concat -safe 0 -i "$concat_list" -c copy -map 0 "$folder_destination/$fname"
 		if [ $? -ne 0 ]; then
 			log_msg "FAIL" "Объединение файлов"
 			echo "fail" > "$results_dir/r_merge"
@@ -614,7 +621,7 @@ if [ "$merge_files" = "yes" ]; then
 			log_msg "OK" "Объединение файлов -> ${folder_destination}/${fname}"
 			echo "ok:0:0" > "$results_dir/r_merge"
 		fi
-		rm -f "$full_path"
+		rm -f "$concat_list"
 	fi
 else
 	# B1b. Параллельная обработка файлов

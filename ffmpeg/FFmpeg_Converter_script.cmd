@@ -165,6 +165,13 @@ if "%audio_only%"=="yes" (
 	if "!playback_speed_status!"=="+" if not "!playback_speed_value!"=="1.0" (
 		if defined vf_chain (set "vf_chain=!vf_chain!,setpts=PTS/!playback_speed_value!") else (set "vf_chain=setpts=PTS/!playback_speed_value!")
 	)
+	:: Hwdownload: если в цепочке есть CPU-фильтр на GPU-кадрах — скачиваем кадры
+	:: в системную память (иначе ffmpeg: "filter not supported on hardware frames").
+	:: Паритет с .sh/.ps1; findstr-проверка = "нет ни одного GPU-фильтра в цепочке".
+	if "!use_hw_accel!"=="yes" if defined vf_chain (
+		echo !vf_chain! | findstr /i "scale_cuda scale_qsv transpose_cuda setpts" >nul
+		if errorlevel 1 set "vf_chain=hwdownload,format=nv12,!vf_chain!"
+	)
 	:: Формирование codec-строки
 	if defined set_video_codec (set "set_video_codec_arg=-c:v !set_video_codec!") else (set "set_video_codec_arg=")
 	:: C2. Настройки GPU (NVIDIA / Intel)
@@ -190,25 +197,10 @@ if "%audio_only%"=="yes" (
 
 :: D6. Скорость воспроизведения (аудио)
 set "af_chain="
-:: atempo supports range 0.5-2.0. Каскадирование для значений вне диапазона
-:: не реализовано в CMD (нет float math). При попытке — предупреждение и пропуск,
-:: чтобы ffmpeg не падал. Для скоростей >2.0 или <0.5 используйте .sh или .ps1.
-if "!playback_speed_status!"=="+" if not "!playback_speed_value!"=="1.0" (
-	for /f "tokens=1,2 delims=." %%a in ("!playback_speed_value!") do (
-		set "_int=%%a"
-		set "_frac=%%b"
-	)
-	if not defined _frac set "_frac=0"
-	set "_oor=0"
-	if !_int! geq 3 set "_oor=1"
-	if !_int!==2 if not "!_frac!"=="0" set "_oor=1"
-	if !_int!==0 if !_frac! lss 5 set "_oor=1"
-	if "!_oor!"=="1" (
-		echo [WARN] atempo=!playback_speed_value! вне диапазона 0.5-2.0; пропуск ^(используйте .sh/.ps1 для каскада^)
-	) else (
-		set "af_chain=atempo=!playback_speed_value!"
-	)
-)
+:: atempo поддерживает диапазон 0.5-2.0. Для значений вне диапазона строится каскад
+:: (atempo=2.0,atempo=2.0,... или atempo=0.5,...) через целочисленную milli-арифметику
+:: в подпрограмме :build_atempo (у CMD нет float-math). In-range — значение напрямую.
+if "!playback_speed_status!"=="+" if not "!playback_speed_value!"=="1.0" call :build_atempo "!playback_speed_value!"
 
 :: D5. Нормализация звука
 if "!audio_normalize_status!"=="+" (
@@ -310,13 +302,16 @@ if "%merge_files%"=="yes" (
 				set "_ff_info_tmp=%temp%\ffinfo_!random!.txt"
 				"%ffmpeg%" -i "!full_path!" 1>nul 2>"!_ff_info_tmp!"
 				:: E4. Получение битрейта.
-				:: tokens=6 хрупкий — если ffmpeg вернёт N/A или формат изменится, %%i
-				:: будет не-числом и `if lss` сравнит лексически. Fallback ниже гарантирует,
-				:: что -b:v всегда задан, иначе ffmpeg уйдёт в дефолт/неограниченный битрейт.
+				:: Берём подстроку после "bitrate: " и первый токен (число кб/с) — надёжнее
+				:: позиционного tokens=6 (ломался при смене формата строки). Если ffmpeg
+				:: вернёт N/A, токен будет не-числом → digit-check ниже отсекает, а fallback
+				:: гарантирует, что -b:v всегда задан (иначе ffmpeg уйдёт в неограниченный битрейт).
 				set "set_video_bitrate_final="
 				if "!video_bitrate_status!"=="+" if not "!video_quality_status!"=="+" (
-					for /f "tokens=6 delims= " %%i in ('findstr /i "bitrate:" "!_ff_info_tmp!"') do (
-						set "_br_raw=%%i"
+					for /f "delims=" %%i in ('findstr /i "bitrate:" "!_ff_info_tmp!"') do (
+						set "_br_line=%%i"
+						set "_br_line=!_br_line:*bitrate: =!"
+						for /f "tokens=1" %%j in ("!_br_line!") do set "_br_raw=%%j"
 						set "_br_digits="
 						for /f "delims=0123456789" %%n in ("!_br_raw!a") do set "_br_digits=%%n"
 						if "!_br_digits!"=="a" (
@@ -525,3 +520,36 @@ echo.
 echo.
 pause
 exit
+
+:: --- D6. Построение каскада atempo (milli-арифметика, без float) ---
+:: %1 = playback_speed (например 3.0, 0.25, 1.5). Результат -> af_chain.
+:build_atempo
+set "_spd=%~1"
+for /f "tokens=1,2 delims=." %%a in ("%_spd%") do (set "_bi=%%a" & set "_bf=%%b")
+if not defined _bf set "_bf=0"
+:: Дробную часть нормализуем до 3 знаков (milli). Префикс "1" + вычет 1000 убирает
+:: октальную трактовку ведущих нулей в set /a (например "050" -> 50, а не ошибка).
+set "_bf3=!_bf!000"
+set "_bf3=!_bf3:~0,3!"
+set /a "_bmilli=_bi*1000 + (1!_bf3! - 1000)"
+set "af_chain="
+set /a "_brem=_bmilli"
+:_bt_hi
+if !_brem! gtr 2000 (
+	if defined af_chain (set "af_chain=!af_chain!,atempo=2.0") else (set "af_chain=atempo=2.0")
+	set /a "_brem=_brem/2"
+	goto :_bt_hi
+)
+:_bt_lo
+if !_brem! lss 500 (
+	if defined af_chain (set "af_chain=!af_chain!,atempo=0.5") else (set "af_chain=atempo=0.5")
+	set /a "_brem=_brem*2"
+	goto :_bt_lo
+)
+:: Остаток milli -> строка D.DDD
+set /a "_bri=_brem/1000"
+set /a "_brf=_brem %% 1000"
+set "_brf3=000!_brf!"
+set "_brf3=!_brf3:~-3!"
+if defined af_chain (set "af_chain=!af_chain!,atempo=!_bri!.!_brf3!") else (set "af_chain=atempo=!_bri!.!_brf3!")
+exit /b

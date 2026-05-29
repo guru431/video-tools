@@ -73,8 +73,8 @@ to_flag() {
 }
 
 # --- Загрузка настроек из config.ini ---
-folder_sources="$(read_config "source" "folders" "/mnt/share/_Downloads/ffmpeg/0")"
-folder_destination="$(read_config "destination" "folders" "/mnt/share/_Downloads/ffmpeg/1")"
+folder_sources="$(read_config "source" "folders" "_video_/0")"
+folder_destination="$(read_config "destination" "folders" "_video_/1")"
 [[ "$folder_sources" != /* ]]     && folder_sources="$SCRIPT_DIR/$folder_sources"
 [[ "$folder_destination" != /* ]] && folder_destination="$SCRIPT_DIR/$folder_destination"
 

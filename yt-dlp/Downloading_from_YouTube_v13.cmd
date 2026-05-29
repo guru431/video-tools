@@ -329,9 +329,12 @@ if not "%translate_lang%"=="" (
             goto :skip_translate
         )
 
-        :: Найти скачанный mp3 и последний mp4
+        :: Найти скачанный mp3 и самый свежий mp4.
+        :: `for /r ... do set` брал последний по обходу каталога, а не свежескачанный;
+        :: выбираем по дате через PowerShell (паритет с .ps1, глобальная сортировка).
         for %%f in ("!temp_dir!\*.mp3") do set "trans_file=%%f"
-        for /r "%folder%" %%f in (*.mp4) do set "video_file=%%f"
+        set "video_file="
+        for /f "delims=" %%f in ('powershell -NoProfile -Command "Get-ChildItem -LiteralPath '%folder%' -Recurse -Filter *.mp4 -File ^| Sort-Object LastWriteTime -Descending ^| Select-Object -First 1 -ExpandProperty FullName" 2^>nul') do set "video_file=%%f"
 
         if defined trans_file if defined video_file (
             echo Объединение аудиодорожек ^(режим: %translate_mode%^)...

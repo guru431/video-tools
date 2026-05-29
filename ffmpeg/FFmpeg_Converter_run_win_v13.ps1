@@ -68,8 +68,8 @@ function Parse-Flag {
 }
 
 # Загрузка дефолтов из config.ini
-$_cfg_source      = Read-Config "source"      "folders" "m:\ffmpeg\0"
-$_cfg_destination = Read-Config "destination"  "folders" "m:\ffmpeg\1"
+$_cfg_source      = Read-Config "source"      "folders" "_video_\0"
+$_cfg_destination = Read-Config "destination"  "folders" "_video_\1"
 if (-not [System.IO.Path]::IsPathRooted($_cfg_source))     { $_cfg_source     = Join-Path $script:_appDir $_cfg_source }
 if (-not [System.IO.Path]::IsPathRooted($_cfg_destination)) { $_cfg_destination = Join-Path $script:_appDir $_cfg_destination }
 

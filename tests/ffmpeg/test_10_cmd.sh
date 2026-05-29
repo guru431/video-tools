@@ -267,4 +267,53 @@ assert_contains "config: audio codec = +libmp3lame → :+:libmp3lame"  ":+:libmp
 assert_contains "config: video codec = +libx265 → :+:libx265"        ":+:libx265"     "$result"
 assert_contains "config: video quality = +28 → :+:28"                ":+:28"          "$result"
 
+# ══════════════════════════════════════════════════════════════
+suite "CMD: atempo каскад (milli-арифметика, без float)"
+# ══════════════════════════════════════════════════════════════
+
+# Воспроизводит логику :build_atempo из FFmpeg_Converter_script.cmd
+atempo_cmd() {
+    run_cmd "
+set \"_spd=$1\"
+for /f \"tokens=1,2 delims=.\" %%a in (\"%_spd%\") do (set \"_bi=%%a\" & set \"_bf=%%b\")
+if not defined _bf set \"_bf=0\"
+set \"_bf3=!_bf!000\"
+set \"_bf3=!_bf3:~0,3!\"
+set /a \"_bmilli=_bi*1000 + (1!_bf3! - 1000)\"
+set \"af_chain=\"
+set /a \"_brem=_bmilli\"
+:_bt_hi
+if !_brem! gtr 2000 (
+	if defined af_chain (set \"af_chain=!af_chain!,atempo=2.0\") else (set \"af_chain=atempo=2.0\")
+	set /a \"_brem=_brem/2\"
+	goto :_bt_hi
+)
+:_bt_lo
+if !_brem! lss 500 (
+	if defined af_chain (set \"af_chain=!af_chain!,atempo=0.5\") else (set \"af_chain=atempo=0.5\")
+	set /a \"_brem=_brem*2\"
+	goto :_bt_lo
+)
+set /a \"_bri=_brem/1000\"
+set /a \"_brf=_brem %% 1000\"
+set \"_brf3=000!_brf!\"
+set \"_brf3=!_brf3:~-3!\"
+if defined af_chain (set \"af_chain=!af_chain!,atempo=!_bri!.!_brf3!\") else (set \"af_chain=atempo=!_bri!.!_brf3!\")
+echo af=!af_chain!
+"
+}
+
+result=$(atempo_cmd "3.0")
+assert_contains "atempo 3.0 → atempo=2.0"        "atempo=2.0"  "$result"
+assert_contains "atempo 3.0 → остаток atempo=1.5" "atempo=1.5"  "$result"
+
+result=$(atempo_cmd "4.0")
+assert_contains "atempo 4.0 → каскад 2x2"  "atempo=2.0,atempo=2.0"  "$result"
+
+result=$(atempo_cmd "0.25")
+assert_contains "atempo 0.25 → каскад 0.5x0.5"  "atempo=0.5,atempo=0.5"  "$result"
+
+result=$(atempo_cmd "1.5")
+assert_contains "atempo 1.5 (in-range) → atempo=1.5"  "af=atempo=1.5"  "$result"
+
 summary

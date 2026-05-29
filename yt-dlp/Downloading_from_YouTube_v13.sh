@@ -300,7 +300,7 @@ download_url() {
     local trim_end_val="${9:-}"
     local force_kf="${10:-false}"
 
-    local -a cmd=(yt-dlp -c -i -w --compat-options filename-sanitization)
+    local -a cmd=(yt-dlp -c -i -w --windows-filenames --compat-options filename-sanitization)
 
     # Deno рядом со скриптом
     local script_dir
@@ -457,7 +457,7 @@ download_batch() {
             template="${BASE_DIR}/${category}/${OUTPUT_TEMPLATE}"
         fi
 
-        local -a cmd=(yt-dlp -c -i -w --compat-options filename-sanitization)
+        local -a cmd=(yt-dlp -c -i -w --windows-filenames --compat-options filename-sanitization)
         local sdir
         sdir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
         [ -x "$sdir/deno" ] && cmd+=(--js-runtimes "deno:$sdir/deno")

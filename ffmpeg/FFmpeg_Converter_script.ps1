@@ -511,6 +511,13 @@ function Encode-File {
 					if (Test-Path $sub_file) {
 						if ($video_subtitles_value -eq "burn") {
 							$sub_escaped = $sub_file -replace '\\', '\\\\' -replace "'", "\\\'" -replace ":", "\:" -replace '\[', '\[' -replace '\]', '\]' -replace ';', '\;' -replace '%', '\%'
+							# subtitles — CPU-фильтр: на GPU-кадрах (hwaccel_output_format cuda/qsv)
+							# ffmpeg падает с "Impossible to convert between the formats". Скачиваем
+							# кадры в системную память перед прожигом. Проверено на RTX 5060 Ti.
+							if ($use_hw_accel) {
+								$current_vf_parts.Add("hwdownload") | Out-Null
+								$current_vf_parts.Add("format=nv12") | Out-Null
+							}
 							if ($subtitles_style) {
 								$current_vf_parts.Add("subtitles='${sub_escaped}':force_style='${subtitles_style}'") | Out-Null
 							} else {
@@ -638,6 +645,9 @@ function Encode-File {
 
 # --- Основная логика ---
 if ($merge_files -eq "yes") {
+	if (($format_files_in_list | Measure-Object).Count -eq 0) {
+		Log-Msg "WARN" "Нет файлов для объединения в $folder_sources"
+	} else {
 	$fname = $format_files_in_list[0].Name
 	if (!(Test-Path "$folder_destination\$fname")) {
 		$tmpFile = [System.IO.Path]::GetTempFileName()
@@ -652,6 +662,7 @@ if ($merge_files -eq "yes") {
 			$script:countOk++
 		}
 		Remove-Item $tmpFile -Force
+	}
 	}
 } else {
 	# B1b. Последовательная обработка файлов

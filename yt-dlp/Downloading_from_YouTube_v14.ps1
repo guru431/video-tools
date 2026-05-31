@@ -104,7 +104,7 @@ $global:urlQueue = [System.Collections.Generic.List[hashtable]]::new()
 
 # ── Создание формы ────────────────────────────────────────────────────────
 $form = [System.Windows.Forms.Form]::new()
-$form.Text = "Video Downloader (yt-dlp) v13"
+$form.Text = "Video Downloader (yt-dlp) v14"
 $form.Size = [System.Drawing.Size]::new(830, 775)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
@@ -824,7 +824,7 @@ $btnStart.Add_Click({
 
             $progressBar.Value = 0
             $lblStatus.Text    = "Загрузка $itemNum/$totalItems  [$platform]"
-            $form.Text         = "Video Downloader (yt-dlp) v13  [$itemNum/$totalItems]"
+            $form.Text         = "Video Downloader (yt-dlp) v14  [$itemNum/$totalItems]"
             Append-Output ""
             Append-Output "═══ [$itemNum/$totalItems] [$platform]  $currentUrl" ([System.Drawing.Color]::Cyan)
 
@@ -926,6 +926,11 @@ $btnStart.Add_Click({
             $textCommand.Text = "$dlp $($command -join ' ')"
             Append-Output "Команда: $dlp $($command -join ' ')" ([System.Drawing.Color]::DimGray)
 
+            # Метка времени перед загрузкой — для AI-перевода выбираем mp4, появившийся
+            # в ходе ИМЕННО этой загрузки, а не самый свежий во всей папке (очередь,
+            # параллельные внешние загрузки могли бы подсунуть чужой файл).
+            $dlStartTime = Get-Date
+
             # Запуск процесса
             $psi = New-Object System.Diagnostics.ProcessStartInfo
             $psi.FileName               = $dlp
@@ -972,7 +977,7 @@ $btnStart.Add_Click({
                         $pct = [int][math]::Floor([double]$Matches[1])
                         $progressBar.Value = [math]::Min($pct, 100)
                         $lblStatus.Text    = "Загрузка $itemNum/$totalItems  [$platform]  $pct%"
-                        $form.Text         = "Video Downloader (yt-dlp) v13  [$itemNum/$totalItems]  $pct%"
+                        $form.Text         = "Video Downloader (yt-dlp) v14  [$itemNum/$totalItems]  $pct%"
                     } elseif ($line -match '\[download\] Destination:') {
                         Append-Output $line ([System.Drawing.Color]::LightGreen)
                     } elseif ($line -match '\[Merger\]|\[info\].*Merging') {
@@ -1073,6 +1078,7 @@ $btnStart.Add_Click({
 
                         if ($transFile) {
                             $latestVideo = Get-ChildItem -Path $folder -Filter "*.mp4" -Recurse -File |
+                                Where-Object { $_.LastWriteTime -ge $dlStartTime } |
                                 Sort-Object LastWriteTime -Descending | Select-Object -First 1
                             if ($latestVideo) {
                                 $outputFile = $latestVideo.FullName -replace '\.mp4$', '_translated.mp4'
@@ -1122,7 +1128,7 @@ $btnStart.Add_Click({
             if ($failCount -gt 0) { $summary += "  |  Ошибки: $failCount" }
             Append-Output $summary ([System.Drawing.Color]::LightGreen)
             $lblStatus.Text = "Завершено: $successCount/$totalItems"
-            $form.Text      = "Video Downloader (yt-dlp) v13 — Готово!"
+            $form.Text      = "Video Downloader (yt-dlp) v14 — Готово!"
         } else {
             Append-Output "═══ Остановлено  |  Загружено: $successCount" ([System.Drawing.Color]::Yellow)
             $lblStatus.Text = "Остановлено"
@@ -1159,7 +1165,7 @@ $btnClear.Add_Click({
     $richOutput.Clear()
     $progressBar.Value = 0
     $lblStatus.Text    = "Готов к загрузке"
-    $form.Text         = "Video Downloader (yt-dlp) v13"
+    $form.Text         = "Video Downloader (yt-dlp) v14"
 })
 $_fc.Add($btnClear)
 
@@ -1200,8 +1206,24 @@ $form.Add_FormClosing({
     }
 })
 
-$form.Controls.AddRange($_fc.ToArray())
+# Все контролы — в прокручиваемую панель: на маленьком разрешении нижние
+# кнопки остаются доступны через вертикальную прокрутку.
+$scrollPanel = [System.Windows.Forms.Panel]::new()
+$scrollPanel.Dock = [System.Windows.Forms.DockStyle]::Fill
+$scrollPanel.AutoScroll = $true
+$scrollPanel.Controls.AddRange($_fc.ToArray())
+$form.Controls.Add($scrollPanel)
 $form.ResumeLayout($true)
+
+# Если форма выше/шире рабочей области экрана (маленькое разрешение) — ужимаем
+# до рабочей области; внутренняя панель (AutoScroll) добавляет прокрутку,
+# нижние кнопки остаются доступны.
+$wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+if ($form.Height -gt $wa.Height) {
+    $form.Height = $wa.Height
+    $form.Width  = [Math]::Min($form.Width + [System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth, $wa.Width)
+}
+if ($form.Width -gt $wa.Width) { $form.Width = $wa.Width }
 
 # ── Версия yt-dlp — после отрисовки формы (через отложенный вызов) ────
 $script:dlpPath = "$dlp"

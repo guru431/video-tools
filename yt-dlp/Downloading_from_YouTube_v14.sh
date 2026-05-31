@@ -788,9 +788,11 @@ main() {
 
         # AI-перевод если включён и не только субтитры
         if [ "$TRANSLATE_ENABLED" = "true" ] && [ "$SUBS_ONLY" != "true" ]; then
-            # Найти последний скачанный файл
+            # Найти последний скачанный файл. Среди появившихся после marker берём
+            # самый свежий по mtime (ls -t) — find порядок не сортирует, и при
+            # нескольких новых mp4 (плейлист) head -1 брал произвольный.
             local latest
-            latest=$(find "$BASE_DIR" -name "*.mp4" -newer "$dl_marker" -type f 2>/dev/null | head -1)
+            latest=$(find "$BASE_DIR" -name "*.mp4" -newer "$dl_marker" -type f -print0 2>/dev/null | xargs -0 ls -1t 2>/dev/null | head -1)
             if [ -n "$latest" ]; then
                 translate_audio "$latest" "$URL" "$TRANSLATE_LANG" "$TRANSLATE_VOICE" \
                     "$TRANSLATE_MODE" "$TRANSLATE_ORIG_LANG" \

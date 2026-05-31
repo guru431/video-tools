@@ -443,6 +443,10 @@ if "%merge_files%"=="yes" (
 										set "sub_escaped=!sub_escaped:]=\]!"
 										set "sub_escaped=!sub_escaped:;=\;!"
 										set "sub_escaped=!sub_escaped:%%=\%%!"
+										rem subtitles — CPU-фильтр на GPU-кадрах падает; качаем кадры в RAM (RTX 5060 Ti).
+										if "!use_hw_accel!"=="yes" (
+											if defined current_vf (set "current_vf=!current_vf!,hwdownload,format=nv12") else (set "current_vf=hwdownload,format=nv12")
+										)
 										if defined subtitles_style (
 											if defined current_vf (set "current_vf=!current_vf!,subtitles='!sub_escaped!':force_style='!subtitles_style!'") else (set "current_vf=subtitles='!sub_escaped!':force_style='!subtitles_style!'")
 										) else (

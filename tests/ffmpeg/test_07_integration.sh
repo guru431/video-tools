@@ -143,6 +143,43 @@ else
     skip "audio_only тест" "нет тестового MP4"
 fi
 
+# ══════════════════════════════════════════════════════════════
+suite "Интеграция: GPU + burn субтитры → hwdownload перед subtitles"
+# ══════════════════════════════════════════════════════════════
+# Регрессия: scale_cuda/hwaccel_output_format даёт GPU-кадры; subtitles —
+# CPU-фильтр и падает с "Impossible to convert between the formats".
+# Перед прожигом нужен hwdownload,format=nv12. Проверено на RTX 5060 Ti.
+
+if [ "$HAS_TEST_VIDEO" = "1" ]; then
+    printf '1\n00:00:00,000 --> 00:00:01,000\nTEST\n' > "$INPUT_DIR/test_video.srt"
+
+    # GPU включён → hwdownload,format=nv12 ДОЛЖЕН стоять перед subtitles
+    rm -rf "$OUTPUT_DIR"; mkdir -p "$OUTPUT_DIR"
+    run_script 'export MOCK_FFMPEG_ENCODERS=nvenc' 'hw_accel=":+:nvidia"' 'video_subtitles=":+:burn"'
+    if [ -f "$FFMPEG_LOG" ]; then
+        call_args=$(cat "$FFMPEG_LOG")
+        assert_contains "GPU+burn: hwdownload,format=nv12 перед subtitles" \
+            "hwdownload,format=nv12,subtitles" "$call_args"
+    else
+        skip "GPU+burn тест" "mock не был вызван"
+    fi
+
+    # GPU выключен → subtitles без hwdownload (CPU-кадры, скачивать нечего)
+    rm -rf "$OUTPUT_DIR"; mkdir -p "$OUTPUT_DIR"
+    run_script 'hw_accel=":-:nvidia"' 'video_subtitles=":+:burn"'
+    if [ -f "$FFMPEG_LOG" ]; then
+        call_args=$(cat "$FFMPEG_LOG")
+        assert_contains     "CPU burn: есть subtitles"   "subtitles"  "$call_args"
+        assert_not_contains "CPU burn: нет hwdownload"   "hwdownload" "$call_args"
+    else
+        skip "CPU burn тест" "mock не был вызван"
+    fi
+
+    rm -f "$INPUT_DIR/test_video.srt"
+else
+    skip "GPU+burn субтитры" "нет тестового MP4"
+fi
+
 # ── Cleanup ───────────────────────────────────────────────────
 rm -f "$FFMPEG_LOG"
 rm -rf "$INPUT_DIR" "$OUTPUT_DIR"

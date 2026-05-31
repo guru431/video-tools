@@ -1,5 +1,5 @@
-$src      = Join-Path $PSScriptRoot 'Downloading_from_YouTube_v13.ps1'
-$out      = Join-Path $PSScriptRoot '_VideoDownloader_v13.exe'
+$src      = Join-Path $PSScriptRoot 'Downloading_from_YouTube_v14.ps1'
+$out      = Join-Path $PSScriptRoot '_VideoDownloader_v14.exe'
 $ps2exePs = Join-Path $PSScriptRoot 'ps2exe_tool.ps1'
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -27,8 +27,8 @@ Invoke-ps2exe `
     -noConsole `
     -STA `
     -x64 `
-    -title   "Video Downloader (yt-dlp) v13" `
-    -version "13.0.0.0"
+    -title   "Video Downloader (yt-dlp) v14" `
+    -version "14.0.0.0"
 
 if (Test-Path $out) {
     $size = [math]::Round((Get-Item $out).Length / 1KB)

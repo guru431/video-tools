@@ -279,6 +279,14 @@ echo.
 set "deno_arg="
 if exist "%~dp0deno.exe" set "deno_arg=--js-runtimes deno:%~dp0deno.exe"
 
+:: Marker перед загрузкой — для AI-перевода выбираем mp4, появившийся в ходе
+:: ИМЕННО этой загрузки (LastWriteTime >= marker), а не самый свежий во всей папке.
+set "_dl_marker="
+if not "%translate_lang%"=="" (
+    set "_dl_marker=%TEMP%\ytdlp_marker_%random%.tmp"
+    echo.>"!_dl_marker!"
+)
+
 %dlp% --no-check-certificate %cookie_arg% %deno_arg% -c -i -w --windows-filenames --compat-options filename-sanitization -o "%folder%\%file_tpl%" %save_settings%%sections_arg% "%url%"
 
 set "dl_errorlevel=%errorlevel%"
@@ -317,8 +325,10 @@ if not "%translate_lang%"=="" (
             goto :skip_translate
         )
 
-        :: Скачать перевод
+        :: Скачать перевод. temp_dir фиксированный — чистим перед запуском, чтобы
+        :: остаток mp3 от прошлого (упавшего до rmdir) запуска не был выбран ниже.
         set "temp_dir=%TEMP%\yt-dlp-translate"
+        rmdir /s /q "!temp_dir!" 2>nul
         mkdir "!temp_dir!" 2>nul
         set "NODE_TLS_REJECT_UNAUTHORIZED=0"
         "!vot_cmd!" --output="!temp_dir!" --voice-style=live --reslang=%translate_lang% "%url%"
@@ -334,7 +344,7 @@ if not "%translate_lang%"=="" (
         :: выбираем по дате через PowerShell (паритет с .ps1, глобальная сортировка).
         for %%f in ("!temp_dir!\*.mp3") do set "trans_file=%%f"
         set "video_file="
-        for /f "delims=" %%f in ('powershell -NoProfile -Command "Get-ChildItem -LiteralPath '%folder%' -Recurse -Filter *.mp4 -File ^| Sort-Object LastWriteTime -Descending ^| Select-Object -First 1 -ExpandProperty FullName" 2^>nul') do set "video_file=%%f"
+        for /f "delims=" %%f in ('powershell -NoProfile -Command "$m=(Get-Item -LiteralPath '!_dl_marker!' -ErrorAction SilentlyContinue).LastWriteTime; Get-ChildItem -LiteralPath '%folder%' -Recurse -Filter *.mp4 -File ^| Where-Object {-not $m -or $_.LastWriteTime -ge $m} ^| Sort-Object LastWriteTime -Descending ^| Select-Object -First 1 -ExpandProperty FullName" 2^>nul') do set "video_file=%%f"
 
         if defined trans_file if defined video_file (
             echo Объединение аудиодорожек ^(режим: %translate_mode%^)...
@@ -363,6 +373,7 @@ if not "%translate_lang%"=="" (
     )
 )
 :skip_translate
+if defined _dl_marker del "!_dl_marker!" 2>nul
 
 :: ── Результат ────────────────────────────────────────────────────────────
 echo.

@@ -500,6 +500,12 @@ encode_file() {
 							# Экранирование пути для subtitles=: ' : — спецсимволы значения,
 							# [ ] ; — разделители graph-синтаксиса фильтров, % — timecode-плейсхолдер.
 							local sub_escaped=$(echo "$sub_file" | sed -e "s/'/\\\\'/g" -e 's/:/\\:/g' -e 's/\[/\\[/g' -e 's/\]/\\]/g' -e 's/;/\\;/g' -e 's/%/\\%/g')
+							# subtitles — CPU-фильтр: на GPU-кадрах (hwaccel_output_format cuda/qsv)
+							# ffmpeg падает: "Impossible to convert between the formats". Скачиваем
+							# кадры в системную память перед прожигом. Проверено на RTX 5060 Ti.
+							if [ "$use_hw_accel" = "yes" ]; then
+								current_vf_chain="${current_vf_chain:+$current_vf_chain,}hwdownload,format=nv12"
+							fi
 							if [ -n "$subtitles_style" ]; then
 								current_vf_chain="${current_vf_chain:+$current_vf_chain,}subtitles='${sub_escaped}':force_style='${subtitles_style}'"
 							else

@@ -1,6 +1,6 @@
-$src       = Join-Path $PSScriptRoot 'FFmpeg_Converter_run_win_v13.ps1'
+$src       = Join-Path $PSScriptRoot 'FFmpeg_Converter_run_win_v14.ps1'
 $scriptPs1 = Join-Path $PSScriptRoot 'FFmpeg_Converter_script.ps1'
-$out       = Join-Path $PSScriptRoot '_VideoConverter_v13.exe'
+$out       = Join-Path $PSScriptRoot '_VideoConverter_v14.exe'
 $ps2exePs  = Join-Path $PSScriptRoot 'ps2exe_tool.ps1'
 $tmpSrc    = Join-Path $PSScriptRoot '_build_tmp.ps1'
 
@@ -50,8 +50,8 @@ Invoke-ps2exe `
     -noConsole `
     -STA `
     -x64 `
-    -title   "Video Converter (ffmpeg) v13" `
-    -version "13.0.0.0"
+    -title   "Video Converter (ffmpeg) v14" `
+    -version "14.0.0.0"
 
 Remove-Item $tmpSrc -Force -ErrorAction SilentlyContinue
 

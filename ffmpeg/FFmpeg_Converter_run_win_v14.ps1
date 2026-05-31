@@ -117,7 +117,7 @@ $_cfg_log_file     = Read-Config "log_file"           "other" "ffmpeg_convert.lo
 
 # Main Form
 $form = [System.Windows.Forms.Form]::new()
-$form.Text = "Video Converter (ffmpeg) v13"
+$form.Text = "Video Converter (ffmpeg) v14"
 $form.Size = [System.Drawing.Size]::new(820, 850)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
@@ -135,6 +135,7 @@ $mainContainer = [System.Windows.Forms.Panel]::new()
 $mainContainer.Location = [System.Drawing.Point]::new(10, 36)
 $mainContainer.Size = [System.Drawing.Size]::new(790, 780)
 $mainContainer.AutoScroll = $true
+$mainContainer.Anchor = [System.Windows.Forms.AnchorStyles]'Top,Bottom,Left,Right'
 $_fc.Add($mainContainer)
 
 # ========== Version strip (directly on form, above mainContainer) ==========
@@ -1383,6 +1384,16 @@ $buttonRun.Add_Click({
 $mainContainer.Controls.AddRange($_mc.ToArray())
 $form.Controls.AddRange($_fc.ToArray())
 $form.ResumeLayout($true)
+
+# Если форма выше/шире рабочей области экрана (маленькое разрешение) — ужимаем
+# до рабочей области; внутренняя панель (AutoScroll) добавляет прокрутку,
+# нижние кнопки остаются доступны.
+$wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+if ($form.Height -gt $wa.Height) {
+    $form.Height = $wa.Height
+    $form.Width  = [Math]::Min($form.Width + [System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth, $wa.Width)
+}
+if ($form.Width -gt $wa.Width) { $form.Width = $wa.Width }
 
 # ========== Получить версию ffmpeg — после отрисовки формы (через отложенный вызов) ==========
 $form.Add_Shown({

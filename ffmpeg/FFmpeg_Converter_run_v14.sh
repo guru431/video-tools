@@ -29,7 +29,7 @@ read_config() {
 
 	local in_section=false
 	while IFS= read -r line || [ -n "$line" ]; do
-		# Trim через bash parameter expansion (см. yt-dlp/Downloading_from_YouTube_v13.sh
+		# Trim через bash parameter expansion (см. yt-dlp/Downloading_from_YouTube_v14.sh
 		# — sed-fork на Windows Git Bash слишком медленный из-за cygwin overhead).
 		line="${line#"${line%%[![:space:]]*}"}"
 		line="${line%"${line##*[![:space:]]}"}"

@@ -1050,6 +1050,13 @@ $btnStart.Add_Click({
                         $votPsi.UseShellExecute        = $false
                         $votPsi.CreateNoWindow         = $true
                         $votPsi.EnvironmentVariables["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
+                        # Перевод тоже должен ходить через proxy (как и загрузка), иначе
+                        # vot-cli-live стучится напрямую и падает там, где доступ только через прокси.
+                        if ($proxyEnvVal) {
+                            $votPsi.EnvironmentVariables["HTTP_PROXY"]  = $proxyEnvVal
+                            $votPsi.EnvironmentVariables["HTTPS_PROXY"] = $proxyEnvVal
+                            $votPsi.EnvironmentVariables["ALL_PROXY"]   = $proxyEnvVal
+                        }
                         # Quoting: vot-cli-live принимает --key=value, поэтому простое join работает,
                         # но URL может содержать пробелы/спецсимволы — экранируем как в основном вызове.
                         $votArgs = @("--output=$tempDir", "--voice-style=$transVoice", "--reslang=$transLang", $currentUrl)

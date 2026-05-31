@@ -126,7 +126,7 @@ fi
 suite "Интеграция: пресет avc1_https"
 # ══════════════════════════════════════════════════════════════
 
-run_script --quality 720 --preset avc1_https "$FAKE_URL"
+run_script --quality 720 --format avc1_https "$FAKE_URL"
 
 if [ -f "$YTDLP_LOG" ]; then
     CALL=$(cat "$YTDLP_LOG")

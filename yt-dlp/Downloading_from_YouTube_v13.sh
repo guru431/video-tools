@@ -374,7 +374,14 @@ translate_audio() {
     temp_dir=$(mktemp -d)
     local -a vot_cmd=("$VOT_BIN" "--output=$temp_dir" "--voice-style=$voice_style" "--reslang=$target_lang" "$url")
 
-    if ! NODE_TLS_REJECT_UNAUTHORIZED=0 "${vot_cmd[@]}"; then
+    # Перевод тоже должен ходить через proxy (как и сама загрузка), иначе
+    # vot-cli-live стучится напрямую и падает в сетях, где доступ только через прокси.
+    local -a vot_env=("NODE_TLS_REJECT_UNAUTHORIZED=0")
+    if [ -n "$proxy_url" ]; then
+        vot_env+=("HTTP_PROXY=$proxy_url" "HTTPS_PROXY=$proxy_url" "ALL_PROXY=$proxy_url")
+    fi
+
+    if ! env "${vot_env[@]}" "${vot_cmd[@]}"; then
         log_error "Не удалось получить перевод для: $url"
         rm -rf "$temp_dir"
         return 1
@@ -721,8 +728,26 @@ parse_args() {
     build_cookie_args "$COOKIE_METHOD" "$COOKIE_FILE_PATH" "$COOKIE_BROWSER"
 }
 
+# Маскирует credentials в proxy URL для вывода в лог:
+# scheme://user:pass@host:port -> scheme://***@host:port
+mask_proxy() {
+    local p="$1"
+    [ -z "$p" ] && { echo "нет"; return; }
+    echo "$p" | sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)[^@/]+@#\1***@#'
+}
+
 # ── MAIN ───────────────────────────────────────────────────────────────────
 main() {
+    # Путь конфига должен быть известен ДО load_config, иначе настройки читаются
+    # из дефолтного config.ini и CLI-флаг --config фактически игнорируется.
+    local _args=("$@") _i
+    for ((_i = 0; _i < ${#_args[@]}; _i++)); do
+        if [ "${_args[$_i]}" = "--config" ] && [ $((_i + 1)) -lt ${#_args[@]} ]; then
+            CONFIG_FILE="${_args[$((_i + 1))]}"
+            break
+        fi
+    done
+
     load_config
     parse_args "$@"
 
@@ -733,7 +758,7 @@ main() {
     fi
 
     log_header "YouTube Downloader"
-    log_info "Качество: $QUALITY | Формат: $FORMAT_PRESET | Cookies: $COOKIE_METHOD | Прокси: ${PROXY_URL:-нет}"
+    log_info "Качество: $QUALITY | Формат: $FORMAT_PRESET | Cookies: $COOKIE_METHOD | Прокси: $(mask_proxy "$PROXY_URL")"
     [ "$TRANSLATE_ENABLED" = "true" ] && log_info "Перевод: $TRANSLATE_LANG ($TRANSLATE_VOICE, $TRANSLATE_MODE)"
 
     if [ "$BATCH_MODE" = "true" ]; then

@@ -250,7 +250,14 @@ audio_settings="$set_audio_codec $set_audio_number_channels $set_audio_bitrate $
 thread_args="-threads $threads"
 
 # --- Формат входных файлов ---
-format_files_in_pattern="-iname *.${format_files_in//,/ -o -iname *.}"
+# Предикаты find собираем массивом с quoted-паттернами: строка с *.ext без
+# кавычек раскрывается shell-глоббингом по файлам в cwd и ломает выборку find.
+format_find_pred=()
+IFS=',' read -ra _ff_exts <<< "$format_files_in"
+for _ff_e in "${_ff_exts[@]}"; do
+	[ ${#format_find_pred[@]} -gt 0 ] && format_find_pred+=(-o)
+	format_find_pred+=(-iname "*.${_ff_e}")
+done
 
 # --- D8. Логирование ---
 log_msg() {
@@ -604,14 +611,14 @@ if [ "$merge_files" = "yes" ]; then
 	fname=""
 	while IFS= read -r -d '' full_path; do
 		if [ -z "$fname" ]; then fname=$(basename "$full_path"); break; fi
-	done < <(find "$folder_sources" \( $format_files_in_pattern \) -print0)
+	done < <(find "$folder_sources" \( "${format_find_pred[@]}" \) -print0)
 	if [ ! -f "${folder_destination}/${fname}" ]; then
 		concat_list=$(mktemp)
 		# -printf — GNU-расширение (нет на macOS/BSD). Портативно: -print0 + read.
 		# Имена с ' экранируем для concat-формата ffmpeg: ' -> '\''
 		while IFS= read -r -d '' mf; do
 			printf "file '%s'\n" "${mf//\'/\'\\\'\'}" >> "$concat_list"
-		done < <(find "$folder_sources" \( $format_files_in_pattern \) -print0)
+		done < <(find "$folder_sources" \( "${format_find_pred[@]}" \) -print0)
 		log_msg "INFO" "Объединение файлов -> ${folder_destination}/${fname}"
 		"$ffmpeg" -hide_banner -strict -2 -f concat -safe 0 -i "$concat_list" -c copy -map 0 "$folder_destination/$fname"
 		if [ $? -ne 0 ]; then
@@ -636,9 +643,9 @@ else
 		export silence_threshold silence_duration dry_run enable_log log_file
 		export keep_aspect_ratio_status keep_aspect_ratio_value playback_speed_status playback_speed_value
 		export results_dir
-		find "$folder_sources" \( $format_files_in_pattern \) -print0 | xargs -0 -P "$parallel_count" -I {} bash -c 'encode_file "$@"' _ {}
+		find "$folder_sources" \( "${format_find_pred[@]}" \) -print0 | xargs -0 -P "$parallel_count" -I {} bash -c 'encode_file "$@"' _ {}
 	else
-		find "$folder_sources" \( $format_files_in_pattern \) -print0 | while read -d $'\0' full_path; do
+		find "$folder_sources" \( "${format_find_pred[@]}" \) -print0 | while read -d $'\0' full_path; do
 			encode_file "$full_path"
 		done
 	fi

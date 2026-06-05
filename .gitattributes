@@ -1,2 +1,5 @@
+# Shell scripts must be LF: CRLF breaks shebangs and `$'\r'` errors under WSL/Linux/CI bash
+*.sh text eol=lf
+
 # Keep the git hook as LF so its shebang works after a fresh clone on Windows
 .githooks/pre-commit text eol=lf

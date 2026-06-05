@@ -25,6 +25,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="${SCRIPT_DIR}/config.ini"
 CHANNELS_FILE="${SCRIPT_DIR}/channels.txt"
 
+# Бинарь yt-dlp: сначала рядом со скриптом (yt-dlp / yt-dlp.exe), потом из PATH
+if [ -x "$SCRIPT_DIR/yt-dlp" ]; then
+    YTDLP="$SCRIPT_DIR/yt-dlp"
+elif [ -f "$SCRIPT_DIR/yt-dlp.exe" ]; then
+    YTDLP="$SCRIPT_DIR/yt-dlp.exe"
+else
+    YTDLP="yt-dlp"
+fi
+
 # ── Цвета ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -106,7 +115,7 @@ check_dependency() {
 }
 
 check_base_deps() {
-    check_dependency "yt-dlp" "Установите: https://github.com/yt-dlp/yt-dlp" || exit 1
+    check_dependency "$YTDLP" "Установите: https://github.com/yt-dlp/yt-dlp" || exit 1
 }
 
 check_translate_deps() {
@@ -300,7 +309,7 @@ download_url() {
     local trim_end_val="${9:-}"
     local force_kf="${10:-false}"
 
-    local -a cmd=(yt-dlp -c -i -w --windows-filenames --compat-options filename-sanitization)
+    local -a cmd=("$YTDLP" -c -i -w --windows-filenames --compat-options filename-sanitization)
 
     # Deno рядом со скриптом
     local script_dir
@@ -464,7 +473,7 @@ download_batch() {
             template="${BASE_DIR}/${category}/${OUTPUT_TEMPLATE}"
         fi
 
-        local -a cmd=(yt-dlp -c -i -w --windows-filenames --compat-options filename-sanitization)
+        local -a cmd=("$YTDLP" -c -i -w --windows-filenames --compat-options filename-sanitization)
         local sdir
         sdir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
         [ -x "$sdir/deno" ] && cmd+=(--js-runtimes "deno:$sdir/deno")

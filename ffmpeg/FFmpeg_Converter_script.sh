@@ -394,10 +394,11 @@ encode_file() {
 		file_duration=$((${x#0}*3600+${y#0}*60+${z#0}))
 	fi
 
-	# Видео-фильтры
-	local vf_args=""
+	# Видео-фильтры. vf_args/af_args — argv-массивы: значение фильтра (путь
+	# субтитров, force_style с пробелами) проходит как ЕДИНЫЙ токен без word-splitting.
+	local -a vf_args=()
 	local current_vf_chain="$vf_chain"
-	local af_args=""
+	local -a af_args=()
 	local current_af_chain="$af_chain"
 	# Снимки до per-part модификаций (subtitles burn / meta -map). Восстанавливаются
 	# в начале каждой итерации цикла по частям, иначе между частями накапливаются
@@ -523,10 +524,10 @@ encode_file() {
 		fi
 
 		# Финализация фильтров
-		if [ -n "$current_vf_chain" ]; then vf_args="-vf $current_vf_chain"; else vf_args=""; fi
-		if [ -n "$current_af_chain" ]; then af_args="-af $current_af_chain"; else af_args=""; fi
+		if [ -n "$current_vf_chain" ]; then vf_args=(-vf "$current_vf_chain"); else vf_args=(); fi
+		if [ -n "$current_af_chain" ]; then af_args=(-af "$current_af_chain"); else af_args=(); fi
 		# copy_codecs несовместим с фильтрами
-		if [ "$copy_codecs" = "yes" ]; then vf_args=""; af_args=""; fi
+		if [ "$copy_codecs" = "yes" ]; then vf_args=(); af_args=(); fi
 
 		local out_file="${folder_destination}${file_path}${file_name}${pref}.${current_format_out}"
 
@@ -535,7 +536,7 @@ encode_file() {
 		# а не декодирует файл от 0 до start_coding_value (могут быть минуты для крупных видео).
 		if [ "$dry_run" = "yes" ]; then
 			local dry_seek=""; if [ "$b" -gt 0 ] 2>/dev/null; then dry_seek="-ss $b"; fi
-			echo "[DRY-RUN] $ffmpeg -hide_banner -strict -2 $hw_decode_args $dry_seek -i \"$full_path\" ${subtitles_params[*]} $convert_settings $thread_args $vf_args $af_args $current_set_length \"$out_file\""
+			echo "[DRY-RUN] $ffmpeg -hide_banner -strict -2 $hw_decode_args $dry_seek -i \"$full_path\" ${subtitles_params[*]} $convert_settings $thread_args ${vf_args[*]} ${af_args[*]} $current_set_length \"$out_file\""
 		else
 			log_msg "INFO" "Кодирование: $(basename "$full_path") -> $(basename "$out_file")"
 			local encode_start=$(date +%s)
@@ -550,7 +551,7 @@ encode_file() {
 
 			"$ffmpeg" -hide_banner -strict -2 $hw_decode_args \
 				$seek_arg -i "$full_path" "${subtitles_params[@]}" \
-				$convert_settings $thread_args $vf_args $af_args \
+				$convert_settings $thread_args "${vf_args[@]}" "${af_args[@]}" \
 				$current_set_length \
 				-progress "$progress_file" -nostats \
 				"$out_file" -y 2>"$err_file" &

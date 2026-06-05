@@ -8,7 +8,9 @@ setlocal EnableDelayedExpansion
 :: ============================================================================
 
 set "folder=_video_"
+:: Бинарь yt-dlp: сначала рядом со скриптом (yt-dlp.exe), потом из PATH
 set "dlp=yt-dlp"
+if exist "%~dp0yt-dlp.exe" set "dlp=%~dp0yt-dlp.exe"
 set "proxy="
 set "cookie_arg="
 set "translate_arg="
@@ -45,6 +47,10 @@ echo   92 - Только субтитры (EN)
 echo.
 set /p "quality=Выберите номер: "
 if "%quality%"=="" set quality=3
+:: Whitelist допустимых номеров качества (защита от инъекции в if %quality%==N)
+set "_ok="
+for %%v in (0 1 2 3 4 5 6 91 92) do if "%quality%"=="%%v" set "_ok=1"
+if not defined _ok set "quality=3"
 
 :: ── Cookies ──────────────────────────────────────────────────────────────
 echo.
@@ -57,11 +63,15 @@ echo   4 - Из файла
 echo.
 set /p "cookie_choice=Выберите номер: "
 if "%cookie_choice%"=="" set cookie_choice=0
+:: Whitelist: отбрасываем всё, кроме допустимых номеров (защита от &|) в вводе)
+set "_ok="
+for %%v in (0 1 2 3 4) do if "%cookie_choice%"=="%%v" set "_ok=1"
+if not defined _ok set "cookie_choice=0"
 
-if %cookie_choice%==1 set "cookie_arg=--cookies-from-browser chrome"
-if %cookie_choice%==2 set "cookie_arg=--cookies-from-browser firefox"
-if %cookie_choice%==3 set "cookie_arg=--cookies-from-browser edge"
-if %cookie_choice%==4 (
+if "%cookie_choice%"=="1" set "cookie_arg=--cookies-from-browser chrome"
+if "%cookie_choice%"=="2" set "cookie_arg=--cookies-from-browser firefox"
+if "%cookie_choice%"=="3" set "cookie_arg=--cookies-from-browser edge"
+if "%cookie_choice%"=="4" (
     set /p "cookie_path=Путь к файлу cookies: "
     if not "!cookie_path!"=="" (
         if exist "!cookie_path!" (
@@ -112,13 +122,17 @@ echo   4 - Перевод EN (2 дорожки)
 echo.
 set /p "translate_choice=Выберите номер: "
 if "%translate_choice%"=="" set translate_choice=0
+:: Whitelist допустимых номеров перевода
+set "_ok="
+for %%v in (0 1 2 3 4) do if "%translate_choice%"=="%%v" set "_ok=1"
+if not defined _ok set "translate_choice=0"
 
 set "translate_lang="
 set "translate_mode="
-if %translate_choice%==1 (set "translate_lang=ru" & set "translate_mode=dual_track")
-if %translate_choice%==2 (set "translate_lang=ru" & set "translate_mode=mix")
-if %translate_choice%==3 (set "translate_lang=ru" & set "translate_mode=replace")
-if %translate_choice%==4 (set "translate_lang=en" & set "translate_mode=dual_track")
+if "%translate_choice%"=="1" (set "translate_lang=ru" & set "translate_mode=dual_track")
+if "%translate_choice%"=="2" (set "translate_lang=ru" & set "translate_mode=mix")
+if "%translate_choice%"=="3" (set "translate_lang=ru" & set "translate_mode=replace")
+if "%translate_choice%"=="4" (set "translate_lang=en" & set "translate_mode=dual_track")
 
 :: ── Определение платформы по URL ────────────────────────────────────────
 set "platform=other"
@@ -139,19 +153,23 @@ echo   7  - auto (YouTube=avc1_best, прочие=простой best)
 echo.
 set /p "fmt=Выберите номер: "
 if "%fmt%"=="" set fmt=7
+:: Whitelist допустимых пресетов формата (далее значение идёт в if %fmt%==N)
+set "_ok="
+for %%v in (0 1 2 3 4 5 6 7) do if "%fmt%"=="%%v" set "_ok=1"
+if not defined _ok set "fmt=7"
 
 :: auto для YouTube = avc1_best
-if %fmt%==7 if "%platform%"=="youtube" set "fmt=0"
+if "%fmt%"=="7" if "%platform%"=="youtube" set "fmt=0"
 
 :: ── Формат + Качество ───────────────────────────────────────────────────
 set "save_settings="
 
 :: Субтитры — не зависят от пресета
-if %quality%==91 (
+if "%quality%"=="91" (
     set "save_settings=--sub-lang ru --write-auto-sub --sub-format vtt --skip-download"
     goto :format_done
 )
-if %quality%==92 (
+if "%quality%"=="92" (
     set "save_settings=--sub-lang en --write-auto-sub --sub-format vtt --skip-download"
     goto :format_done
 )

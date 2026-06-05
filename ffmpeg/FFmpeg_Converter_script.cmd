@@ -463,9 +463,10 @@ if "%merge_files%"=="yes" (
 						)
 					)
 
-					:: Финализация фильтров
-					if defined current_vf (set "vf_args=-vf !current_vf!")
-					if defined current_af (set "af_args=-af !current_af!")
+					:: Финализация фильтров. Значение -vf/-af берём в кавычки: путь субтитров
+					:: или force_style с пробелами иначе разбивается на несколько argv для ffmpeg.
+					if defined current_vf (set "vf_args=-vf "!current_vf!"")
+					if defined current_af (set "af_args=-af "!current_af!"")
 					:: copy_codecs несовместим с фильтрами
 					if "%copy_codecs%"=="yes" (set "vf_args=" & set "af_args=")
 

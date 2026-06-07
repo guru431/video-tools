@@ -34,7 +34,10 @@ if command -v timeout >/dev/null 2>&1; then TIMEOUT_BIN="timeout 10"; fi
 
 run_script() {
     rm -f "$YTDLP_LOG"
+    # YTDLP_BIN форсирует mock даже если рядом со скриптом лежит реальный yt-dlp.exe
+    # (иначе скрипт берёт локальный бинарь и тест уходит в реальную сеть)
     MOCK_YTDLP_LOG="$YTDLP_LOG" \
+    YTDLP_BIN="$MOCKS_DIR/yt-dlp" \
     PATH="$MOCKS_DIR:$PATH" \
     $TIMEOUT_BIN bash "$YTDLP_SCRIPT" "$@" </dev/null 2>/dev/null
 }
@@ -177,6 +180,27 @@ if [ ! -f "$YTDLP_LOG" ]; then
     pass "--help: yt-dlp НЕ вызывается"
 else
     fail "--help: yt-dlp НЕ должен вызываться" "нет лога" "лог создан"
+fi
+
+# ══════════════════════════════════════════════════════════════
+suite "Интеграция: --dry-run печатает команду и НЕ вызывает yt-dlp"
+# ══════════════════════════════════════════════════════════════
+
+rm -f "$YTDLP_LOG"
+DRY_OUT=$(MOCK_YTDLP_LOG="$YTDLP_LOG" YTDLP_BIN="$MOCKS_DIR/yt-dlp" PATH="$MOCKS_DIR:$PATH" \
+    $TIMEOUT_BIN bash "$YTDLP_SCRIPT" --dry-run --quality 1080 "$FAKE_URL" </dev/null 2>/dev/null)
+
+if echo "$DRY_OUT" | grep -qF -- "[DRY-RUN]"; then
+    assert_contains "dry-run: метка [DRY-RUN]"   "[DRY-RUN]"      "$DRY_OUT"
+    assert_contains "dry-run: URL в команде"     "$FAKE_URL"     "$DRY_OUT"
+    assert_contains "dry-run: качество 1080"     "height<=1080"  "$DRY_OUT"
+    if [ ! -f "$YTDLP_LOG" ]; then
+        pass "dry-run: yt-dlp НЕ вызван"
+    else
+        fail "dry-run: yt-dlp НЕ должен вызываться" "нет лога" "лог создан"
+    fi
+else
+    skip "dry-run тест" "config.ini load timed out (slow sed-fork on Windows)"
 fi
 
 # ── Восстанавливаем оригинальный config ───────────────────────

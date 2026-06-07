@@ -25,8 +25,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="${SCRIPT_DIR}/config.ini"
 CHANNELS_FILE="${SCRIPT_DIR}/channels.txt"
 
-# Бинарь yt-dlp: сначала рядом со скриптом (yt-dlp / yt-dlp.exe), потом из PATH
-if [ -x "$SCRIPT_DIR/yt-dlp" ]; then
+# Бинарь yt-dlp: env-override (для тестов) → рядом со скриптом → из PATH
+if [ -n "${YTDLP_BIN:-}" ]; then
+    YTDLP="$YTDLP_BIN"
+elif [ -x "$SCRIPT_DIR/yt-dlp" ]; then
     YTDLP="$SCRIPT_DIR/yt-dlp"
 elif [ -f "$SCRIPT_DIR/yt-dlp.exe" ]; then
     YTDLP="$SCRIPT_DIR/yt-dlp.exe"
@@ -351,6 +353,13 @@ download_url() {
 
     cmd+=("$url")
 
+    if [ "$DRY_RUN" = "true" ]; then
+        local proxy_note=""
+        [ -n "${PROXY_URL:-}" ] && proxy_note="env HTTP_PROXY/HTTPS_PROXY/ALL_PROXY=$(mask_proxy "$PROXY_URL") "
+        echo "[DRY-RUN] ${proxy_note}${cmd[*]}"
+        return 0
+    fi
+
     log_info "Команда: ${cmd[*]}"
 
     if "${env_prefix[@]}" "${cmd[@]}"; then
@@ -519,6 +528,13 @@ download_batch() {
         local url="https://www.youtube.com/@${handle}/${mode}"
         cmd+=("$url")
 
+        if [ "$DRY_RUN" = "true" ]; then
+            local proxy_note=""
+            [ -n "${PROXY_URL:-}" ] && proxy_note="env HTTP_PROXY/HTTPS_PROXY/ALL_PROXY=$(mask_proxy "$PROXY_URL") "
+            echo "[DRY-RUN] ${proxy_note}${cmd[*]}"
+            continue
+        fi
+
         log_info "Команда: ${cmd[*]}"
 
         if "${env_prefix[@]}" "${cmd[@]}"; then
@@ -594,6 +610,7 @@ COOKIES:
   --force-keyframes            Точная обрезка по границам (требует перекодирования концов).
 
 ПРОЧЕЕ:
+  --dry-run                    Показать итоговую команду yt-dlp без запуска
   --config PATH                Путь к config.ini
   --help                       Показать эту справку
 EOF
@@ -652,6 +669,7 @@ load_config() {
 parse_args() {
     BATCH_MODE=false
     SUBS_ONLY=false
+    DRY_RUN=false
     TRANSLATE_CLI=""
     TRANSLATE_MODE_CLI=""
     TRANSLATE_VOICE_CLI=""
@@ -713,6 +731,9 @@ parse_args() {
                 ;;
             --force-keyframes)
                 FORCE_KEYFRAMES="true"; shift
+                ;;
+            --dry-run)
+                DRY_RUN=true; shift
                 ;;
             -*)
                 log_error "Неизвестный флаг: $1"

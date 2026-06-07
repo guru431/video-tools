@@ -3,3 +3,6 @@
 
 # Keep the git hook as LF so its shebang works after a fresh clone on Windows
 .githooks/pre-commit text eol=lf
+
+# Mock binaries have no extension; force LF so their shebangs work on Linux/WSL/CI
+tests/mocks/* text eol=lf

@@ -39,7 +39,7 @@ cat > "$TMP_DIR/config.ini" << 'INIEOF'
 source = C:\abs\src
 
 [video]
-quality = +23
+quality = +23     
 
 [gpu]
 hw_accel = +intel

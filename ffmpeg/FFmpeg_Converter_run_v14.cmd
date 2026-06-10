@@ -61,17 +61,19 @@ for /f "usebackq tokens=* delims=" %%L in ("%CONFIG_FILE%") do (
 	for /f "tokens=* delims= " %%T in ("!_line!") do set "_line=%%T"
 	:: Пропустить пустые строки и комментарии
 	if defined _line if not "!_line:~0,1!"=="#" (
-		:: Секция?
-		echo !_line! | findstr /r "^\[.*\]$" >nul 2>&1
-		if !errorlevel! equ 0 (
+		:: Секция? Без echo|findstr — пайп исполнял & из значений, а якорь $ не работал
+		set "_is_section="
+		if "!_line:~0,1!"=="[" if "!_line:~-1!"=="]" set "_is_section=1"
+		if defined _is_section (
 			set "_section=!_line:~1,-1!"
 		) else (
 			:: Парсинг key = value
 			for /f "tokens=1,* delims==" %%K in ("!_line!") do (
 				set "_key=%%K"
 				set "_val=%%~L"
-				:: Убрать пробелы из ключа
+				:: Убрать пробелы из ключа (ведущие + хвостовые)
 				for /f "tokens=* delims= " %%T in ("!_key!") do set "_key=%%T"
+				call :trim_key
 				:: Убрать пробелы из значения и инлайн-комментарии
 				for /f "tokens=1 delims=#" %%V in ("%%~L") do (
 					for /f "tokens=* delims= " %%T in ("%%V") do set "_val=%%T"
@@ -87,10 +89,15 @@ for /f "usebackq tokens=* delims=" %%L in ("%CONFIG_FILE%") do (
 goto :start_coding
 
 :trim_val
-:: Убрать trailing spaces
-if defined _val (
-	for /l %%i in (1,1,3) do if "!_val:~-1!"==" " set "_val=!_val:~0,-1!"
-)
+:: Убрать все trailing spaces из значения
+if not defined _val exit /b
+if "!_val:~-1!"==" " (set "_val=!_val:~0,-1!" & goto :trim_val)
+exit /b
+
+:trim_key
+:: Убрать все trailing spaces из ключа
+if not defined _key exit /b
+if "!_key:~-1!"==" " (set "_key=!_key:~0,-1!" & goto :trim_key)
 exit /b
 
 :assign_var
@@ -157,8 +164,10 @@ exit /b
 
 :to_flag
 :: Конвертирует +val/-val в :+:val/:-:val и присваивает переменной %2
+:: Пустое значение — оставить дефолт
 set "_fv=%~1"
 set "_fn=%~2"
+if not defined _fv exit /b
 if "!_fv:~0,1!"=="+" (
 	set "!_fn!=:+:!_fv:~1!"
 ) else if "!_fv:~0,1!"=="-" (
@@ -170,10 +179,21 @@ exit /b
 
 :start_coding
 :: --- Резолвинг относительных путей от директории скрипта ---
-echo !folder_sources! | findstr /r "^[a-zA-Z]:\\ ^\\\\">nul 2>&1
-if !errorlevel! neq 0 set "folder_sources=%~dp0!folder_sources!"
-echo !folder_destination! | findstr /r "^[a-zA-Z]:\\ ^\\\\">nul 2>&1
-if !errorlevel! neq 0 set "folder_destination=%~dp0!folder_destination!"
+:: Детект абсолютного пути без echo|findstr — пайп исполнял & из значений
+set "_abs="
+if "!folder_sources:~1,2!"==":\" set "_abs=1"
+if "!folder_sources:~0,2!"=="\\" set "_abs=1"
+if not defined _abs set "folder_sources=%~dp0!folder_sources!"
+set "_abs="
+if "!folder_destination:~1,2!"==":\" set "_abs=1"
+if "!folder_destination:~0,2!"=="\\" set "_abs=1"
+if not defined _abs set "folder_destination=%~dp0!folder_destination!"
+
+rem Тестовый хук: --print-config печатает распарсенные переменные и выходит, не запуская script
+if "%~1"=="--print-config" (
+	for %%V in (folder_sources folder_destination audio_only merge_files create_frame copy_codecs extract_audio_copy audio_codec audio_number_channels audio_bitrate audio_sampling_rate audio_normalize video_codec video_resolution video_bitrate video_number_frames video_rotation video_subtitles video_quality keep_aspect_ratio output_container multithreads parallel_files hw_accel gpu_preset gpu_tune gpu_rc playback_speed start_coding length_coding split_by_silence silence_duration silence_threshold save_old_extension format_files_in subtitles_style dry_run enable_log log_file) do echo %%V=!%%V!
+	exit /b 0
+)
 
 :: start coding
 call "%~dp0FFmpeg_Converter_script.cmd"

@@ -27,6 +27,9 @@ suite "CMD: end-to-end smoke (script.cmd, dry_run)"
 TMP_DIR=$(mktemp -d /tmp/test_cmd_smoke_XXXXXX)
 mkdir -p "$TMP_DIR/src" "$TMP_DIR/dst" "$TMP_DIR/bin"
 printf 'fake video data' > "$TMP_DIR/src/sample.mp4"
+# Файл с литеральным % в имени — регресс-кейс: call :process_file "%%~fa"
+# повторно прогонял аргумент через %-expansion и съедал знак процента.
+printf 'fake video data' > "$TMP_DIR/src/50% off.mp4"
 
 # ── Мок ffmpeg.exe / ffprobe.exe ──
 # ВАЖНО: мок обязан быть exe, а не .bat — script.cmd вызывает "%ffmpeg%"
@@ -110,6 +113,8 @@ assert_not_contains "нет parse error 'was unexpected at this time'" "was unex
 assert_eq "exit code 0" "0" "$exit_code"
 assert_contains "вывод содержит DRY-RUN (файл дошёл до обработки)" "DRY-RUN" "$output"
 assert_contains "DRY-RUN команда содержит входной sample.mp4" "sample.mp4" "$output"
+assert_contains "DRY-RUN сохраняет литеральный % в имени файла" "50% off.mp4" "$output"
+assert_not_contains "имя с % не искажено (нет '50 off.mp4')" "50 off.mp4" "$output"
 assert_contains "DRY-RUN команда содержит -c:v libx264" "-c:v libx264" "$output"
 assert_contains "итоговая сводка напечатана" "Обработано:" "$output"
 

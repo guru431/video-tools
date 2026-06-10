@@ -72,6 +72,7 @@ FFMPEG_TESTS=(
     "$TESTS_DIR/ffmpeg/test_08_ps1_audio_video.sh"
     "$TESTS_DIR/ffmpeg/test_09_ps1_filters_gpu.sh"
     "$TESTS_DIR/ffmpeg/test_10_cmd.sh"
+    "$TESTS_DIR/ffmpeg/test_11_cmd_smoke.sh"
 )
 
 YTDLP_TESTS=(

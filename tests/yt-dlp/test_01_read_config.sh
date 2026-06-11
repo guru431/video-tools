@@ -167,4 +167,27 @@ CONFIG_FILE="/tmp/nonexistent_config_$$.ini"
 result=$(read_config "url" "proxy" "file_default")
 assert_eq "нет файла → default"  "file_default"  "$result"
 
+# ══════════════════════════════════════════════════════════════
+suite "Task 12: yt-dlp фиксы (анализ исходников, 3 платформы)"
+# ══════════════════════════════════════════════════════════════
+SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v14.sh"
+CMDF="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v14.cmd"
+PS1F="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v14.ps1"
+sh_src="$(cat "$SH")"; cmd_src="$(cat "$CMDF")"; ps1_src="$(cat "$PS1F")"
+
+# deno.exe детект (SH)
+assert_contains "SH: deno.exe детект"  'deno:$script_dir/deno.exe'  "$sh_src"
+# env_prefix bash<4.4 safe expansion
+assert_contains "SH: env_prefix bash<4.4"  '${env_prefix[@]+"${env_prefix[@]}"}'  "$sh_src"
+# translate только при rc=0
+assert_contains "SH: translate при dl_rc=0"  '[ "$dl_rc" -eq 0 ]'  "$sh_src"
+# --no-mtime при переводе (все 3)
+assert_contains "SH: --no-mtime при переводе"  '--no-mtime'  "$sh_src"
+assert_contains "CMD: --no-mtime при переводе"  "mtime_arg=--no-mtime"  "$cmd_src"
+assert_contains "PS1: --no-mtime при переводе"  '$command += "--no-mtime"'  "$ps1_src"
+# continue_on_error (SH + PS1)
+assert_contains "SH: continue_on_error → --abort-on-error"  "--abort-on-error"  "$sh_src"
+assert_contains "PS1: continue_on_error → --abort-on-error"  "--abort-on-error"  "$ps1_src"
+assert_not_contains "SH: нет захардкоженного -c -i -w"  '"$YTDLP" -c -i -w'  "$sh_src"
+
 summary

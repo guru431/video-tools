@@ -298,6 +298,10 @@ echo.
 set "deno_arg="
 if exist "%~dp0deno.exe" set "deno_arg=--js-runtimes "deno:%~dp0deno.exe""
 
+rem --no-mtime при переводе: выбор свежескачанного mp4 опирается на mtime.
+set "mtime_arg="
+if not "%translate_lang%"=="" set "mtime_arg=--no-mtime"
+
 :: Marker перед загрузкой — для AI-перевода выбираем mp4, появившийся в ходе
 :: ИМЕННО этой загрузки (LastWriteTime >= marker), а не самый свежий во всей папке.
 set "_dl_marker="
@@ -306,7 +310,7 @@ if not "%translate_lang%"=="" (
     echo.>"!_dl_marker!"
 )
 
-"!dlp!" !cookie_arg! !deno_arg! -c -i -w --windows-filenames --compat-options filename-sanitization -o "!folder!\%file_tpl%" %save_settings%%sections_arg% "!url!"
+"!dlp!" !cookie_arg! !deno_arg! !mtime_arg! -c -i -w --windows-filenames --compat-options filename-sanitization -o "!folder!\%file_tpl%" %save_settings%%sections_arg% "!url!"
 
 set "dl_errorlevel=%errorlevel%"
 if %dl_errorlevel%==0 (

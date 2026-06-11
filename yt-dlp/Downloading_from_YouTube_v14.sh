@@ -311,12 +311,22 @@ download_url() {
     local trim_end_val="${9:-}"
     local force_kf="${10:-false}"
 
-    local -a cmd=("$YTDLP" -c -i -w --windows-filenames --compat-options filename-sanitization)
+    # continue_on_error: true → -i (пропускать ошибки), false → --abort-on-error.
+    local _err_flag="-i"; [ "${CONTINUE_ON_ERROR:-true}" = "false" ] && _err_flag="--abort-on-error"
+    local -a cmd=("$YTDLP" -c "$_err_flag" -w --windows-filenames --compat-options filename-sanitization)
 
-    # Deno рядом со скриптом
+    # Deno рядом со скриптом (deno или deno.exe на Windows)
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    [ -x "$script_dir/deno" ] && cmd+=(--js-runtimes "deno:$script_dir/deno")
+    if [ -x "$script_dir/deno" ]; then
+        cmd+=(--js-runtimes "deno:$script_dir/deno")
+    elif [ -f "$script_dir/deno.exe" ]; then
+        cmd+=(--js-runtimes "deno:$script_dir/deno.exe")
+    fi
+
+    # --no-mtime при переводе: выбор свежескачанного файла опирается на mtime, а
+    # старые yt-dlp ставили mtime в прошлое (дату публикации) → -newer не находил файл.
+    [ "${TRANSLATE_ENABLED:-false}" = "true" ] && cmd+=(--no-mtime)
 
     # Прокси через переменную окружения — пароль не виден в ps aux
     local -a env_prefix=()
@@ -362,7 +372,7 @@ download_url() {
 
     log_info "Команда: ${cmd[*]}"
 
-    if "${env_prefix[@]}" "${cmd[@]}"; then
+    if "${env_prefix[@]+"${env_prefix[@]}"}" "${cmd[@]}"; then
         log_ok "Загрузка завершена: $url"
         COUNT_OK=$((COUNT_OK + 1))
         return 0
@@ -482,10 +492,15 @@ download_batch() {
             template="${BASE_DIR}/${category}/${OUTPUT_TEMPLATE}"
         fi
 
-        local -a cmd=("$YTDLP" -c -i -w --windows-filenames --compat-options filename-sanitization)
+        local _err_flag="-i"; [ "${CONTINUE_ON_ERROR:-true}" = "false" ] && _err_flag="--abort-on-error"
+        local -a cmd=("$YTDLP" -c "$_err_flag" -w --windows-filenames --compat-options filename-sanitization)
         local sdir
         sdir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-        [ -x "$sdir/deno" ] && cmd+=(--js-runtimes "deno:$sdir/deno")
+        if [ -x "$sdir/deno" ]; then
+            cmd+=(--js-runtimes "deno:$sdir/deno")
+        elif [ -f "$sdir/deno.exe" ]; then
+            cmd+=(--js-runtimes "deno:$sdir/deno.exe")
+        fi
 
         local -a env_prefix=()
         if [ -n "${PROXY_URL:-}" ]; then
@@ -537,7 +552,7 @@ download_batch() {
 
         log_info "Команда: ${cmd[*]}"
 
-        if "${env_prefix[@]}" "${cmd[@]}"; then
+        if "${env_prefix[@]+"${env_prefix[@]}"}" "${cmd[@]}"; then
             log_ok "Канал $handle завершён"
             COUNT_OK=$((COUNT_OK + 1))
         else
@@ -815,9 +830,10 @@ main() {
 
         download_url "$URL" "$template" "$QUALITY" "$SUBS_ONLY" "$archive_path" \
             "$TRIM_START_ON" "$TRIM_START_VAL" "$TRIM_END_ON" "$TRIM_END_VAL" "$FORCE_KEYFRAMES"
+        local dl_rc=$?
 
-        # AI-перевод если включён и не только субтитры
-        if [ "$TRANSLATE_ENABLED" = "true" ] && [ "$SUBS_ONLY" != "true" ]; then
+        # AI-перевод только при успешной загрузке (паритет с CMD) и не для субтитров
+        if [ "$dl_rc" -eq 0 ] && [ "$TRANSLATE_ENABLED" = "true" ] && [ "$SUBS_ONLY" != "true" ]; then
             # Найти последний скачанный файл. Среди появившихся после marker берём
             # самый свежий по mtime (ls -t) — find порядок не сортирует, и при
             # нескольких новых mp4 (плейлист) head -1 брал произвольный.

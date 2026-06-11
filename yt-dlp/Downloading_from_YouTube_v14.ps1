@@ -65,6 +65,7 @@ $cfg_transLang     = Read-Config "target_lang"     "translation" "ru"
 $cfg_transVoice    = Read-Config "voice_style"     "translation" "live"
 $cfg_transMode     = Read-Config "mode"            "translation" "mix"
 # Паритет с .sh: архив загрузок и громкости/язык для AI-перевода — из config.
+$cfg_continueOnErr = Read-Config "continue_on_error"  "download"    "true"
 $cfg_useArchive    = Read-Config "use_archive"        "download"    "true"
 $cfg_archiveFile   = Read-Config "archive_file"       "download"    "download_archive.txt"
 $cfg_transOrigVol  = Read-Config "original_volume"    "translation" "0.3"
@@ -852,7 +853,11 @@ $btnStart.Add_Click({
                 New-Item -ItemType Directory -Path $folder -Force | Out-Null
             }
 
-            $command = @("-c", "-i", "-w", "--windows-filenames", "--compat-options", "filename-sanitization")
+            # continue_on_error: true → -i (пропускать ошибки), false → --abort-on-error.
+            $errFlag = if ($cfg_continueOnErr -eq "false") { "--abort-on-error" } else { "-i" }
+            $command = @("-c", $errFlag, "-w", "--windows-filenames", "--compat-options", "filename-sanitization")
+            # --no-mtime при переводе: выбор свежескачанного файла опирается на mtime.
+            if ($chkTranslate.Checked) { $command += "--no-mtime" }
             # Архив загруженного (паритет с .sh): не перекачивать уже скачанное.
             if ($cfg_useArchive -eq "true") { $command += "--download-archive", "`"$(Join-Path $folder $cfg_archiveFile)`"" }
             $denoExe = Join-Path $scriptDir "deno.exe"

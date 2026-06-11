@@ -17,14 +17,14 @@ build_format_args() {
     case "$preset" in
         avc1_best)
             case "$quality" in
-                audio) echo "-f bestaudio[ext!=webm]" ;;
-                360)   echo "-f \"bestaudio[ext!=webm]+bestvideo[height<=360][vcodec^=avc1]\"" ;;
-                480)   echo "-f \"bestaudio[ext!=webm]+bestvideo[height<=480][vcodec^=avc1]\"" ;;
-                720)   echo "-f \"bestaudio[ext!=webm]+bestvideo[height<=720][vcodec^=avc1]\"" ;;
-                1080)  echo "-f \"bestaudio[ext!=webm]+bestvideo[height<=1080][vcodec^=avc1]\"" ;;
-                1440)  echo "-f \"bestaudio[ext!=webm]+bestvideo[height<=1440][vcodec^=avc1]\"" ;;
-                2160)  echo "-f \"bestaudio[ext!=webm]+bestvideo[height<=2160][vcodec^=avc1]\"" ;;
-                *)     echo "-f \"bestaudio[ext!=webm]+bestvideo[height<=720][vcodec^=avc1]\"" ;;
+                audio) echo "-f bestaudio[ext!=webm]/bestaudio" ;;
+                360)   echo "-f \"bestaudio[ext!=webm]+bestvideo[height<=360][vcodec^=avc1]/bestaudio+bestvideo[height<=360]\"" ;;
+                480)   echo "-f \"bestaudio[ext!=webm]+bestvideo[height<=480][vcodec^=avc1]/bestaudio+bestvideo[height<=480]\"" ;;
+                720)   echo "-f \"bestaudio[ext!=webm]+bestvideo[height<=720][vcodec^=avc1]/bestaudio+bestvideo[height<=720]\"" ;;
+                1080)  echo "-f \"bestaudio[ext!=webm]+bestvideo[height<=1080][vcodec^=avc1]/bestaudio+bestvideo[height<=1080]\"" ;;
+                1440)  echo "-f \"bestaudio[ext!=webm]+bestvideo[height<=1440][vcodec^=avc1]/bestaudio+bestvideo[height<=1440]\"" ;;
+                2160)  echo "-f \"bestaudio[ext!=webm]+bestvideo[height<=2160][vcodec^=avc1]/bestaudio+bestvideo[height<=2160]\"" ;;
+                *)     echo "-f \"bestaudio[ext!=webm]+bestvideo[height<=720][vcodec^=avc1]/bestaudio+bestvideo[height<=720]\"" ;;
             esac ;;
         avc1_https)
             case "$quality" in
@@ -33,8 +33,8 @@ build_format_args() {
                 480)   echo "-f 140+135/134" ;;
                 720)   echo "-f 140+136/135/134" ;;
                 1080)  echo "-f 140+137/136/135/134" ;;
-                1440)  echo "-f 140+138/137/136/135/134" ;;
-                2160)  echo "-f 140+139/138/137/136/135/134" ;;
+                1440)  echo "-f 140+264/bestvideo[height<=1440][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=1440]" ;;
+                2160)  echo "-f 140+266/bestvideo[height<=2160][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=2160]" ;;
                 *)     echo "-f 140+136/135/134" ;;
             esac ;;
         avc1_m3u8)
@@ -43,20 +43,20 @@ build_format_args() {
                 360)   echo "-f 234+230" ;;
                 480)   echo "-f 234+231/230" ;;
                 720)   echo "-f 234+232/231/230" ;;
-                1080)  echo "-f 234+233/232/231/230" ;;
-                1440)  echo "-f 234+234/233/232/231/230" ;;
-                2160)  echo "-f 234+235/234/233/232/231/230" ;;
+                1080)  echo "-f 270+234/bestvideo[protocol*=m3u8][height<=1080]+bestaudio[protocol*=m3u8]/best[height<=1080]" ;;
+                1440)  echo "-f bestvideo[protocol*=m3u8][height<=1440]+bestaudio[protocol*=m3u8]/best[height<=1440]" ;;
+                2160)  echo "-f bestvideo[protocol*=m3u8][height<=2160]+bestaudio[protocol*=m3u8]/best[height<=2160]" ;;
                 *)     echo "-f 234+232/231/230" ;;
             esac ;;
         avc1_https_60fps)
             case "$quality" in
-                audio) echo "-f 234" ;;
-                360)   echo "-f 234+296" ;;
-                480)   echo "-f 234+297/296" ;;
+                audio) echo "-f 140" ;;
+                360)   echo "-f 140+134/best[height<=360]" ;;
+                480)   echo "-f 140+135/best[height<=480]" ;;
                 720)   echo "-f 234+298/297/296" ;;
                 1080)  echo "-f 234+299/298/297/296" ;;
-                1440)  echo "-f 234+300/299/298/297/296" ;;
-                2160)  echo "-f 234+301/300/299/298/297/296" ;;
+                1440)  echo "-f 140+299/bestvideo[height<=1440][fps>=50]+bestaudio[ext=m4a]/best[height<=1440]" ;;
+                2160)  echo "-f 140+299/bestvideo[height<=2160][fps>=50]+bestaudio[ext=m4a]/best[height<=2160]" ;;
                 *)     echo "-f 234+298/297/296" ;;
             esac ;;
         avc1_m3u8_60fps)
@@ -85,12 +85,12 @@ build_format_args() {
             case "$quality" in
                 audio) echo "-f 140" ;;
                 360)   echo "-f 18" ;;
-                480)   echo "-f 20/18" ;;
-                720)   echo "-f 22/20/18" ;;
-                1080)  echo "-f 24/22/20/18" ;;
-                1440)  echo "-f 26/24/22/20/18" ;;
-                2160)  echo "-f 28/26/24/22/20/18" ;;
-                *)     echo "-f 22/20/18" ;;
+                480)   echo "-f 59/22/18" ;;
+                720)   echo "-f 22/18" ;;
+                1080)  echo "-f 37/22/18" ;;
+                1440)  echo "-f 38/37/22/18" ;;
+                2160)  echo "-f 38/37/22/18" ;;
+                *)     echo "-f 22/18" ;;
             esac ;;
         *)
             echo "-f \"bestaudio[ext!=webm]+bestvideo[height<=720][vcodec^=avc1]\"" ;;
@@ -102,7 +102,7 @@ suite "avc1_best: все уровни качества"
 # ══════════════════════════════════════════════════════════════
 
 r=$(build_format_args audio avc1_best)
-assert_eq "audio"  "-f bestaudio[ext!=webm]"  "$r"
+assert_eq "audio"  "-f bestaudio[ext!=webm]/bestaudio"  "$r"
 
 r=$(build_format_args 360 avc1_best)
 assert_contains "360"   "height<=360"   "$r"
@@ -141,10 +141,12 @@ r=$(build_format_args 1080 avc1_https)
 assert_eq "1080"   "-f 140+137/136/135/134"  "$r"
 
 r=$(build_format_args 1440 avc1_https)
-assert_eq "1440"   "-f 140+138/137/136/135/134"  "$r"
+assert_contains "1440 → 140+264 (не битый 140+138)"  "140+264"  "$r"
+assert_not_contains "1440 → нет аудио-itag 138"  "140+138"  "$r"
 
 r=$(build_format_args 2160 avc1_https)
-assert_eq "2160"   "-f 140+139/138/137/136/135/134"  "$r"
+assert_contains "2160 → 140+266 (не битый 140+139)"  "140+266"  "$r"
+assert_not_contains "2160 → нет аудио-itag 139"  "140+139"  "$r"
 
 # ══════════════════════════════════════════════════════════════
 suite "avc1_m3u8: числовые ID"
@@ -157,7 +159,8 @@ r=$(build_format_args 720 avc1_m3u8)
 assert_eq "720"    "-f 234+232/231/230"  "$r"
 
 r=$(build_format_args 1080 avc1_m3u8)
-assert_eq "1080"   "-f 234+233/232/231/230"  "$r"
+assert_contains "1080 → 270+234 (не битый 234+233)"  "270+234"  "$r"
+assert_not_contains "1080 → нет 234+233"  "234+233"  "$r"
 
 # ══════════════════════════════════════════════════════════════
 suite "avc1_https_60fps: 60fps форматы"
@@ -170,7 +173,8 @@ r=$(build_format_args 1080 avc1_https_60fps)
 assert_eq "1080"  "-f 234+299/298/297/296"    "$r"
 
 r=$(build_format_args 2160 avc1_https_60fps)
-assert_eq "2160"  "-f 234+301/300/299/298/297/296"  "$r"
+assert_contains "2160 → 140+299 + fps>=50 (не битый 234+301)"  "fps>=50"  "$r"
+assert_not_contains "2160 → нет несуществующего itag 301"  "234+301"  "$r"
 
 # ══════════════════════════════════════════════════════════════
 suite "avc1_m3u8_60fps: M3U8 60fps"
@@ -203,19 +207,21 @@ r=$(build_format_args 360 old_combo)
 assert_eq "360"    "-f 18"               "$r"
 
 r=$(build_format_args 480 old_combo)
-assert_eq "480"    "-f 20/18"            "$r"
+assert_eq "480"    "-f 59/22/18"         "$r"
+assert_not_contains "480 → нет несуществующего itag 20"  "20/"  "$r"
 
 r=$(build_format_args 720 old_combo)
-assert_eq "720"    "-f 22/20/18"         "$r"
+assert_eq "720"    "-f 22/18"            "$r"
 
 r=$(build_format_args 1080 old_combo)
-assert_eq "1080"   "-f 24/22/20/18"      "$r"
+assert_eq "1080"   "-f 37/22/18"         "$r"
+assert_not_contains "1080 → нет несуществующего itag 24"  "24/"  "$r"
 
 r=$(build_format_args 1440 old_combo)
-assert_eq "1440"   "-f 26/24/22/20/18"   "$r"
+assert_eq "1440"   "-f 38/37/22/18"      "$r"
 
 r=$(build_format_args 2160 old_combo)
-assert_eq "2160"   "-f 28/26/24/22/20/18"  "$r"
+assert_eq "2160"   "-f 38/37/22/18"      "$r"
 
 # ══════════════════════════════════════════════════════════════
 suite "Неизвестный пресет: fallback"
@@ -224,5 +230,27 @@ suite "Неизвестный пресет: fallback"
 r=$(build_format_args 720 unknown_preset)
 assert_contains "неизвестный пресет → fallback"  "height<=720"  "$r"
 assert_contains "неизвестный пресет → avc1"      "vcodec^=avc1"  "$r"
+
+# ══════════════════════════════════════════════════════════════
+suite "Task 9: исправленные itag-таблицы во всех 3 платформах (анализ исходников)"
+# ══════════════════════════════════════════════════════════════
+SH_SRC="$(cat "$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v14.sh")"
+CMD_SRC="$(cat "$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v14.cmd")"
+PS1_SRC="$(cat "$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v14.ps1")"
+
+# SH
+assert_contains "SH: avc1_https 2160 → 140+266"  "140+266"  "$SH_SRC"
+assert_not_contains "SH: нет битого 140+139"  "140+139"  "$SH_SRC"
+assert_not_contains "SH: нет битого 234+233"  "234+233"  "$SH_SRC"
+assert_not_contains "SH: old_combo без itag 20/"  "20/18"  "$SH_SRC"
+assert_contains "SH: avc1_best fallback /bestaudio+bestvideo"  "/bestaudio+bestvideo"  "$SH_SRC"
+# CMD
+assert_contains "CMD: avc1_https q6 → 140+266"  "140+266"  "$CMD_SRC"
+assert_not_contains "CMD: нет битого 140+139"  "140+139"  "$CMD_SRC"
+assert_contains "CMD: GE-плейсхолдер декодируется в >="  "save_settings:GE=>=!"  "$CMD_SRC"
+# PS1
+assert_contains "PS1: avc1_https 2160 → 140+266"  "140+266"  "$PS1_SRC"
+assert_not_contains "PS1: нет битого 234+234"  "234+234/233"  "$PS1_SRC"
+assert_not_contains "PS1: old_combo без itag 20/18"  "20/18"  "$PS1_SRC"
 
 summary

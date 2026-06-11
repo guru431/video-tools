@@ -196,8 +196,8 @@ if %fmt%==1 (
     if %quality%==2 set "save_settings=-f 140+135/134"
     if %quality%==3 set "save_settings=-f 140+136/135/134"
     if %quality%==4 set "save_settings=-f 140+137/136/135/134"
-    if %quality%==5 set "save_settings=-f 140+138/137/136/135/134"
-    if %quality%==6 set "save_settings=-f 140+139/138/137/136/135/134"
+    if %quality%==5 set "save_settings=-f Q140+264/bestvideo[heightLE1440][vcodec^=avc1]+bestaudio[ext=m4a]/best[heightLE1440]Q"
+    if %quality%==6 set "save_settings=-f Q140+266/bestvideo[heightLE2160][vcodec^=avc1]+bestaudio[ext=m4a]/best[heightLE2160]Q"
 )
 :: avc1_m3u8
 if %fmt%==2 (
@@ -205,19 +205,19 @@ if %fmt%==2 (
     if %quality%==1 set "save_settings=-f 234+230"
     if %quality%==2 set "save_settings=-f 234+231/230"
     if %quality%==3 set "save_settings=-f 234+232/231/230"
-    if %quality%==4 set "save_settings=-f 234+233/232/231/230"
-    if %quality%==5 set "save_settings=-f 234+234/233/232/231/230"
-    if %quality%==6 set "save_settings=-f 234+235/234/233/232/231/230"
+    if %quality%==4 set "save_settings=-f Q270+234/bestvideo[protocol*=m3u8][heightLE1080]+bestaudio[protocol*=m3u8]/best[heightLE1080]Q"
+    if %quality%==5 set "save_settings=-f Qbestvideo[protocol*=m3u8][heightLE1440]+bestaudio[protocol*=m3u8]/best[heightLE1440]Q"
+    if %quality%==6 set "save_settings=-f Qbestvideo[protocol*=m3u8][heightLE2160]+bestaudio[protocol*=m3u8]/best[heightLE2160]Q"
 )
 :: avc1_https_60fps
 if %fmt%==3 (
-    if %quality%==0 set "save_settings=-f 234"
-    if %quality%==1 set "save_settings=-f 234+296"
-    if %quality%==2 set "save_settings=-f 234+297/296"
+    if %quality%==0 set "save_settings=-f 140"
+    if %quality%==1 set "save_settings=-f Q140+134/best[heightLE360]Q"
+    if %quality%==2 set "save_settings=-f Q140+135/best[heightLE480]Q"
     if %quality%==3 set "save_settings=-f 234+298/297/296"
     if %quality%==4 set "save_settings=-f 234+299/298/297/296"
-    if %quality%==5 set "save_settings=-f 234+300/299/298/297/296"
-    if %quality%==6 set "save_settings=-f 234+301/300/299/298/297/296"
+    if %quality%==5 set "save_settings=-f Q140+299/bestvideo[heightLE1440][fpsGE50]+bestaudio[ext=m4a]/best[heightLE1440]Q"
+    if %quality%==6 set "save_settings=-f Q140+299/bestvideo[heightLE2160][fpsGE50]+bestaudio[ext=m4a]/best[heightLE2160]Q"
 )
 :: avc1_m3u8_60fps
 if %fmt%==4 (
@@ -263,6 +263,7 @@ if %fmt%==7 (
 :: Подмена плейсхолдеров (см. примечание в блоке fmt=0)
 if defined save_settings (
     set "save_settings=!save_settings:LE=<=!"
+    set "save_settings=!save_settings:GE=>=!"
     set "save_settings=!save_settings:Q="!"
 )
 

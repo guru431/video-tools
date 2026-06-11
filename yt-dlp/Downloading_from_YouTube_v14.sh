@@ -214,14 +214,14 @@ build_format_args() {
     case "$preset" in
         avc1_best)
             case "$quality" in
-                audio) fmt="bestaudio[ext!=webm]" ;;
-                360)   fmt="bestaudio[ext!=webm]+bestvideo[height<=360][vcodec^=avc1]" ;;
-                480)   fmt="bestaudio[ext!=webm]+bestvideo[height<=480][vcodec^=avc1]" ;;
-                720)   fmt="bestaudio[ext!=webm]+bestvideo[height<=720][vcodec^=avc1]" ;;
-                1080)  fmt="bestaudio[ext!=webm]+bestvideo[height<=1080][vcodec^=avc1]" ;;
-                1440)  fmt="bestaudio[ext!=webm]+bestvideo[height<=1440][vcodec^=avc1]" ;;
-                2160)  fmt="bestaudio[ext!=webm]+bestvideo[height<=2160][vcodec^=avc1]" ;;
-                *)     fmt="bestaudio[ext!=webm]+bestvideo[height<=720][vcodec^=avc1]" ;;
+                audio) fmt="bestaudio[ext!=webm]/bestaudio" ;;
+                360)   fmt="bestaudio[ext!=webm]+bestvideo[height<=360][vcodec^=avc1]/bestaudio+bestvideo[height<=360]" ;;
+                480)   fmt="bestaudio[ext!=webm]+bestvideo[height<=480][vcodec^=avc1]/bestaudio+bestvideo[height<=480]" ;;
+                720)   fmt="bestaudio[ext!=webm]+bestvideo[height<=720][vcodec^=avc1]/bestaudio+bestvideo[height<=720]" ;;
+                1080)  fmt="bestaudio[ext!=webm]+bestvideo[height<=1080][vcodec^=avc1]/bestaudio+bestvideo[height<=1080]" ;;
+                1440)  fmt="bestaudio[ext!=webm]+bestvideo[height<=1440][vcodec^=avc1]/bestaudio+bestvideo[height<=1440]" ;;
+                2160)  fmt="bestaudio[ext!=webm]+bestvideo[height<=2160][vcodec^=avc1]/bestaudio+bestvideo[height<=2160]" ;;
+                *)     fmt="bestaudio[ext!=webm]+bestvideo[height<=720][vcodec^=avc1]/bestaudio+bestvideo[height<=720]" ;;
             esac ;;
         avc1_https)
             case "$quality" in
@@ -230,8 +230,8 @@ build_format_args() {
                 480)   fmt="140+135/134" ;;
                 720)   fmt="140+136/135/134" ;;
                 1080)  fmt="140+137/136/135/134" ;;
-                1440)  fmt="140+138/137/136/135/134" ;;
-                2160)  fmt="140+139/138/137/136/135/134" ;;
+                1440)  fmt="140+264/bestvideo[height<=1440][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=1440]" ;;
+                2160)  fmt="140+266/bestvideo[height<=2160][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=2160]" ;;
                 *)     fmt="140+136/135/134" ;;
             esac ;;
         avc1_m3u8)
@@ -240,20 +240,20 @@ build_format_args() {
                 360)   fmt="234+230" ;;
                 480)   fmt="234+231/230" ;;
                 720)   fmt="234+232/231/230" ;;
-                1080)  fmt="234+233/232/231/230" ;;
-                1440)  fmt="234+234/233/232/231/230" ;;
-                2160)  fmt="234+235/234/233/232/231/230" ;;
+                1080)  fmt="270+234/bestvideo[protocol*=m3u8][height<=1080]+bestaudio[protocol*=m3u8]/best[height<=1080]" ;;
+                1440)  fmt="bestvideo[protocol*=m3u8][height<=1440]+bestaudio[protocol*=m3u8]/best[height<=1440]" ;;
+                2160)  fmt="bestvideo[protocol*=m3u8][height<=2160]+bestaudio[protocol*=m3u8]/best[height<=2160]" ;;
                 *)     fmt="234+232/231/230" ;;
             esac ;;
         avc1_https_60fps)
             case "$quality" in
-                audio) fmt="234" ;;
-                360)   fmt="234+296" ;;
-                480)   fmt="234+297/296" ;;
+                audio) fmt="140" ;;
+                360)   fmt="140+134/best[height<=360]" ;;
+                480)   fmt="140+135/best[height<=480]" ;;
                 720)   fmt="234+298/297/296" ;;
                 1080)  fmt="234+299/298/297/296" ;;
-                1440)  fmt="234+300/299/298/297/296" ;;
-                2160)  fmt="234+301/300/299/298/297/296" ;;
+                1440)  fmt="140+299/bestvideo[height<=1440][fps>=50]+bestaudio[ext=m4a]/best[height<=1440]" ;;
+                2160)  fmt="140+299/bestvideo[height<=2160][fps>=50]+bestaudio[ext=m4a]/best[height<=2160]" ;;
                 *)     fmt="234+298/297/296" ;;
             esac ;;
         avc1_m3u8_60fps)
@@ -282,12 +282,12 @@ build_format_args() {
             case "$quality" in
                 audio) fmt="140" ;;
                 360)   fmt="18" ;;
-                480)   fmt="20/18" ;;
-                720)   fmt="22/20/18" ;;
-                1080)  fmt="24/22/20/18" ;;
-                1440)  fmt="26/24/22/20/18" ;;
-                2160)  fmt="28/26/24/22/20/18" ;;
-                *)     fmt="22/20/18" ;;
+                480)   fmt="59/22/18" ;;
+                720)   fmt="22/18" ;;
+                1080)  fmt="37/22/18" ;;
+                1440)  fmt="38/37/22/18" ;;
+                2160)  fmt="38/37/22/18" ;;
+                *)     fmt="22/18" ;;
             esac ;;
         *)
             fmt="bestaudio[ext!=webm]+bestvideo[height<=720][vcodec^=avc1]" ;;

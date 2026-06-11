@@ -43,7 +43,7 @@ if (Test-Path $configFile) {
             continue
         }
         if ($curSection -and $line -match '^([^=]+?)\s*=\s*(.*)') {
-            $val = $Matches[2] -replace '\s*#.*', ''
+            $val = $Matches[2] -replace '\s+#.*', ''
             $script:_configCache["${curSection}::$($Matches[1].Trim())"] = $val.Trim()
         }
     }
@@ -96,7 +96,7 @@ $_cfg_keep_aspect      = Parse-Flag (Read-Config "keep_aspect_ratio" "video" "+y
 $_cfg_container        = Parse-Flag (Read-Config "container"        "video" "+mp4")
 
 $_cfg_threads  = Parse-Flag (Read-Config "threads"        "performance" "+4")
-$_cfg_hw_accel  = Parse-Flag (Read-Config "hw_accel"       "gpu"         "+intel")
+$_cfg_hw_accel  = Parse-Flag (Read-Config "hw_accel"       "gpu"         "-intel")
 $_cfg_gpu_preset = Parse-Flag (Read-Config "preset"        "gpu"         "-p5")
 $_cfg_gpu_tune   = Parse-Flag (Read-Config "tune"          "gpu"         "-hq")
 $_cfg_gpu_rc     = Parse-Flag (Read-Config "rc"            "gpu"         "-vbr")
@@ -839,17 +839,16 @@ function Update-MutualExclusion {
         Set-ControlGroupEnabled $script:_videoControls $false
     } else {
         Set-ControlGroupEnabled $script:_videoControls $true
-        # CRF ↔ Видео битрейт: взаимоисключающие
-        if ($checkVideoQuality.Checked) {
-            $checkVideoBitrate.Enabled = $false
-            $textVideoBitrate.Enabled = $false
-            $labelVideoBitrate.ForeColor = $script:_disabledColor
+        # CRF ↔ Видео битрейт: взаимоисключающие. При обоих включённых приоритет
+        # quality — снимаем галку bitrate. Дизейблим только ПОЛЕ ВВОДА противоположной
+        # опции, не сам чекбокс (иначе оба залипали бы отключёнными навсегда).
+        if ($checkVideoQuality.Checked -and $checkVideoBitrate.Checked) {
+            $checkVideoBitrate.Checked = $false
         }
-        if ($checkVideoBitrate.Checked) {
-            $checkVideoQuality.Enabled = $false
-            $textVideoQuality.Enabled = $false
-            $labelVideoQuality.ForeColor = $script:_disabledColor
-        }
+        $textVideoBitrate.Enabled = -not $checkVideoQuality.Checked
+        $labelVideoBitrate.ForeColor = if ($checkVideoQuality.Checked) { $script:_disabledColor } else { $script:_enabledColor }
+        $textVideoQuality.Enabled = -not $checkVideoBitrate.Checked
+        $labelVideoQuality.ForeColor = if ($checkVideoBitrate.Checked) { $script:_disabledColor } else { $script:_enabledColor }
     }
 }
 
@@ -1434,6 +1433,22 @@ $form.Add_Shown({
         }
     })
     $t.Start()
+})
+
+# ========== Cleanup on Close ==========
+# Закрытие окна во время конверсии: отменяем фоновую задачу (worker видит cancel-файл
+# и убивает свой ffmpeg-процесс), освобождаем runspace, удаляем временные файлы —
+# иначе остаётся осиротевший ffmpeg.exe и неудалённый мусор.
+$form.Add_FormClosing({
+    if ($global:_guiPS -and $global:_guiHandle -and -not $global:_guiHandle.IsCompleted) {
+        try { "cancel" | Set-Content $global:_guiCancel -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
+        try { $global:_guiPS.Stop() } catch {}
+    }
+    foreach ($f in @($global:_guiProgress, $global:_guiCancel)) {
+        if ($f) { try { Remove-Item $f -Force -ErrorAction SilentlyContinue } catch {} }
+    }
+    if ($global:_guiPS)       { try { $global:_guiPS.Dispose() } catch {} }
+    if ($global:_guiRunspace) { try { $global:_guiRunspace.Dispose() } catch {} }
 })
 
 # ========== Show Form ==========

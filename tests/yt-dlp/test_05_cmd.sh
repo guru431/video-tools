@@ -357,4 +357,29 @@ if %errorlevel%==0 (echo naive_true) else (echo naive_false)
 ')
 assert_contains "Bug7: без фикса errorlevel=0 после set → naive_true"  "naive_true"  "$result"
 
+# ══════════════════════════════════════════════════════════════
+suite "Task 10: CMD yt-dlp фиксы (анализ исходника)"
+# ══════════════════════════════════════════════════════════════
+PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
+DLP_CMD="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v14.cmd"
+src="$(cat "$DLP_CMD")"
+
+# URL через delayed expansion (!url!), не %url% — сохраняет ! и & в URL
+assert_contains "main download использует !url!"  '"!url!"'  "$src"
+assert_not_contains "нет %url% в get-title"  '--get-title "%url%"'  "$src"
+# Бинарь yt-dlp в кавычках (пути с пробелами)
+assert_contains "yt-dlp в кавычках"  '"!dlp!"'  "$src"
+# vot errorlevel сохранён ДО сброса NODE_TLS
+votrc_ln=$(grep -nF 'set "vot_rc=!errorlevel!"' "$DLP_CMD" | head -1 | cut -d: -f1)
+nrst_ln=$(grep -nF 'set "NODE_TLS_REJECT_UNAUTHORIZED="' "$DLP_CMD" | head -1 | cut -d: -f1)
+order="bad"; [ -n "$votrc_ln" ] && [ -n "$nrst_ln" ] && [ "$votrc_ln" -lt "$nrst_ln" ] && order="ok"
+assert_eq "vot_rc сохранён ДО сброса NODE_TLS"  "ok"  "$order"
+# merge: проверка ff_rc + удаление битого
+assert_contains "merge: ff_rc проверяется"  'set "ff_rc=!errorlevel!"'  "$src"
+assert_contains "merge: битый выход удаляется"  'del /q "!output_file!"'  "$src"
+# Выходная папка от папки скрипта
+assert_contains "folder от %~dp0"  'set "folder=%~dp0_video_"'  "$src"
+# Убран безусловный --no-check-certificate (паритет с SH)
+assert_not_contains "нет --no-check-certificate"  "--no-check-certificate"  "$src"
+
 summary

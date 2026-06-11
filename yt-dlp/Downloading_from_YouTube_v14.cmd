@@ -7,7 +7,7 @@ setlocal EnableDelayedExpansion
 :: Поддержка: выбор качества, cookies, прокси, AI-перевод аудиодорожки
 :: ============================================================================
 
-set "folder=_video_"
+set "folder=%~dp0_video_"
 :: Бинарь yt-dlp: сначала рядом со скриптом (yt-dlp.exe), потом из PATH
 set "dlp=yt-dlp"
 if exist "%~dp0yt-dlp.exe" set "dlp=%~dp0yt-dlp.exe"
@@ -136,7 +136,7 @@ if "%translate_choice%"=="4" (set "translate_lang=en" & set "translate_mode=dual
 
 :: ── Определение платформы по URL ────────────────────────────────────────
 set "platform=other"
-echo "%url%" | findstr /I /C:"youtube.com" /C:"youtu.be" >nul 2>&1
+echo "!url!" | findstr /I /C:"youtube.com" /C:"youtu.be" >nul 2>&1
 if not errorlevel 1 set "platform=youtube"
 
 :: ── Пресет формата ───────────────────────────────────────────────────────
@@ -270,7 +270,7 @@ if defined save_settings (
 :: ── Шаблон пути ──────────────────────────────────────────────────────────
 set "output_tpl=%%(uploader)s\%%(upload_date)s - %%(title).100U.%%(ext)s"
 set "playlist_tpl=%%(uploader)s\%%(playlist)s\%%(playlist_index)03d - %%(title).100U.%%(ext)s"
-echo "%url%" | findstr /R /C:"[?&]list=" >nul && (
+echo "!url!" | findstr /R /C:"[?&]list=" >nul && (
     set "file_tpl=%playlist_tpl%"
 ) || (
     set "file_tpl=%output_tpl%"
@@ -287,7 +287,7 @@ if not "%proxy%"=="" (
 echo.
 echo ─────────────────────────────────────────
 echo Получение информации о видео...
-%dlp% --no-check-certificate %cookie_arg% --get-title "%url%" 2>nul
+"!dlp!" !cookie_arg! --get-title "!url!" 2>nul
 echo ─────────────────────────────────────────
 echo.
 
@@ -296,7 +296,7 @@ echo Начало загрузки...
 echo.
 
 set "deno_arg="
-if exist "%~dp0deno.exe" set "deno_arg=--js-runtimes deno:%~dp0deno.exe"
+if exist "%~dp0deno.exe" set "deno_arg=--js-runtimes "deno:%~dp0deno.exe""
 
 :: Marker перед загрузкой — для AI-перевода выбираем mp4, появившийся в ходе
 :: ИМЕННО этой загрузки (LastWriteTime >= marker), а не самый свежий во всей папке.
@@ -306,7 +306,7 @@ if not "%translate_lang%"=="" (
     echo.>"!_dl_marker!"
 )
 
-%dlp% --no-check-certificate %cookie_arg% %deno_arg% -c -i -w --windows-filenames --compat-options filename-sanitization -o "%folder%\%file_tpl%" %save_settings%%sections_arg% "%url%"
+"!dlp!" !cookie_arg! !deno_arg! -c -i -w --windows-filenames --compat-options filename-sanitization -o "!folder!\%file_tpl%" %save_settings%%sections_arg% "!url!"
 
 set "dl_errorlevel=%errorlevel%"
 if %dl_errorlevel%==0 (
@@ -350,10 +350,11 @@ if not "%translate_lang%"=="" (
         rmdir /s /q "!temp_dir!" 2>nul
         mkdir "!temp_dir!" 2>nul
         set "NODE_TLS_REJECT_UNAUTHORIZED=0"
-        "!vot_cmd!" --output="!temp_dir!" --voice-style=live --reslang=%translate_lang% "%url%"
+        "!vot_cmd!" --output="!temp_dir!" --voice-style=live --reslang=%translate_lang% "!url!"
+        set "vot_rc=!errorlevel!"
         set "NODE_TLS_REJECT_UNAUTHORIZED="
 
-        if errorlevel 1 (
+        if !vot_rc! geq 1 (
             echo ПРЕДУПРЕЖДЕНИЕ: не удалось получить перевод
             goto :skip_translate
         )
@@ -363,7 +364,7 @@ if not "%translate_lang%"=="" (
         :: выбираем по дате через PowerShell (паритет с .ps1, глобальная сортировка).
         for %%f in ("!temp_dir!\*.mp3") do set "trans_file=%%f"
         set "video_file="
-        for /f "delims=" %%f in ('powershell -NoProfile -Command "$m=(Get-Item -LiteralPath '!_dl_marker!' -ErrorAction SilentlyContinue).LastWriteTime; Get-ChildItem -LiteralPath '%folder%' -Recurse -Filter *.mp4 -File ^| Where-Object {-not $m -or $_.LastWriteTime -ge $m} ^| Sort-Object LastWriteTime -Descending ^| Select-Object -First 1 -ExpandProperty FullName" 2^>nul') do set "video_file=%%f"
+        for /f "delims=" %%f in ('powershell -NoProfile -Command "$m=(Get-Item -LiteralPath '!_dl_marker!' -ErrorAction SilentlyContinue).LastWriteTime; Get-ChildItem -LiteralPath '!folder!' -Recurse -Filter *.mp4 -File ^| Where-Object {-not $m -or $_.LastWriteTime -ge $m} ^| Sort-Object LastWriteTime -Descending ^| Select-Object -First 1 -ExpandProperty FullName" 2^>nul') do set "video_file=%%f"
 
         if defined trans_file if defined video_file (
             echo Объединение аудиодорожек ^(режим: %translate_mode%^)...
@@ -379,11 +380,17 @@ if not "%translate_lang%"=="" (
                 ffmpeg -y -i "!video_file!" -i "!trans_file!" -filter_complex "[0:a]volume=0.3[a0];[1:a]volume=1.0[a1];[a0][a1]amix=inputs=2:duration=longest[aout]" -map 0:v -map "[aout]" -c:v copy -c:a aac -b:a 192k "!output_file!" 2>nul
             )
 
-            if exist "!output_file!" (
-                move /y "!output_file!" "!video_file!" >nul
-                echo Перевод добавлен успешно!
+            set "ff_rc=!errorlevel!"
+            if "!ff_rc!"=="0" (
+                if exist "!output_file!" (
+                    move /y "!output_file!" "!video_file!" >nul
+                    echo Перевод добавлен успешно!
+                ) else (
+                    echo ОШИБКА: не удалось объединить аудиодорожки — оригинал сохранён
+                )
             ) else (
-                echo ОШИБКА: не удалось объединить аудиодорожки
+                if exist "!output_file!" del /q "!output_file!"
+                echo ОШИБКА: мерж завершился с ошибкой — оригинал сохранён
             )
         )
 

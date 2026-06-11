@@ -139,25 +139,29 @@ else
 	# E5. Сборка цепочки видео-фильтров
 	vf_chain=""
 	af_chain=""
+	# rotation+GPU: CUDA-варианта фильтра поворота не существует. Если включён поворот
+	# и используется GPU — вся цепочка фильтров переводится на CPU (transpose+scale),
+	# иначе получилась бы несовместимая смесь CPU transpose + scale_cuda/scale_qsv.
+	if [ "$video_rotation_status" = "+" ] && [ "$use_hw_accel" = "yes" ]; then
+		scale_backend="cpu"
+	else
+		scale_backend="$hw_accel_type"
+	fi
 	# Поворот
 	if [ "$video_rotation_status" = "+" ]; then
-		if [ "$hw_accel_type" = "nvidia" ]; then
-			vf_chain="${vf_chain:+$vf_chain,}transpose_cuda=$video_rotation_value"
-		else
-			vf_chain="${vf_chain:+$vf_chain,}transpose=$video_rotation_value"
-		fi
+		vf_chain="${vf_chain:+$vf_chain,}transpose=$video_rotation_value"
 	fi
 	# D4. Масштабирование с сохранением пропорций
 	if [ -n "$set_video_resolution" ]; then
 		IFS='x' read -r res_w res_h <<< "$set_video_resolution"
 		if [ "$keep_aspect_ratio_status" = "+" ] && [ "$keep_aspect_ratio_value" = "yes" ]; then
-			case "$hw_accel_type" in
+			case "$scale_backend" in
 				nvidia) vf_chain="${vf_chain:+$vf_chain,}scale_cuda=${res_w}:${res_h}:force_original_aspect_ratio=decrease" ;;
 				intel)  vf_chain="${vf_chain:+$vf_chain,}scale_qsv=${res_w}:${res_h}:force_original_aspect_ratio=decrease" ;;
 				*)      vf_chain="${vf_chain:+$vf_chain,}scale=${res_w}:${res_h}:force_original_aspect_ratio=decrease,pad=${res_w}:${res_h}:(ow-iw)/2:(oh-ih)/2" ;;
 			esac
 		else
-			case "$hw_accel_type" in
+			case "$scale_backend" in
 				nvidia) vf_chain="${vf_chain:+$vf_chain,}scale_cuda=${res_w}:${res_h}" ;;
 				intel)  vf_chain="${vf_chain:+$vf_chain,}scale_qsv=${res_w}:${res_h}" ;;
 				*)      vf_chain="${vf_chain:+$vf_chain,}scale=${res_w}:${res_h}" ;;
@@ -169,15 +173,19 @@ else
 		pts_divisor="$playback_speed_value"
 		vf_chain="${vf_chain:+$vf_chain,}setpts=PTS/$pts_divisor"
 	fi
-	# Hwdownload если есть фильтры и GPU
+	# Hwdownload если есть фильтры и GPU. Per-element семантика (идентична PS1):
+	# скачиваем кадры в RAM, если есть хотя бы один CPU-фильтр (не scale_cuda/scale_qsv/setpts).
 	if [ "$use_hw_accel" = "yes" ] && [ -n "$vf_chain" ]; then
-		needs_download=$(echo "$vf_chain" | grep -v 'scale_cuda\|scale_qsv\|transpose_cuda\|setpts')
-		if [ -n "$needs_download" ]; then
-			if [ "$hw_accel_type" = "nvidia" ]; then
-				vf_chain="hwdownload,format=nv12,${vf_chain}"
-			elif [ "$hw_accel_type" = "intel" ]; then
-				vf_chain="hwdownload,format=nv12,${vf_chain}"
-			fi
+		needs_download="no"
+		IFS=',' read -ra _vf_elems <<< "$vf_chain"
+		for _el in "${_vf_elems[@]}"; do
+			case "$_el" in
+				scale_cuda*|scale_qsv*|setpts*) ;;
+				*) needs_download="yes" ;;
+			esac
+		done
+		if [ "$needs_download" = "yes" ]; then
+			vf_chain="hwdownload,format=nv12,${vf_chain}"
 		fi
 	fi
 	# Формирование codec-строки
@@ -203,7 +211,14 @@ else
 	if [ "$use_hw_accel" != "yes" ] && [ "$video_quality_status" = "+" ]; then
 		crf_args="-crf $video_quality_value"
 	fi
-	video_settings="-f $format_files_out $set_video_codec_arg $set_video_number_frames $gpu_args $crf_args"
+	# Имя muxer для -f: mkv/ts — это расширения файла, а не имена форматов ffmpeg.
+	# Расширение выходного файла не меняется, только аргумент -f.
+	case "$format_files_out" in
+		mkv) muxer_out="matroska" ;;
+		ts)  muxer_out="mpegts" ;;
+		*)   muxer_out="$format_files_out" ;;
+	esac
+	video_settings="-f $muxer_out $set_video_codec_arg $set_video_number_frames $gpu_args $crf_args"
 fi
 
 # D6. Скорость воспроизведения (аудио)
@@ -322,7 +337,7 @@ encode_file() {
 			return
 		fi
 		log_msg "INFO" "Извлечение аудио: $(basename "$full_path")"
-		"$ffmpeg" -hide_banner -strict -2 -i "$full_path" -vn -c:a copy "$out_audio" -y
+		"$ffmpeg" -nostdin -hide_banner -strict -2 -i "$full_path" -vn -c:a copy "$out_audio" -y
 		if [ $? -ne 0 ]; then
 			log_msg "FAIL" "$(basename "$full_path")"
 			rm -f "$out_audio"
@@ -341,7 +356,7 @@ encode_file() {
 		if [ ! -d "${folder_destination}${file_path}${file_name}" ]; then
 			mkdir -p "$folder_destination$file_path$file_name"
 			log_msg "INFO" "Извлечение кадров: $full_path"
-			"$ffmpeg" -hide_banner -strict -2 -i "$full_path" -r 1/1 "$folder_destination$file_path$file_name/${file_name}_%05d.png"
+			"$ffmpeg" -nostdin -hide_banner -strict -2 -i "$full_path" -r 1/1 "$folder_destination$file_path$file_name/${file_name}_%05d.png"
 		fi
 		return
 	fi
@@ -349,7 +364,7 @@ encode_file() {
 	local current_format_out="$format_files_out"
 	if [ -f "${folder_destination}${file_path}${file_name}.${current_format_out}" ]; then
 		# E3. Проверка валидности существующего файла
-		if "$ffmpeg" -v error -i "${folder_destination}${file_path}${file_name}.${current_format_out}" -f null - 2>/dev/null; then
+		if "$ffmpeg" -nostdin -v error -i "${folder_destination}${file_path}${file_name}.${current_format_out}" -f null - 2>/dev/null; then
 			echo "skip" > "$(mktemp "$results_dir/r_XXXXXXXX")"
 			return
 		else
@@ -413,7 +428,7 @@ encode_file() {
 		local -a split_points=()
 		if [ "$split_by_silence" = "yes" ]; then
 			echo -e "\n\nЖдите! Идёт поиск пауз в файле:\n$full_path\n"
-			local search_silence=$("$ffmpeg" -i "$full_path" -nostats -af "silencedetect=n=${silence_threshold}:d=${silence_duration}" -f null - 2>&1 | grep -i silence_)
+			local search_silence=$("$ffmpeg" -nostdin -i "$full_path" -nostats -af "silencedetect=n=${silence_threshold}:d=${silence_duration}" -f null - 2>&1 | grep -i silence_)
 			local silence_start_val=""
 			while IFS= read -r line; do
 				if [[ "$line" == *"silence_start"* ]]; then
@@ -498,9 +513,10 @@ encode_file() {
 					local sub_file="${folder_sources}${file_path}${file_name}.${ext}"
 					if [ -f "$sub_file" ]; then
 						if [ "$video_subtitles_value" = "burn" ]; then
-							# Экранирование пути для subtitles=: ' : — спецсимволы значения,
-							# [ ] ; — разделители graph-синтаксиса фильтров, % — timecode-плейсхолдер.
-							local sub_escaped=$(echo "$sub_file" | sed -e "s/'/\\\\'/g" -e 's/:/\\:/g' -e 's/\[/\\[/g' -e 's/\]/\\]/g' -e 's/;/\\;/g' -e 's/%/\\%/g')
+							# Экранирование пути для subtitles=: backslash → forward slash (Windows-пути),
+							# затем ' : — спецсимволы значения, [ ] ; — разделители graph-синтаксиса
+							# фильтров, % — timecode-плейсхолдер. Порядок: слэши первыми.
+							local sub_escaped=$(echo "$sub_file" | sed -e 's#\\#/#g' -e "s/'/\\\\'/g" -e 's/:/\\:/g' -e 's/\[/\\[/g' -e 's/\]/\\]/g' -e 's/;/\\;/g' -e 's/%/\\%/g')
 							# subtitles — CPU-фильтр: на GPU-кадрах (hwaccel_output_format cuda/qsv)
 							# ffmpeg падает: "Impossible to convert between the formats". Скачиваем
 							# кадры в системную память перед прожигом. Проверено на RTX 5060 Ti.
@@ -536,7 +552,7 @@ encode_file() {
 		# а не декодирует файл от 0 до start_coding_value (могут быть минуты для крупных видео).
 		if [ "$dry_run" = "yes" ]; then
 			local dry_seek=""; if [ "$b" -gt 0 ] 2>/dev/null; then dry_seek="-ss $b"; fi
-			echo "[DRY-RUN] $ffmpeg -hide_banner -strict -2 $hw_decode_args $dry_seek -i \"$full_path\" ${subtitles_params[*]} $convert_settings $thread_args ${vf_args[*]} ${af_args[*]} $current_set_length \"$out_file\""
+			echo "[DRY-RUN] $ffmpeg -nostdin -hide_banner -strict -2 $hw_decode_args $dry_seek -i \"$full_path\" ${subtitles_params[*]} $convert_settings $thread_args ${vf_args[*]} ${af_args[*]} $current_set_length \"$out_file\""
 		else
 			log_msg "INFO" "Кодирование: $(basename "$full_path") -> $(basename "$out_file")"
 			local encode_start=$(date +%s)
@@ -549,7 +565,7 @@ encode_file() {
 			local seek_arg=""
 			if [ "$b" -gt 0 ] 2>/dev/null; then seek_arg="-ss $b"; fi
 
-			"$ffmpeg" -hide_banner -strict -2 $hw_decode_args \
+			"$ffmpeg" -nostdin -hide_banner -strict -2 $hw_decode_args \
 				$seek_arg -i "$full_path" "${subtitles_params[@]}" \
 				$convert_settings $thread_args "${vf_args[@]}" "${af_args[@]}" \
 				$current_set_length \
@@ -652,7 +668,7 @@ else
 		export results_dir
 		find "$folder_sources" \( "${format_find_pred[@]}" \) -print0 | xargs -0 -P "$parallel_count" -I {} bash -c 'encode_file "$@"' _ {}
 	else
-		find "$folder_sources" \( "${format_find_pred[@]}" \) -print0 | while read -d $'\0' full_path; do
+		find "$folder_sources" \( "${format_find_pred[@]}" \) -print0 | while IFS= read -r -d '' full_path; do
 			encode_file "$full_path"
 		done
 	fi

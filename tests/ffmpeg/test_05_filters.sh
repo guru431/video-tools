@@ -110,5 +110,31 @@ else
     fail "комбо: transpose перед scale" "transpose раньше" "vf=$VF"
 fi
 
+suite "Фильтры: rotation + GPU → CPU fallback (Task 4)"
+# transpose_cuda не существует: при rotation+GPU вся цепочка должна быть на CPU
+OUT=$(run_script 'MOCK_FFMPEG_ENCODERS="V..... h264_nvenc"' 'hw_accel=":+:nvidia"' \
+    'video_rotation=":+:2"' 'video_resolution=":+:1280x720"' 'keep_aspect_ratio=":+:yes"')
+VF=$(getv "$OUT" vf_chain)
+assert_contains "rotation+nvidia → transpose=2"  "transpose=2"  "$VF"
+assert_not_contains "rotation+nvidia → нет transpose_cuda"  "transpose_cuda"  "$VF"
+assert_contains "rotation+nvidia → CPU scale"  "scale=1280:720:force_original_aspect_ratio"  "$VF"
+assert_not_contains "rotation+nvidia → нет scale_cuda"  "scale_cuda"  "$VF"
+assert_contains "rotation+nvidia → hwdownload в цепочке"  "hwdownload"  "$VF"
+
+suite "script.sh: фиксы Task 4 (анализ исходника)"
+src_sh="$(cat "$SCRIPT")"
+# Muxer map: mkv/ts — расширения файла, не имена форматов ffmpeg
+assert_contains "muxer map: matroska"  "matroska"  "$src_sh"
+assert_contains "muxer map: mpegts"  "mpegts"  "$src_sh"
+assert_contains "-f использует \$muxer_out"  '-f $muxer_out'  "$src_sh"
+# transpose_cuda удалён из всего скрипта
+assert_not_contains "нет несуществующего transpose_cuda"  "transpose_cuda"  "$src_sh"
+# -nostdin в главном вызове ffmpeg (иначе ffmpeg съедает NUL-список из stdin цикла)
+assert_contains "-nostdin в main ffmpeg"  '"$ffmpeg" -nostdin -hide_banner'  "$src_sh"
+# Цикл чтения файлов: read -r -d '' (без -r теряются backslash в путях)
+assert_not_contains "нет read без -r (буквальный \$'\\\\0')"  "while read -d \$'\\0' full_path"  "$src_sh"
+# Экранирование субтитров: backslash → forward slash перед остальным
+assert_contains "субтитры: backslash → slash"  's#\\#/#g'  "$src_sh"
+
 rm -rf "$EMPTY_DIR"
 summary

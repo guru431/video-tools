@@ -183,15 +183,21 @@ $formatPresets = @{
     )
     'avc1_https' = @(
         '140', '140+134', '140+135/134', '140+136/135/134',
-        '140+137/136/135/134', '140+138/137/136/135/134', '140+139/138/137/136/135/134'
+        '140+137/136/135/134',
+        '140+264/bestvideo[height<=1440][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=1440]',
+        '140+266/bestvideo[height<=2160][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=2160]'
     )
     'avc1_m3u8' = @(
         '234', '234+230', '234+231/230', '234+232/231/230',
-        '234+233/232/231/230', '234+234/233/232/231/230', '234+235/234/233/232/231/230'
+        '270+234/bestvideo[protocol*=m3u8][height<=1080]+bestaudio[protocol*=m3u8]/best[height<=1080]',
+        'bestvideo[protocol*=m3u8][height<=1440]+bestaudio[protocol*=m3u8]/best[height<=1440]',
+        'bestvideo[protocol*=m3u8][height<=2160]+bestaudio[protocol*=m3u8]/best[height<=2160]'
     )
     'avc1_https_60fps' = @(
-        '234', '234+296', '234+297/296', '234+298/297/296',
-        '234+299/298/297/296', '234+300/299/298/297/296', '234+301/300/299/298/297/296'
+        '140', '140+134/best[height<=360]', '140+135/best[height<=480]', '234+298/297/296',
+        '234+299/298/297/296',
+        '140+299/bestvideo[height<=1440][fps>=50]+bestaudio[ext=m4a]/best[height<=1440]',
+        '140+299/bestvideo[height<=2160][fps>=50]+bestaudio[ext=m4a]/best[height<=2160]'
     )
     'avc1_m3u8_60fps' = @(
         '234', '234+309', '234+310/309', '234+311/310/309',
@@ -202,8 +208,8 @@ $formatPresets = @{
         '234+699/698/697/696', '234+700/699/698/697/696', '234+701/700/699/698/697/696'
     )
     'old_combo' = @(
-        '140', '18', '20/18', '22/20/18',
-        '24/22/20/18', '26/24/22/20/18', '28/26/24/22/20/18'
+        '140', '18', '59/22/18', '22/18',
+        '37/22/18', '38/37/22/18', '38/37/22/18'
     )
 }
 PS1EOF
@@ -229,7 +235,7 @@ result=$(run_format "avc1_https" 3)
 assert_eq "avc1_https 720p → 140+136/…" "140+136/135/134"  "$result"
 
 result=$(run_format "avc1_https" 6)
-assert_eq "avc1_https 2160p"  "140+139/138/137/136/135/134"  "$result"
+assert_contains "avc1_https 2160p → 140+266 (не битый 140+139)"  "140+266"  "$result"
 
 result=$(run_format "avc1_m3u8" 3)
 assert_eq "avc1_m3u8 720p"   "234+232/231/230"  "$result"
@@ -247,10 +253,10 @@ result=$(run_format "old_combo" 0)
 assert_eq "old_combo audio → 140"  "140"       "$result"
 
 result=$(run_format "old_combo" 3)
-assert_eq "old_combo 720p → 22/…"  "22/20/18"  "$result"
+assert_eq "old_combo 720p → 22/18"  "22/18"  "$result"
 
 result=$(run_format "old_combo" 6)
-assert_eq "old_combo 2160p"        "28/26/24/22/20/18"  "$result"
+assert_eq "old_combo 2160p → 38/37/22/18"  "38/37/22/18"  "$result"
 
 # ══════════════════════════════════════════════════════════════
 suite "PS1 yt-dlp: cookie switch → command args"
@@ -317,5 +323,29 @@ assert_eq "proxy с auth"  "https://user:pass@proxy.example.com:8080"  "$result"
 
 result=$(run_proxy "socks5" "socks.example.com" "1080" "" "")
 assert_eq "socks5 proxy"  "socks5://socks.example.com:1080"  "$result"
+
+# ══════════════════════════════════════════════════════════════
+suite "Task 11: PS1 yt-dlp GUI фиксы (анализ исходника)"
+# ══════════════════════════════════════════════════════════════
+PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
+DLP_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v14.ps1"
+src="$(cat "$DLP_PS1")"
+
+assert_not_contains "нет массового Stop-Process yt-dlp"  'Get-Process -Name "yt-dlp"'  "$src"
+# Обнуление только при инициализации (1 раз), не в Stop-Download
+null_cnt=$(grep -cF '$global:downloadProcess = $null' "$DLP_PS1")
+assert_eq "downloadProcess обнуляется только в init (не в Stop-Download)"  "1"  "$null_cnt"
+assert_contains "guard перед WaitForExit"  'if ($proc) { $proc.WaitForExit(); $exitCode = $proc.ExitCode }'  "$src"
+assert_contains "merge: проверка LASTEXITCODE"  '$LASTEXITCODE -eq 0 -and (Test-Path $outputFile)'  "$src"
+assert_contains "vot stderr ReadToEndAsync (нет deadlock)"  "ReadToEndAsync()"  "$src"
+assert_contains "qualityMap audio=0"  '"audio" = 0'  "$src"
+assert_contains "translate исключает audio (qi>=1)"  '$qi -ge 1 -and $qi -le 6'  "$src"
+assert_contains "Read-Config inline # по \\s+"  "'\\s+#.*'"  "$src"
+assert_not_contains "нет --no-check-certificate"  "--no-check-certificate"  "$src"
+assert_contains "--download-archive из config"  "--download-archive"  "$src"
+assert_contains "mix громкости из config"  'volume=$cfg_transOrigVol'  "$src"
+assert_contains "Unregister-Event (утечка событий)"  "Unregister-Event"  "$src"
+assert_contains "btnRemoveUrl дизейблится при загрузке"  '$btnRemoveUrl.Enabled = $false'  "$src"
+assert_contains "base_dir от scriptDir"  'Combine($scriptDir, $cfg_baseDir)'  "$src"
 
 summary

@@ -27,7 +27,7 @@ if (Test-Path $configFile) {
             continue
         }
         if ($curSection -and $line -match '^([^=]+?)\s*=\s*(.*)') {
-            $val = $Matches[2] -replace '\s*#.*', ''
+            $val = $Matches[2] -replace '\s+#.*', ''
             $script:_configCache["${curSection}::$($Matches[1].Trim())"] = $val
         }
     }
@@ -64,6 +64,12 @@ $cfg_transEnabled  = Read-Config "enabled"         "translation" "false"
 $cfg_transLang     = Read-Config "target_lang"     "translation" "ru"
 $cfg_transVoice    = Read-Config "voice_style"     "translation" "live"
 $cfg_transMode     = Read-Config "mode"            "translation" "mix"
+# Паритет с .sh: архив загрузок и громкости/язык для AI-перевода — из config.
+$cfg_useArchive    = Read-Config "use_archive"        "download"    "true"
+$cfg_archiveFile   = Read-Config "archive_file"       "download"    "download_archive.txt"
+$cfg_transOrigVol  = Read-Config "original_volume"    "translation" "0.3"
+$cfg_transTransVol = Read-Config "translation_volume" "translation" "1.0"
+$cfg_transOrigLang = Read-Config "original_lang"      "translation" "en"
 # Trim: парсим "+/-VALUE" в (enabled, value)
 function Parse-TrimFlag {
     param([string]$Raw, [string]$DefaultVal)
@@ -76,7 +82,7 @@ $cfg_trim_start = Parse-TrimFlag (Read-Config "start" "trim" "-00:00:00") "00:00
 $cfg_trim_end   = Parse-TrimFlag (Read-Config "end"   "trim" "-00:01:00") "00:01:00"
 $cfg_forceKf    = Read-Config "force_keyframes" "trim" "false"
 
-$qualityMap = @{ "720" = 3; "360" = 1; "480" = 2; "1080" = 4; "1440" = 5; "2160" = 6 }
+$qualityMap = @{ "audio" = 0; "720" = 3; "360" = 1; "480" = 2; "1080" = 4; "1440" = 5; "2160" = 6 }
 $defaultQualityIdx = if ($qualityMap.ContainsKey($cfg_quality)) { $qualityMap[$cfg_quality] } else { 3 }
 
 $dlpLocal = Join-Path $scriptDir "yt-dlp.exe"
@@ -296,7 +302,7 @@ $xPos += 110
 $textBoxFolder = [System.Windows.Forms.TextBox]::new()
 $textBoxFolder.Location = [System.Drawing.Point]::new($xPos, $yPos)
 $textBoxFolder.Size     = [System.Drawing.Size]::new(556, 25)
-$textBoxFolder.Text     = [System.IO.Path]::Combine($PWD.Path, $cfg_baseDir)
+$textBoxFolder.Text     = [System.IO.Path]::Combine($scriptDir, $cfg_baseDir)
 $_fc.Add($textBoxFolder)
 
 $xPos += 564
@@ -733,11 +739,12 @@ $global:downloadProcess = $null
 function Stop-Download {
     param([bool]$silent = $false)
     $global:processRunning = $false
+    # НЕ обнуляем $global:downloadProcess и НЕ убиваем чужие yt-dlp — основной цикл
+    # должен дождаться нашего процесса (WaitForExit) без NullReferenceException, а
+    # массовый Stop-Process убивал бы параллельные загрузки других программ.
     if ($global:downloadProcess -ne $null -and -not $global:downloadProcess.HasExited) {
         try { $global:downloadProcess.Kill() } catch { }
     }
-    try { Get-Process -Name "yt-dlp" -ErrorAction SilentlyContinue | Stop-Process -Force } catch { }
-    $global:downloadProcess = $null
     if (-not $silent) {
         Append-Output "Загрузка остановлена" ([System.Drawing.Color]::Yellow)
     }
@@ -766,6 +773,9 @@ $btnStart.Add_Click({
 
     $btnStart.Enabled = $false
     $btnStop.Enabled  = $true
+    # Очередь нельзя менять во время загрузки — иначе индексы съезжают.
+    $btnRemoveUrl.Enabled = $false
+    $btnClearQueue.Enabled = $false
     $global:processRunning = $true
     $richOutput.Clear()
     $progressBar.Value = 0
@@ -842,7 +852,9 @@ $btnStart.Add_Click({
                 New-Item -ItemType Directory -Path $folder -Force | Out-Null
             }
 
-            $command = @("-c", "-i", "-w", "--no-check-certificate", "--windows-filenames", "--compat-options", "filename-sanitization")
+            $command = @("-c", "-i", "-w", "--windows-filenames", "--compat-options", "filename-sanitization")
+            # Архив загруженного (паритет с .sh): не перекачивать уже скачанное.
+            if ($cfg_useArchive -eq "true") { $command += "--download-archive", "`"$(Join-Path $folder $cfg_archiveFile)`"" }
             $denoExe = Join-Path $scriptDir "deno.exe"
             if (Test-Path $denoExe) { $command += "--js-runtimes", "`"deno:$denoExe`"" }
             $tpl = if ($currentUrl -match '[?&]list=') { $cfg_plTemplate } else { $cfg_template }
@@ -871,7 +883,13 @@ $btnStart.Add_Click({
                 1 { $command += "--cookies-from-browser", $comboCookieBrowser.SelectedItem }
                 2 {
                     if (-not [string]::IsNullOrWhiteSpace($textBoxCookieFile.Text)) {
-                        $command += "--cookies", "`"$($textBoxCookieFile.Text)`""
+                        $cookiePath = $textBoxCookieFile.Text
+                        if (-not [System.IO.Path]::IsPathRooted($cookiePath)) { $cookiePath = Join-Path $scriptDir $cookiePath }
+                        if (Test-Path $cookiePath) {
+                            $command += "--cookies", "`"$cookiePath`""
+                        } else {
+                            Append-Output "WARN: cookie-файл не найден: $cookiePath" ([System.Drawing.Color]::Yellow)
+                        }
                     }
                 }
             }
@@ -948,7 +966,7 @@ $btnStart.Add_Click({
             $psi.RedirectStandardError  = $true
             $psi.UseShellExecute        = $false
             $psi.CreateNoWindow         = $true
-            $psi.WorkingDirectory       = $PWD.Path
+            $psi.WorkingDirectory       = $scriptDir
             if ($proxyEnvVal) {
                 $psi.EnvironmentVariables["HTTP_PROXY"]  = $proxyEnvVal
                 $psi.EnvironmentVariables["HTTPS_PROXY"] = $proxyEnvVal
@@ -962,17 +980,17 @@ $btnStart.Add_Click({
             $stdoutQueue = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
             $stderrQueue = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
 
-            Register-ObjectEvent -InputObject $global:downloadProcess -EventName OutputDataReceived -Action {
+            $evtOut = Register-ObjectEvent -InputObject $global:downloadProcess -EventName OutputDataReceived -Action {
                 if (-not [string]::IsNullOrEmpty($EventArgs.Data)) {
                     $Event.MessageData.Enqueue($EventArgs.Data)
                 }
-            } -MessageData $stdoutQueue | Out-Null
+            } -MessageData $stdoutQueue
 
-            Register-ObjectEvent -InputObject $global:downloadProcess -EventName ErrorDataReceived -Action {
+            $evtErr = Register-ObjectEvent -InputObject $global:downloadProcess -EventName ErrorDataReceived -Action {
                 if (-not [string]::IsNullOrEmpty($EventArgs.Data)) {
                     $Event.MessageData.Enqueue($EventArgs.Data)
                 }
-            } -MessageData $stderrQueue | Out-Null
+            } -MessageData $stderrQueue
 
             $global:downloadProcess.Start() | Out-Null
             $global:downloadProcess.BeginOutputReadLine()
@@ -1005,7 +1023,10 @@ $btnStart.Add_Click({
 
             # WaitForExit() гарантирует, что все OutputDataReceived события успели
             # отработать (иначе последние строки yt-dlp могут остаться в очереди).
-            $global:downloadProcess.WaitForExit()
+            # Stop-Download мог убить процесс, но НЕ обнуляет ссылку — guard на всякий случай.
+            $proc = $global:downloadProcess
+            $exitCode = -1
+            if ($proc) { $proc.WaitForExit(); $exitCode = $proc.ExitCode }
             $line = $null
             while ($stdoutQueue.TryDequeue([ref]$line)) {
                 if (-not [string]::IsNullOrWhiteSpace($line)) {
@@ -1018,13 +1039,18 @@ $btnStart.Add_Click({
                 }
             }
 
-            if ($global:downloadProcess.HasExited -and $global:downloadProcess.ExitCode -eq 0) {
+            # Снимаем подписки OutputDataReceived/ErrorDataReceived (2 на URL) и Dispose,
+            # иначе они накапливаются между загрузками (утечка).
+            if ($evtOut) { Unregister-Event -SourceIdentifier $evtOut.Name -ErrorAction SilentlyContinue; $evtOut | Remove-Job -Force -ErrorAction SilentlyContinue }
+            if ($evtErr) { Unregister-Event -SourceIdentifier $evtErr.Name -ErrorAction SilentlyContinue; $evtErr | Remove-Job -Force -ErrorAction SilentlyContinue }
+
+            if ($exitCode -eq 0) {
                 $progressBar.Value = 100
                 $successCount++
                 Append-Output "Готово: [$platform]  $currentUrl" ([System.Drawing.Color]::LightGreen)
 
                 # AI-перевод если включён и не субтитры
-                if ($chkTranslate.Checked -and $qi -le 6) {
+                if ($chkTranslate.Checked -and $qi -ge 1 -and $qi -le 6) {
                     $lblStatus.Text = "AI-перевод $itemNum/$totalItems..."
                     Append-Output "Получение AI-перевода..." ([System.Drawing.Color]::Cyan)
 
@@ -1078,9 +1104,12 @@ $btnStart.Add_Click({
                             if ($_ -match '[ "\\]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
                         }) -join " "
                         $votProc = [System.Diagnostics.Process]::Start($votPsi)
-                        # Сливаем stdout/stderr, чтобы пайпы не блокировали процесс на больших объёмах.
+                        # Сливаем stdout/stderr асинхронно: последовательный ReadToEnd по обоим
+                        # пайпам приводит к deadlock, если дочерний процесс заполнит stderr-буфер,
+                        # пока мы блокируемся на stdout.
+                        $errTask = $votProc.StandardError.ReadToEndAsync()
                         $null = $votProc.StandardOutput.ReadToEnd()
-                        $null = $votProc.StandardError.ReadToEnd()
+                        $null = $errTask.Result
                         $votProc.WaitForExit()
 
                         $transFile = Get-ChildItem -Path $tempDir -Filter "*.mp3" -File | Select-Object -First 1
@@ -1096,26 +1125,30 @@ $btnStart.Add_Click({
                                     "dual_track" { @("-y", "-i", $latestVideo.FullName, "-i", $transFile.FullName,
                                                      "-map", "0:v", "-map", "0:a", "-map", "1:a",
                                                      "-c:v", "copy", "-c:a:0", "copy", "-c:a:1", "aac", "-b:a:1", "192k",
-                                                     "-metadata:s:a:0", "language=eng",
+                                                     "-metadata:s:a:0", "language=$cfg_transOrigLang",
                                                      "-metadata:s:a:0", "title=Original",
                                                      "-metadata:s:a:1", "language=$transLang",
                                                      "-metadata:s:a:1", "title=AI Translation",
                                                      "-disposition:a:0", "default", $outputFile) }
                                     "replace"    { @("-y", "-i", $latestVideo.FullName, "-i", $transFile.FullName,
                                                      "-map", "0:v", "-map", "1:a",
-                                                     "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", $outputFile) }
+                                                     "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+                                                     "-metadata:s:a:0", "language=$transLang", $outputFile) }
                                     "mix"        { @("-y", "-i", $latestVideo.FullName, "-i", $transFile.FullName,
-                                                     "-filter_complex", "[0:a]volume=0.3[a0];[1:a]volume=1.0[a1];[a0][a1]amix=inputs=2:duration=longest[aout]",
+                                                     "-filter_complex", "[0:a]volume=$cfg_transOrigVol[a0];[1:a]volume=$cfg_transTransVol[a1];[a0][a1]amix=inputs=2:duration=longest[aout]",
                                                      "-map", "0:v", "-map", "[aout]",
                                                      "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", $outputFile) }
                                 }
                                 & ffmpeg @ffArgs 2>&1 | Out-Null
-                                if (Test-Path $outputFile) {
+                                if ($LASTEXITCODE -eq 0 -and (Test-Path $outputFile)) {
                                     Move-Item -Path $outputFile -Destination $latestVideo.FullName -Force
                                     Append-Output "Перевод добавлен!" ([System.Drawing.Color]::LightGreen)
                                 } else {
-                                    Append-Output "Ошибка мержа аудиодорожек" ([System.Drawing.Color]::Red)
+                                    Remove-Item -Path $outputFile -Force -ErrorAction SilentlyContinue
+                                    Append-Output "Ошибка мержа аудиодорожек — оригинал сохранён" ([System.Drawing.Color]::Red)
                                 }
+                            } else {
+                                Append-Output "Видео .mp4 для мержа не найдено — перевод пропущен" ([System.Drawing.Color]::Yellow)
                             }
                         } else {
                             Append-Output "Не удалось получить перевод" ([System.Drawing.Color]::Yellow)
@@ -1151,6 +1184,8 @@ $btnStart.Add_Click({
     finally {
         $btnStart.Enabled      = $true
         $btnStop.Enabled       = $false
+        $btnRemoveUrl.Enabled  = $true
+        $btnClearQueue.Enabled = $true
         $global:processRunning = $false
     }
 })

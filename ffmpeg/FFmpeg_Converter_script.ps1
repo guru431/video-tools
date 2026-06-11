@@ -377,6 +377,9 @@ function Encode-File {
 	}
 
 	$current_format_out = $format_files_out
+	# copy_codecs сохраняет исходный контейнер — расширение выхода берём из источника
+	# ДО проверки существования, иначе ищем .mp4 вместо, например, .avi и не находим готовый файл.
+	if ($copy_codecs -eq "yes") { $current_format_out = $file.Extension.TrimStart('.') }
 	$out_base = "$folder_destination$file_path$file_name"
 
 	# E3. Проверка валидности существующего файла
@@ -417,7 +420,6 @@ function Encode-File {
 	$convert_args = @()
 	if ($copy_codecs -eq "yes") {
 		$convert_args = @("-c", "copy", "-map", "0")
-		$current_format_out = $file.Extension.TrimStart('.')
 	} else {
 		$convert_args += $video_settings_args
 		$convert_args += $set_video_bitrate_final
@@ -485,6 +487,12 @@ function Encode-File {
 		}
 	} else {
 		$num = @(0)
+	}
+
+	# Duration N/A или 0 → num пуст → файл молча пропускался. Обрабатываем целиком.
+	if ($num.Count -eq 0) {
+		$num = @(0)
+		Log-Msg "WARN" "Длительность неизвестна, разбиение пропущено: $($file.Name)"
 	}
 
 	if ($start_coding_status -eq "+") { $num = @($start_coding_value) }

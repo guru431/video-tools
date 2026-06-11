@@ -367,4 +367,15 @@ assert_contains "time: пробел→0 для октальной защиты" 
 # header: комментарий об ограничении ! в именах
 assert_contains "header: ограничение ! в именах"  "имена файлов с"  "$src_cmd"
 
+# ══════════════════════════════════════════════════════════════
+suite "script.cmd: фиксы Task 6 (copy_codecs ext, Duration N/A)"
+# ══════════════════════════════════════════════════════════════
+# copy_codecs: current_format_out из источника ДО validity-check (-f null)
+cc_ln=$(grep -nF 'set "current_format_out=!pf_x!"' "$SCRIPT_CMD" | head -1 | cut -d: -f1)
+chk_ln=$(grep -nF -- '-f null - >nul 2>&1' "$SCRIPT_CMD" | head -1 | cut -d: -f1)
+order="bad"; [ -n "$cc_ln" ] && [ -n "$chk_ln" ] && [ "$cc_ln" -lt "$chk_ln" ] && order="ok"
+assert_eq "copy_codecs ext вычислен ДО validity-check"  "ok"  "$order"
+# Duration N/A → num=0 fallback
+assert_contains "Duration N/A → num fallback"  'if not defined num set "num=0"'  "$src_cmd"
+
 summary

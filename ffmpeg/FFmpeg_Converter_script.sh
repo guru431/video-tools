@@ -362,6 +362,9 @@ encode_file() {
 	fi
 
 	local current_format_out="$format_files_out"
+	# copy_codecs сохраняет исходный контейнер — расширение выхода берём из источника
+	# ДО проверки существования, иначе ищем .mp4 вместо, например, .avi и не находим готовый файл.
+	if [ "$copy_codecs" = "yes" ]; then current_format_out="${full_path##*.}"; fi
 	if [ -f "${folder_destination}${file_path}${file_name}.${current_format_out}" ]; then
 		# E3. Проверка валидности существующего файла
 		if "$ffmpeg" -nostdin -v error -i "${folder_destination}${file_path}${file_name}.${current_format_out}" -f null - 2>/dev/null; then
@@ -397,7 +400,6 @@ encode_file() {
 	local convert_settings
 	if [ "$copy_codecs" = "yes" ]; then
 		convert_settings="-c copy -map 0"
-		current_format_out="${full_path##*.}"
 	else
 		convert_settings="$video_settings $set_video_bitrate_final $audio_settings"
 	fi
@@ -480,6 +482,12 @@ encode_file() {
 		done
 	else
 		local -a num=(0)
+	fi
+
+	# Duration N/A или 0 → num пуст → файл молча пропускался. Обрабатываем целиком.
+	if [ ${#num[@]} -eq 0 ]; then
+		num=(0)
+		log_msg "WARN" "Длительность неизвестна, разбиение пропущено: $(basename "$full_path")"
 	fi
 
 	if [ "$start_coding_status" = "+" ]; then num=($start_coding_value); fi

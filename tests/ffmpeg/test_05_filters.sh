@@ -136,5 +136,14 @@ assert_not_contains "нет read без -r (буквальный \$'\\\\0')"  "w
 # Экранирование субтитров: backslash → forward slash перед остальным
 assert_contains "субтитры: backslash → slash"  's#\\#/#g'  "$src_sh"
 
+suite "script.sh: фиксы Task 6 (copy_codecs ext, Duration N/A)"
+# copy_codecs: current_format_out из источника ДО existence-check
+cc_ln=$(grep -nF 'current_format_out="${full_path##*.}"' "$SCRIPT" | head -1 | cut -d: -f1)
+chk_ln=$(grep -nF -- '-f null - 2>/dev/null' "$SCRIPT" | head -1 | cut -d: -f1)
+order="bad"; [ -n "$cc_ln" ] && [ -n "$chk_ln" ] && [ "$cc_ln" -lt "$chk_ln" ] && order="ok"
+assert_eq "copy_codecs ext вычислен ДО existence-check"  "ok"  "$order"
+# Duration N/A → num=(0) fallback
+assert_contains "Duration N/A → num fallback"  'if [ ${#num[@]} -eq 0 ]; then'  "$src_sh"
+
 rm -rf "$EMPTY_DIR"
 summary

@@ -328,4 +328,15 @@ assert_contains "-f использует \$muxer_out"  '@("-f", $muxer_out)'  "$
 # (г) transpose_cuda не существует — удалён из всего скрипта
 assert_not_contains "нет несуществующего transpose_cuda"  'transpose_cuda'  "$src_ps1"
 
+# ══════════════════════════════════════════════════════════════
+suite "PS1 script.ps1: фиксы Task 6 (copy_codecs ext, Duration N/A)"
+# ══════════════════════════════════════════════════════════════
+# copy_codecs: current_format_out из источника ДО existence-check (Test-Path)
+cc_ln=$(grep -nF '$current_format_out = $file.Extension.TrimStart' "$SCRIPT_PS1" | head -1 | cut -d: -f1)
+chk_ln=$(grep -nF 'Test-Path "$out_base.$current_format_out"' "$SCRIPT_PS1" | head -1 | cut -d: -f1)
+order="bad"; [ -n "$cc_ln" ] && [ -n "$chk_ln" ] && [ "$cc_ln" -lt "$chk_ln" ] && order="ok"
+assert_eq "copy_codecs ext вычислен ДО existence-check"  "ok"  "$order"
+# Duration N/A → $num = @(0) fallback
+assert_contains "Duration N/A → num fallback"  'if ($num.Count -eq 0) {'  "$src_ps1"
+
 summary

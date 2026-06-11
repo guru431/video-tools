@@ -1,4 +1,4 @@
-$src      = Join-Path $PSScriptRoot 'Downloading_from_YouTube_v14.ps1'
+﻿$src      = Join-Path $PSScriptRoot 'Downloading_from_YouTube_v14.ps1'
 $out      = Join-Path $PSScriptRoot '_VideoDownloader_v14.exe'
 $ps2exePs = Join-Path $PSScriptRoot '..\tools\ps2exe.ps1'
 $ps2exeSha = 'FAEA495151AF69D2AE78783D0071186F98DC568D7B7478F639DA0E74ECF01763'  # PS2EXE @ MScholtes/PS2EXE d32d5ce
@@ -18,15 +18,25 @@ if ($ps2exeActual -ne $ps2exeSha) {
 Write-Host "Loading ps2exe function..."
 . $ps2exePs
 
+# Удаляем прежний EXE ДО сборки: иначе при падении Invoke-ps2exe остался бы старый
+# файл и Test-Path ниже дал бы ложный SUCCESS.
+Remove-Item $out -Force -ErrorAction SilentlyContinue
+
 Write-Host "Running Invoke-ps2exe..."
-Invoke-ps2exe `
-    -inputFile  $src `
-    -outputFile $out `
-    -noConsole `
-    -STA `
-    -x64 `
-    -title   "Video Downloader (yt-dlp) v14" `
-    -version "14.0.0.0"
+$ErrorActionPreference = 'Stop'
+try {
+    Invoke-ps2exe `
+        -inputFile  $src `
+        -outputFile $out `
+        -noConsole `
+        -STA `
+        -x64 `
+        -title   "Video Downloader (yt-dlp) v14" `
+        -version "14.0.0.0"
+} catch {
+    Write-Host "FAIL: $_"
+    exit 1
+}
 
 if (Test-Path $out) {
     $size = [math]::Round((Get-Item $out).Length / 1KB)

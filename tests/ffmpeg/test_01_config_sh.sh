@@ -29,6 +29,10 @@ read_config() {
     local section="$2"
     local default="${3:-}"
     if [ ! -f "$CONFIG_FILE" ]; then echo "$default"; return; fi
+    # Регистронезависимо (паритет с PS1/GUI); инлайн-комментарий только по " #".
+    local result="$default"
+    local saved_ncm; saved_ncm=$(shopt -p nocasematch)
+    shopt -s nocasematch
     local in_section=false
     while IFS= read -r line || [ -n "$line" ]; do
         # trim без sed (быстро)
@@ -36,17 +40,18 @@ read_config() {
         line="${line%"${line##*[![:space:]]}"}"
         [[ -z "$line" || "$line" == \#* ]] && continue
         if [[ "$line" =~ ^\[([^]]+)\]$ ]]; then
-            [[ "${BASH_REMATCH[1]}" = "$section" ]] && in_section=true || in_section=false
+            [[ "${BASH_REMATCH[1]}" == "$section" ]] && in_section=true || in_section=false
             continue
         fi
         if $in_section && [[ "$line" =~ ^${key}[[:space:]]*=[[:space:]]*(.*) ]]; then
-            local value="${BASH_REMATCH[1]%%#*}"
-            value="${value%"${value##*[![:space:]]}"}"
-            echo "$value"
-            return
+            local value="${BASH_REMATCH[1]}"
+            if [[ "$value" =~ ^(.*[^[:space:]])[[:space:]]+#.*$ ]]; then value="${BASH_REMATCH[1]}"; fi
+            result="$value"
+            break
         fi
     done < "$CONFIG_FILE"
-    echo "$default"
+    eval "$saved_ncm"
+    echo "$result"
 }
 
 # ── Единый тестовый config.ini на все тесты ──────────────────────────────────
@@ -151,6 +156,32 @@ assert_eq "audio codec → :+:libmp3lame"  ":+:libmp3lame"  "$(to_flag "$(read_c
 assert_eq "video codec → :+:libx265"     ":+:libx265"     "$(to_flag "$(read_config 'codec' 'video' '+libx264')" ':+:libx264')"
 assert_eq "parallel (-) → :-:2"          ":-:2"           "$(to_flag "$(read_config 'parallel_files' 'performance' '-2')" ':-:2')"
 assert_eq "hw_accel (+) → :+:nvidia"     ":+:nvidia"      "$(to_flag "$(read_config 'hw_accel' 'gpu' '-nvidia')" ':-:nvidia')"
+
+# ══════════════════════════════════════════════════════════════
+suite "read_config: Task 8 — инлайн # и регистр ключей"
+# ══════════════════════════════════════════════════════════════
+cat > "$CONFIG_FILE" << 'EOCONFIG'
+[audio]
+Codec = +aac
+[other]
+log_file = my#file.log
+note = value # это комментарий
+EOCONFIG
+# Капитализация ключа (Codec) — регистронезависимо
+assert_eq "Codec (капитал) распознан"  "+aac"  "$(read_config 'codec' 'audio' '')"
+# # без пробела слева — часть значения, не комментарий
+assert_eq "my#file.log сохранён целиком"  "my#file.log"  "$(read_config 'log_file' 'other' '')"
+# ' #' (пробел+решётка) — инлайн-комментарий срезан
+assert_eq "инлайн ' #' срезан"  "value"  "$(read_config 'note' 'other' '')"
+
+# ══════════════════════════════════════════════════════════════
+suite "run_v14.sh: Task 8 (анализ исходника)"
+# ══════════════════════════════════════════════════════════════
+RUN_SH="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v14.sh"
+src_run="$(cat "$RUN_SH")"
+assert_contains "nocasematch для регистра ключей"  "shopt -s nocasematch"  "$src_run"
+assert_contains "backslash → slash в путях"  '${folder_sources//\\//}'  "$src_run"
+assert_contains "Windows-диск как абсолютный путь"  '/*|[A-Za-z]:*)'  "$src_run"
 
 # ── Cleanup ───────────────────────────────────────────────────
 rm -f "$MY_DIR/config.ini"

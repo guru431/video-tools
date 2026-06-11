@@ -74,12 +74,11 @@ for /f "usebackq tokens=* delims=" %%L in ("%CONFIG_FILE%") do (
 				:: Убрать пробелы из ключа (ведущие + хвостовые)
 				for /f "tokens=* delims= " %%T in ("!_key!") do set "_key=%%T"
 				call :trim_key
-				:: Убрать пробелы из значения и инлайн-комментарии
-				for /f "tokens=1 delims=#" %%V in ("%%~L") do (
-					for /f "tokens=* delims= " %%T in ("%%V") do set "_val=%%T"
-					:: Убрать trailing spaces из значения
-					call :trim_val
-				)
+				rem Инлайн-комментарий режем только по " #" (см. :strip_inline_comment).
+				call :strip_inline_comment
+				:: Убрать ведущие пробелы и trailing
+				for /f "tokens=* delims= " %%T in ("!_val!") do set "_val=%%T"
+				call :trim_val
 				:: Присвоить переменную по секции+ключу
 				call :assign_var
 			)
@@ -100,65 +99,74 @@ if not defined _key exit /b
 if "!_key:~-1!"==" " (set "_key=!_key:~0,-1!" & goto :trim_key)
 exit /b
 
+:strip_inline_comment
+:: Режем инлайн-комментарий только по " #" (пробел+решётка), не по любому #,
+:: иначе значения вида my#file.log теряют хвост. Пайп-маркер |CUT| безопасен здесь
+:: (call-контекст, не for-блок), где | внутри кавычек не трактуется как пайп.
+if not defined _val exit /b
+set "_val_nc=!_val: #=|CUT|!"
+for /f "tokens=1 delims=|" %%V in ("!_val_nc!") do set "_val=%%V"
+exit /b
+
 :assign_var
 :: Вспомогательная: конвертировать +val/-val в :+:val/:-:val
 :: Простые значения (yes/no/числа/пути) — напрямую
-if "!_section!"=="folders" (
-	if "!_key!"=="source" set "folder_sources=!_val!"
-	if "!_key!"=="destination" set "folder_destination=!_val!"
+if /i "!_section!"=="folders" (
+	if /i "!_key!"=="source" set "folder_sources=!_val!"
+	if /i "!_key!"=="destination" set "folder_destination=!_val!"
 )
-if "!_section!"=="options" (
-	if "!_key!"=="audio_only" set "audio_only=!_val!"
-	if "!_key!"=="merge_files" set "merge_files=!_val!"
-	if "!_key!"=="create_frame" set "create_frame=!_val!"
-	if "!_key!"=="copy_codecs" set "copy_codecs=!_val!"
-	if "!_key!"=="extract_audio_copy" set "extract_audio_copy=!_val!"
+if /i "!_section!"=="options" (
+	if /i "!_key!"=="audio_only" set "audio_only=!_val!"
+	if /i "!_key!"=="merge_files" set "merge_files=!_val!"
+	if /i "!_key!"=="create_frame" set "create_frame=!_val!"
+	if /i "!_key!"=="copy_codecs" set "copy_codecs=!_val!"
+	if /i "!_key!"=="extract_audio_copy" set "extract_audio_copy=!_val!"
 )
-if "!_section!"=="audio" (
-	if "!_key!"=="codec" call :to_flag "!_val!" "audio_codec"
-	if "!_key!"=="channels" call :to_flag "!_val!" "audio_number_channels"
-	if "!_key!"=="bitrate" call :to_flag "!_val!" "audio_bitrate"
-	if "!_key!"=="sampling_rate" call :to_flag "!_val!" "audio_sampling_rate"
-	if "!_key!"=="normalize" call :to_flag "!_val!" "audio_normalize"
+if /i "!_section!"=="audio" (
+	if /i "!_key!"=="codec" call :to_flag "!_val!" "audio_codec"
+	if /i "!_key!"=="channels" call :to_flag "!_val!" "audio_number_channels"
+	if /i "!_key!"=="bitrate" call :to_flag "!_val!" "audio_bitrate"
+	if /i "!_key!"=="sampling_rate" call :to_flag "!_val!" "audio_sampling_rate"
+	if /i "!_key!"=="normalize" call :to_flag "!_val!" "audio_normalize"
 )
-if "!_section!"=="video" (
-	if "!_key!"=="codec" call :to_flag "!_val!" "video_codec"
-	if "!_key!"=="resolution" call :to_flag "!_val!" "video_resolution"
-	if "!_key!"=="bitrate" call :to_flag "!_val!" "video_bitrate"
-	if "!_key!"=="framerate" call :to_flag "!_val!" "video_number_frames"
-	if "!_key!"=="rotation" call :to_flag "!_val!" "video_rotation"
-	if "!_key!"=="subtitles" call :to_flag "!_val!" "video_subtitles"
-	if "!_key!"=="quality" call :to_flag "!_val!" "video_quality"
-	if "!_key!"=="keep_aspect_ratio" call :to_flag "!_val!" "keep_aspect_ratio"
-	if "!_key!"=="container" call :to_flag "!_val!" "output_container"
+if /i "!_section!"=="video" (
+	if /i "!_key!"=="codec" call :to_flag "!_val!" "video_codec"
+	if /i "!_key!"=="resolution" call :to_flag "!_val!" "video_resolution"
+	if /i "!_key!"=="bitrate" call :to_flag "!_val!" "video_bitrate"
+	if /i "!_key!"=="framerate" call :to_flag "!_val!" "video_number_frames"
+	if /i "!_key!"=="rotation" call :to_flag "!_val!" "video_rotation"
+	if /i "!_key!"=="subtitles" call :to_flag "!_val!" "video_subtitles"
+	if /i "!_key!"=="quality" call :to_flag "!_val!" "video_quality"
+	if /i "!_key!"=="keep_aspect_ratio" call :to_flag "!_val!" "keep_aspect_ratio"
+	if /i "!_key!"=="container" call :to_flag "!_val!" "output_container"
 )
-if "!_section!"=="performance" (
-	if "!_key!"=="threads" call :to_flag "!_val!" "multithreads"
-	if "!_key!"=="parallel_files" call :to_flag "!_val!" "parallel_files"
+if /i "!_section!"=="performance" (
+	if /i "!_key!"=="threads" call :to_flag "!_val!" "multithreads"
+	if /i "!_key!"=="parallel_files" call :to_flag "!_val!" "parallel_files"
 )
-if "!_section!"=="gpu" (
-	if "!_key!"=="hw_accel" call :to_flag "!_val!" "hw_accel"
-	if "!_key!"=="preset" call :to_flag "!_val!" "gpu_preset"
-	if "!_key!"=="tune" call :to_flag "!_val!" "gpu_tune"
-	if "!_key!"=="rc" call :to_flag "!_val!" "gpu_rc"
+if /i "!_section!"=="gpu" (
+	if /i "!_key!"=="hw_accel" call :to_flag "!_val!" "hw_accel"
+	if /i "!_key!"=="preset" call :to_flag "!_val!" "gpu_preset"
+	if /i "!_key!"=="tune" call :to_flag "!_val!" "gpu_tune"
+	if /i "!_key!"=="rc" call :to_flag "!_val!" "gpu_rc"
 )
-if "!_section!"=="speed" (
-	if "!_key!"=="playback_speed" call :to_flag "!_val!" "playback_speed"
+if /i "!_section!"=="speed" (
+	if /i "!_key!"=="playback_speed" call :to_flag "!_val!" "playback_speed"
 )
-if "!_section!"=="split" (
-	if "!_key!"=="start" call :to_flag "!_val!" "start_coding"
-	if "!_key!"=="length" call :to_flag "!_val!" "length_coding"
-	if "!_key!"=="split_by_silence" set "split_by_silence=!_val!"
-	if "!_key!"=="silence_duration" set "silence_duration=!_val!"
-	if "!_key!"=="silence_threshold" set "silence_threshold=!_val!"
+if /i "!_section!"=="split" (
+	if /i "!_key!"=="start" call :to_flag "!_val!" "start_coding"
+	if /i "!_key!"=="length" call :to_flag "!_val!" "length_coding"
+	if /i "!_key!"=="split_by_silence" set "split_by_silence=!_val!"
+	if /i "!_key!"=="silence_duration" set "silence_duration=!_val!"
+	if /i "!_key!"=="silence_threshold" set "silence_threshold=!_val!"
 )
-if "!_section!"=="other" (
-	if "!_key!"=="save_old_extension" set "save_old_extension=!_val!"
-	if "!_key!"=="format_files_in" set "format_files_in=!_val!"
-	if "!_key!"=="subtitles_style" set "subtitles_style=!_val!"
-	if "!_key!"=="dry_run" set "dry_run=!_val!"
-	if "!_key!"=="enable_log" set "enable_log=!_val!"
-	if "!_key!"=="log_file" set "log_file=!_val!"
+if /i "!_section!"=="other" (
+	if /i "!_key!"=="save_old_extension" set "save_old_extension=!_val!"
+	if /i "!_key!"=="format_files_in" set "format_files_in=!_val!"
+	if /i "!_key!"=="subtitles_style" set "subtitles_style=!_val!"
+	if /i "!_key!"=="dry_run" set "dry_run=!_val!"
+	if /i "!_key!"=="enable_log" set "enable_log=!_val!"
+	if /i "!_key!"=="log_file" set "log_file=!_val!"
 )
 exit /b
 

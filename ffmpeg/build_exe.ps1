@@ -1,4 +1,4 @@
-$src       = Join-Path $PSScriptRoot 'FFmpeg_Converter_run_win_v14.ps1'
+﻿$src       = Join-Path $PSScriptRoot 'FFmpeg_Converter_run_win_v14.ps1'
 $scriptPs1 = Join-Path $PSScriptRoot 'FFmpeg_Converter_script.ps1'
 $out       = Join-Path $PSScriptRoot '_VideoConverter_v14.exe'
 $ps2exePs  = Join-Path $PSScriptRoot '..\tools\ps2exe.ps1'
@@ -39,15 +39,26 @@ Write-Host "Combined file: $([math]::Round((Get-Item $tmpSrc).Length / 1KB)) KB"
 Write-Host "Loading ps2exe function..."
 . $ps2exePs
 
+# Удаляем прежний EXE ДО сборки: иначе при падении Invoke-ps2exe остался бы старый
+# файл и Test-Path ниже дал бы ложный SUCCESS.
+Remove-Item $out -Force -ErrorAction SilentlyContinue
+
 Write-Host "Running Invoke-ps2exe..."
-Invoke-ps2exe `
-    -inputFile  $tmpSrc `
-    -outputFile $out `
-    -noConsole `
-    -STA `
-    -x64 `
-    -title   "Video Converter (ffmpeg) v14" `
-    -version "14.0.0.0"
+$ErrorActionPreference = 'Stop'
+try {
+    Invoke-ps2exe `
+        -inputFile  $tmpSrc `
+        -outputFile $out `
+        -noConsole `
+        -STA `
+        -x64 `
+        -title   "Video Converter (ffmpeg) v14" `
+        -version "14.0.0.0"
+} catch {
+    Write-Host "FAIL: $_"
+    Remove-Item $tmpSrc -Force -ErrorAction SilentlyContinue
+    exit 1
+}
 
 Remove-Item $tmpSrc -Force -ErrorAction SilentlyContinue
 

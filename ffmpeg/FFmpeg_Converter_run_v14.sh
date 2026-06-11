@@ -27,6 +27,10 @@ read_config() {
 		return
 	fi
 
+	# Регистронезависимое сравнение ключей/секций — паритет с PS1 (-match/-eq) и GUI.
+	local result="$default"
+	local saved_ncm; saved_ncm=$(shopt -p nocasematch)
+	shopt -s nocasematch
 	local in_section=false
 	while IFS= read -r line || [ -n "$line" ]; do
 		# Trim через bash parameter expansion (см. yt-dlp/Downloading_from_YouTube_v14.sh
@@ -37,7 +41,7 @@ read_config() {
 		[[ -z "$line" || "$line" == \#* ]] && continue
 
 		if [[ "$line" =~ ^\[([^]]+)\]$ ]]; then
-			if [ "${BASH_REMATCH[1]}" = "$section" ]; then
+			if [[ "${BASH_REMATCH[1]}" == "$section" ]]; then
 				in_section=true
 			else
 				in_section=false
@@ -50,12 +54,13 @@ read_config() {
 			if [[ "$value" =~ ^(.*[^[:space:]])[[:space:]]+#.*$ ]]; then
 				value="${BASH_REMATCH[1]}"
 			fi
-			echo "$value"
-			return
+			result="$value"
+			break
 		fi
 	done < "$CONFIG_FILE"
 
-	echo "$default"
+	eval "$saved_ncm"
+	echo "$result"
 }
 
 # Конвертирует формат config.ini (+value / -value) в формат скрипта (:+:value / :-:value)
@@ -75,8 +80,18 @@ to_flag() {
 # --- Загрузка настроек из config.ini ---
 folder_sources="$(read_config "source" "folders" "_video_/0")"
 folder_destination="$(read_config "destination" "folders" "_video_/1")"
-[[ "$folder_sources" != /* ]]     && folder_sources="$SCRIPT_DIR/$folder_sources"
-[[ "$folder_destination" != /* ]] && folder_destination="$SCRIPT_DIR/$folder_destination"
+# Нормализуем Windows-разделители (стоковый config содержит "_video_\0").
+folder_sources="${folder_sources//\\//}"
+folder_destination="${folder_destination//\\//}"
+# Абсолютным считаем POSIX-путь (/...) и Windows-диск (C:...); иначе резолвим от папки скрипта.
+case "$folder_sources" in
+	/*|[A-Za-z]:*) ;;
+	*) folder_sources="$SCRIPT_DIR/$folder_sources" ;;
+esac
+case "$folder_destination" in
+	/*|[A-Za-z]:*) ;;
+	*) folder_destination="$SCRIPT_DIR/$folder_destination" ;;
+esac
 
 audio_only="$(read_config "audio_only" "options" "no")"
 merge_files="$(read_config "merge_files" "options" "no")"

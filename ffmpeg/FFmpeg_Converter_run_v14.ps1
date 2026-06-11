@@ -20,7 +20,7 @@ function Read-Config {
 			continue
 		}
 		if ($inSection -and $line -match "^${Key}\s*=\s*(.*)") {
-			$val = $Matches[1] -replace '\s*#.*', ''
+			$val = $Matches[1] -replace '\s+#.*', ''
 			return $val.Trim()
 		}
 	}

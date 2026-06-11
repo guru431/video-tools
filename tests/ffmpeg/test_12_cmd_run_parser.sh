@@ -38,8 +38,8 @@ cat > "$TMP_DIR/config.ini" << 'INIEOF'
 [folders]
 source = C:\abs\src
 
-[video]
-quality = +23     
+[VIDEO]
+Quality = +23     
 
 [gpu]
 hw_accel = +intel
@@ -49,6 +49,7 @@ codec =
 
 [other]
 subtitles_style = FontSize=20,PrimaryColour=&HFFFFFF&
+log_file = my#file.log
 INIEOF
 # CRLF для cmd
 sed -i 's/$/\r/' "$TMP_DIR/config.ini"
@@ -70,9 +71,14 @@ assert_not_contains "нет parse error 'was unexpected at this time'" "was unex
 assert_eq "[gpu] hw_accel = +intel распарсен (не дефолт :-:intel)" \
     "hw_accel=:+:intel" "$(get_line hw_accel)"
 
-# (г) 5 хвостовых пробелов значения полностью срезаны
-assert_eq "[video] quality = +23 + 5 trailing spaces -> video_quality=:+:23" \
+# (г) 5 хвостовых пробелов значения полностью срезаны + регистр секции/ключа
+# ([VIDEO]/Quality в верхнем регистре — /i делает совпадение регистронезависимым)
+assert_eq "[VIDEO] Quality (капитал) + 5 trailing spaces -> video_quality=:+:23" \
     "video_quality=:+:23" "$(get_line video_quality)"
+
+# Task 8: инлайн # без пробела слева — часть значения (my#file.log целиком)
+assert_eq "log_file=my#file.log сохранён целиком (# без пробела)" \
+    "log_file=my#file.log" "$(get_line log_file)"
 
 # (д) пустое значение codec= -> остался дефолт :+:aac, не ':+:'
 assert_eq "[audio] codec= (пусто) -> остался дефолт audio_codec=:+:aac" \

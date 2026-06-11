@@ -316,4 +316,55 @@ assert_contains "atempo 0.25 → каскад 0.5x0.5"  "atempo=0.5,atempo=0.5" 
 result=$(atempo_cmd "1.5")
 assert_contains "atempo 1.5 (in-range) → atempo=1.5"  "af=atempo=1.5"  "$result"
 
+# ══════════════════════════════════════════════════════════════
+suite "CMD: keep_aspect_ratio else-binding (Task 5)"
+# ══════════════════════════════════════════════════════════════
+# При keep_aspect_ratio со статусом "-" масштабирование НЕ должно отключаться целиком
+result=$(run_cmd '
+set "video_resolution_status=+" & set "res_w=1280" & set "res_h=720"
+set "hw_accel_type=" & set "use_hw_accel=no"
+set "keep_aspect_ratio_status=-" & set "keep_aspect_ratio_value=yes"
+set "vf_chain="
+set "scale_filter=scale"
+set "keep_ar=no"
+if "!keep_aspect_ratio_status!"=="+" if "!keep_aspect_ratio_value!"=="yes" set "keep_ar=yes"
+if "!keep_ar!"=="yes" (
+	if defined vf_chain (set "vf_chain=!vf_chain!,scale=!res_w!:!res_h!:force_original_aspect_ratio=decrease") else (set "vf_chain=scale=!res_w!:!res_h!:force_original_aspect_ratio=decrease")
+) else (
+	if defined vf_chain (set "vf_chain=!vf_chain!,scale=!res_w!:!res_h!") else (set "vf_chain=scale=!res_w!:!res_h!")
+)
+echo vf=!vf_chain!
+')
+assert_contains "keep_ar=- → scale всё равно применён"  "scale=1280:720"  "$result"
+assert_not_contains "keep_ar=- → без force_original_aspect_ratio"  "force_original_aspect_ratio"  "$result"
+
+# ══════════════════════════════════════════════════════════════
+suite "script.cmd: фиксы Task 5 (анализ исходника)"
+# ══════════════════════════════════════════════════════════════
+SCRIPT_CMD="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.cmd"
+src_cmd="$(cat "$SCRIPT_CMD")"
+
+# keep_ar предвычисляется (нет else-binding бага)
+assert_contains "keep_ar предвычислен"  'set "keep_ar=no"'  "$src_cmd"
+# part suffix: без ведущего пробела (if defined num)
+assert_contains "num без ведущего пробела"  'if defined num (set "num=!num! !part_start!") else (set "num=!part_start!")'  "$src_cmd"
+# transpose_cuda удалён
+assert_not_contains "нет transpose_cuda"  "transpose_cuda"  "$src_cmd"
+# muxer map
+assert_contains "muxer map matroska"  "matroska"  "$src_cmd"
+assert_contains "muxer map mpegts"  "mpegts"  "$src_cmd"
+assert_contains "-f использует muxer_out"  '-f !muxer_out!'  "$src_cmd"
+# split_by_silence fallback с предупреждением
+assert_contains "split_by_silence fallback warn"  "split_by_silence недоступен"  "$src_cmd"
+# validity-check существующего выхода
+assert_contains "validity-check -f null"  '-f null - >nul 2>&1'  "$src_cmd"
+# extract_audio: первая строка Audio (if not defined audio_line)
+assert_contains "extract_audio первая строка"  'if not defined audio_line set "audio_line=%%c"'  "$src_cmd"
+# субтитры: backslash → forward slash (нет ошибочного \'\:)
+assert_not_contains "нет ошибочного экранирования \\'\\:"  ":=\\'\\:"  "$src_cmd"
+# octal-защита %time% (replace space->0)
+assert_contains "time: пробел→0 для октальной защиты"  'start_hh: =0'  "$src_cmd"
+# header: комментарий об ограничении ! в именах
+assert_contains "header: ограничение ! в именах"  "имена файлов с"  "$src_cmd"
+
 summary

@@ -42,24 +42,24 @@ run_ps1_vf() {
 \$_, \$playback_speed_status,      \$playback_speed_value      = \$playback_speed -split ':'
 \$set_video_resolution = if (\$video_resolution_status -eq '+') { \$video_resolution_value } else { '' }
 
+# rotation+GPU: transpose_cuda не существует -> вся цепочка фильтров на CPU
+\$force_cpu_filters = (\$video_rotation_status -eq '+' -and \$use_hw_accel)
+\$scale_backend = if (\$force_cpu_filters) { 'cpu' } else { \$hw_accel_type }
+
 \$vf_parts = @()
 if (\$video_rotation_status -eq '+') {
-    if (\$hw_accel_type -eq 'nvidia') {
-        \$vf_parts += \"transpose_cuda=\$video_rotation_value\"
-    } else {
-        \$vf_parts += \"transpose=\$video_rotation_value\"
-    }
+    \$vf_parts += \"transpose=\$video_rotation_value\"
 }
 if (\$set_video_resolution) {
     \$res_w, \$res_h = \$set_video_resolution -split 'x'
     if (\$keep_aspect_ratio_status -eq '+' -and \$keep_aspect_ratio_value -eq 'yes') {
-        switch (\$hw_accel_type) {
+        switch (\$scale_backend) {
             'nvidia' { \$vf_parts += \"scale_cuda=\${res_w}:\${res_h}:force_original_aspect_ratio=decrease\" }
-            'intel'  { \$vf_parts += \"scale_qsv=\${res_w}:\${res_h}\" }
+            'intel'  { \$vf_parts += \"scale_qsv=\${res_w}:\${res_h}:force_original_aspect_ratio=decrease\" }
             default  { \$vf_parts += \"scale=\${res_w}:\${res_h}:force_original_aspect_ratio=decrease,pad=\${res_w}:\${res_h}:(ow-iw)/2:(oh-ih)/2\" }
         }
     } else {
-        switch (\$hw_accel_type) {
+        switch (\$scale_backend) {
             'nvidia' { \$vf_parts += \"scale_cuda=\${res_w}:\${res_h}\" }
             'intel'  { \$vf_parts += \"scale_qsv=\${res_w}:\${res_h}\" }
             default  { \$vf_parts += \"scale=\${res_w}:\${res_h}\" }
@@ -68,6 +68,10 @@ if (\$set_video_resolution) {
 }
 if (\$playback_speed_status -eq '+' -and \$playback_speed_value -ne '1.0') {
     \$vf_parts += \"setpts=PTS/\$playback_speed_value\"
+}
+if (\$use_hw_accel -and \$vf_parts.Count -gt 0) {
+    \$needs_download = \$vf_parts | Where-Object { \$_ -notmatch '^(scale_cuda|scale_qsv|setpts)' }
+    if (\$needs_download) { \$vf_parts = @('hwdownload', 'format=nv12') + \$vf_parts }
 }
 Write-Output (\$vf_parts -join ',')
 " 2>/dev/null
@@ -179,6 +183,17 @@ assert_contains "rotation +2 → transpose=2"  "transpose=2"  "$result"
 result=$(run_ps1_vf ":-:2" ":-:1280x720" ":+:yes" ":-:1.0")
 assert_eq "rotation off → no transpose"  ""  "$result"
 
+# rotation + nvidia: transpose_cuda не существует → обычный transpose + CPU-цепочка
+result=$(run_ps1_vf ":+:2" ":-:1280x720" ":+:yes" ":-:1.0" "nvidia")
+assert_contains "rotation +2 + nvidia → transpose=2"  "transpose=2"  "$result"
+assert_not_contains "rotation + nvidia → нет transpose_cuda"  "transpose_cuda"  "$result"
+
+result=$(run_ps1_vf ":+:2" ":+:1280x720" ":+:yes" ":-:1.0" "nvidia")
+assert_contains "rotation+nvidia+scale → CPU scale (не scale_cuda)" \
+    "scale=1280:720:force_original_aspect_ratio" "$result"
+assert_not_contains "rotation+nvidia → нет scale_cuda"  "scale_cuda"  "$result"
+assert_contains "rotation+nvidia → hwdownload в цепочке"  "hwdownload"  "$result"
+
 # ══════════════════════════════════════════════════════════════
 suite "PS1: видео-фильтры (масштаб с сохранением пропорций)"
 # ══════════════════════════════════════════════════════════════
@@ -287,5 +302,30 @@ suite "PS1: GPU выключен"
 out=$(run_ps1_gpu ":-:nvidia" ":+:libx264" "V..... h264_nvenc")
 assert_eq "hw_accel off → use_hw_accel=False"  "False"    "$(get_field "$out" "use_hw_accel")"
 assert_eq "hw_accel off → codec unchanged"     "libx264"  "$(get_field "$out" "set_video_codec")"
+
+# ══════════════════════════════════════════════════════════════
+suite "PS1 script.ps1: фиксы Task 3 (анализ исходника)"
+# ══════════════════════════════════════════════════════════════
+PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
+SCRIPT_PS1="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1"
+src_ps1="$(cat "$SCRIPT_PS1")"
+
+# (а) $vf_parts инициализируется ДО ветки audio_only — иначе осиротевший -vf (PS1 5.1: @()+$null = Count 1)
+init_ln=$(grep -nF '$vf_parts = @()' "$SCRIPT_PS1" | head -1 | cut -d: -f1)
+ao_ln=$(grep -nF 'if ($audio_only -eq "yes")' "$SCRIPT_PS1" | head -1 | cut -d: -f1)
+order="bad"; [ -n "$init_ln" ] && [ -n "$ao_ln" ] && [ "$init_ln" -lt "$ao_ln" ] && order="ok"
+assert_eq "vf_parts инициализирован ДО audio_only (нет осиротевшего -vf)"  "ok"  "$order"
+
+# (б) -ss добавляется только при $b -gt 0 (иначе -ss 0 с -c copy дропает видео)
+assert_contains "-ss guard: if (\$b -gt 0)"  'if ($b -gt 0) { $ffmpegArgs += @("-ss"'  "$src_ps1"
+assert_not_contains "старое условие -ss убрано"  'if ($b -ne 0 -or $set_start_coding)'  "$src_ps1"
+
+# (в) muxer map mkv->matroska / ts->mpegts; -f использует $muxer_out
+assert_contains "muxer map: matroska"  'matroska'  "$src_ps1"
+assert_contains "muxer map: mpegts"  'mpegts'  "$src_ps1"
+assert_contains "-f использует \$muxer_out"  '@("-f", $muxer_out)'  "$src_ps1"
+
+# (г) transpose_cuda не существует — удалён из всего скрипта
+assert_not_contains "нет несуществующего transpose_cuda"  'transpose_cuda'  "$src_ps1"
 
 summary

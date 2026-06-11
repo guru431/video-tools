@@ -115,9 +115,8 @@ $_, $start_coding_status, $start_coding_value = $start_coding -split ":"
 if ($start_coding_status -eq "+") {
 	$x, $y, $z = $start_coding_value -split '-'
 	$start_coding_value = [int]$x * 3600 + [int]$y * 60 + [int]$z
-	$set_start_coding = "-ss $start_coding_value"
 } else {
-	$set_start_coding = ""
+	$start_coding_value = 0
 }
 
 $_, $length_coding_status, $length_coding_value = $length_coding -split ":"
@@ -131,6 +130,10 @@ if ($length_coding_status -eq "+") {
 }
 
 # --- A1. Формат и настройки видео/аудио ---
+# Инициализируем ДО ветки audio_only: иначе при audio_only=yes $vf_parts остаётся
+# неопределён, а PS1 5.1 даёт `@() + $null` = массив из одного $null (Count=1) →
+# осиротевший `-vf` с пустым значением ломает каждый файл.
+$vf_parts = @()
 if ($audio_only -eq "yes") {
 	$format_files_out = "mp3"
 	$video_settings_args = @("-vn")
@@ -144,28 +147,28 @@ if ($audio_only -eq "yes") {
 	}
 
 	# E5. Сборка цепочки видео-фильтров
-	$vf_parts = @()
+	# rotation+GPU: CUDA-варианта фильтра поворота не существует. Если включён поворот
+	# и используется GPU — вся цепочка фильтров переводится на CPU (transpose+scale),
+	# иначе получилась бы несовместимая смесь CPU transpose + scale_cuda/scale_qsv.
+	$force_cpu_filters = ($video_rotation_status -eq "+" -and $use_hw_accel)
+	$scale_backend = if ($force_cpu_filters) { "cpu" } else { $hw_accel_type }
 
 	# Поворот
 	if ($video_rotation_status -eq "+") {
-		if ($hw_accel_type -eq "nvidia") {
-			$vf_parts += "transpose_cuda=$video_rotation_value"
-		} else {
-			$vf_parts += "transpose=$video_rotation_value"
-		}
+		$vf_parts += "transpose=$video_rotation_value"
 	}
 
 	# D4. Масштабирование с сохранением пропорций
 	if ($set_video_resolution) {
 		$res_w, $res_h = $set_video_resolution -split 'x'
 		if ($keep_aspect_ratio_status -eq "+" -and $keep_aspect_ratio_value -eq "yes") {
-			switch ($hw_accel_type) {
+			switch ($scale_backend) {
 				"nvidia" { $vf_parts += "scale_cuda=${res_w}:${res_h}:force_original_aspect_ratio=decrease" }
 				"intel"  { $vf_parts += "scale_qsv=${res_w}:${res_h}:force_original_aspect_ratio=decrease" }
 				default  { $vf_parts += "scale=${res_w}:${res_h}:force_original_aspect_ratio=decrease,pad=${res_w}:${res_h}:(ow-iw)/2:(oh-ih)/2" }
 			}
 		} else {
-			switch ($hw_accel_type) {
+			switch ($scale_backend) {
 				"nvidia" { $vf_parts += "scale_cuda=${res_w}:${res_h}" }
 				"intel"  { $vf_parts += "scale_qsv=${res_w}:${res_h}" }
 				default  { $vf_parts += "scale=${res_w}:${res_h}" }
@@ -180,7 +183,7 @@ if ($audio_only -eq "yes") {
 
 	# Hwdownload если нужен
 	if ($use_hw_accel -and $vf_parts.Count -gt 0) {
-		$needs_download = $vf_parts | Where-Object { $_ -notmatch 'scale_cuda|scale_qsv|transpose_cuda|setpts' }
+		$needs_download = $vf_parts | Where-Object { $_ -notmatch '^(scale_cuda|scale_qsv|setpts)' }
 		if ($needs_download) {
 			$vf_parts = @("hwdownload", "format=nv12") + $vf_parts
 		}
@@ -209,7 +212,10 @@ if ($audio_only -eq "yes") {
 		$crf_args = @("-crf", $video_quality_value)
 	}
 
-	$video_settings_args = @("-f", $format_files_out)
+	# Имя muxer для -f: mkv/ts — это расширения файла, а не имена форматов ffmpeg.
+	# Расширение выходного файла не меняется, только аргумент -f.
+	$muxer_out = switch ($format_files_out) { "mkv" { "matroska" } "ts" { "mpegts" } default { $format_files_out } }
+	$video_settings_args = @("-f", $muxer_out)
 	if ($set_video_codec_arg) { $video_settings_args += $set_video_codec_arg -split ' ' }
 	if ($set_video_number_frames) { $video_settings_args += $set_video_number_frames -split ' ' }
 	$video_settings_args += $gpu_args
@@ -548,7 +554,7 @@ function Encode-File {
 		# -ss располагается ДО -i: fast seek по контейнеру вместо декодирования от 0.
 		$ffmpegArgs = @("-hide_banner", "-strict", "-2")
 		$ffmpegArgs += $hw_decode_args
-		if ($b -ne 0 -or $set_start_coding) { $ffmpegArgs += @("-ss", "$b") }
+		if ($b -gt 0) { $ffmpegArgs += @("-ss", "$b") }
 		$ffmpegArgs += @("-i", $full_path)
 		$ffmpegArgs += $subtitles_args
 		$ffmpegArgs += $convert_args

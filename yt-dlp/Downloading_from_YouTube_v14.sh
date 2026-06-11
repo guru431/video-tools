@@ -99,6 +99,13 @@ read_config() {
             if [[ "$value" =~ ^(.*[^[:space:]])[[:space:]]+#.*$ ]]; then
                 value="${BASH_REMATCH[1]}"
             fi
+            # Подстановка ${ENV_VAR} из окружения. Не задана → пустая строка + WARN.
+            # Несколько вхождений поддерживаются (цикл по первому ${...} за итерацию).
+            while [[ "$value" == *'${'*'}'* ]]; do
+                local _vn="${value#*\$\{}"; _vn="${_vn%%\}*}"
+                [ -n "${!_vn:-}" ] || echo "WARN: переменная $_vn не задана" >&2
+                value="${value//\$\{$_vn\}/${!_vn:-}}"
+            done
             echo "$value"
             return
         fi

@@ -28,6 +28,12 @@ if (Test-Path $configFile) {
         }
         if ($curSection -and $line -match '^([^=]+?)\s*=\s*(.*)') {
             $val = $Matches[2] -replace '\s+#.*', ''
+            # Подстановка ${ENV_VAR} из окружения. Не задана → пустая строка + WARN.
+            $val = [regex]::Replace($val, '\$\{(\w+)\}', {
+                param($m)
+                $ev = [Environment]::GetEnvironmentVariable($m.Groups[1].Value)
+                if ($null -eq $ev) { Write-Host "WARN: переменная $($m.Groups[1].Value) не задана"; "" } else { $ev }
+            })
             $script:_configCache["${curSection}::$($Matches[1].Trim())"] = $val
         }
     }

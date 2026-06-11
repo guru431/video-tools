@@ -47,6 +47,12 @@ load_readconfig() {
             if $in_section && [[ "$line" =~ ^${key}[[:space:]]*=[[:space:]]*(.*) ]]; then
                 value="${BASH_REMATCH[1]}"
                 value=$(echo "$value" | sed 's/[[:space:]]*#.*//')
+                # Подстановка ${ENV_VAR} (зеркало реального скрипта)
+                while [[ "$value" == *'${'*'}'* ]]; do
+                    local _vn="${value#*\$\{}"; _vn="${_vn%%\}*}"
+                    [ -n "${!_vn:-}" ] || echo "WARN: переменная $_vn не задана" >&2
+                    value="${value//\$\{$_vn\}/${!_vn:-}}"
+                done
                 echo "$value"
                 return
             fi
@@ -189,5 +195,34 @@ assert_contains "PS1: --no-mtime при переводе"  '$command += "--no-mt
 assert_contains "SH: continue_on_error → --abort-on-error"  "--abort-on-error"  "$sh_src"
 assert_contains "PS1: continue_on_error → --abort-on-error"  "--abort-on-error"  "$ps1_src"
 assert_not_contains "SH: нет захардкоженного -c -i -w"  '"$YTDLP" -c -i -w'  "$sh_src"
+
+# ══════════════════════════════════════════════════════════════
+suite "Task 13: подстановка \${ENV_VAR} в config.ini"
+# ══════════════════════════════════════════════════════════════
+# Поведенческий (через inline-копию, зеркало реального SH)
+write_config "[proxy]
+url = \${TEST_PROXY_VAR}"
+export TEST_PROXY_VAR="https://u:p@h:1"
+result=$(read_config "url" "proxy" "")
+assert_eq "\${TEST_PROXY_VAR} → значение из окружения"  "https://u:p@h:1"  "$result"
+unset TEST_PROXY_VAR
+result=$(read_config "url" "proxy" "" 2>/dev/null)
+assert_empty "не заданная переменная → пустая строка"  "$result"
+result_warn=$(read_config "url" "proxy" "" 2>&1 >/dev/null)
+assert_contains "не заданная переменная → WARN в stderr"  "не задана"  "$result_warn"
+rm -f "$CONFIG_FILE"
+
+# Несколько вхождений
+write_config "[proxy]
+url = \${A}-\${B}"
+export A="x"; export B="y"
+result=$(read_config "url" "proxy" "")
+assert_eq "несколько \${VAR} → обе подставлены"  "x-y"  "$result"
+unset A; unset B
+rm -f "$CONFIG_FILE"
+
+# Статический: фича присутствует в реальных SH и PS1
+assert_contains "SH: подстановка \${ENV} реализована"  'value="${value//\$\{$_vn\}/${!_vn:-}}"'  "$sh_src"
+assert_contains "PS1: подстановка \${ENV} реализована"  '\$\{(\w+)\}'  "$ps1_src"
 
 summary

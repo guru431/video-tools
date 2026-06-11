@@ -2,6 +2,8 @@
 # Оставить пустым если прокси не нужен
 # Формат: [scheme]://[user:pass@]host[:port]
 # Пример: https://username:password@proxy.example.com:443
+# Поддерживается подстановка из окружения: url = ${PROXY_URL}
+# (несколько вхождений ок; не заданная переменная -> пустая строка + WARN)
 url =
 
 [cookies]

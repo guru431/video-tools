@@ -1,0 +1,7 @@
+# channels.txt — список каналов для batch-режима (--batch, ТОЛЬКО SH-версия download.sh).
+# Формат: category|handle|mode   (mode = videos | playlists)
+# handle — без ведущего @ (скрипт строит URL https://www.youtube.com/@<handle>/<mode>).
+# category — подпапка для сохранения. Строки с # игнорируются.
+# Скопируйте в channels.txt и раскомментируйте свои строки:
+# music|SomeMusicChannel|videos
+# tech|SomeTechHandle|playlists

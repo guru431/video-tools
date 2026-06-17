@@ -1,6 +1,6 @@
-﻿$src       = Join-Path $PSScriptRoot 'FFmpeg_Converter_run_win_v14.ps1'
+﻿$src       = Join-Path $PSScriptRoot 'FFmpeg_Converter_run_win_v15.ps1'
 $scriptPs1 = Join-Path $PSScriptRoot 'FFmpeg_Converter_script.ps1'
-$out       = Join-Path $PSScriptRoot '_VideoConverter_v14.exe'
+$out       = Join-Path $PSScriptRoot '_VideoConverter_v15.exe'
 $ps2exePs  = Join-Path $PSScriptRoot '..\tools\ps2exe.ps1'
 $ps2exeSha = 'FAEA495151AF69D2AE78783D0071186F98DC568D7B7478F639DA0E74ECF01763'  # PS2EXE @ MScholtes/PS2EXE d32d5ce
 $tmpSrc    = Join-Path $PSScriptRoot '_build_tmp.ps1'
@@ -52,8 +52,8 @@ try {
         -noConsole `
         -STA `
         -x64 `
-        -title   "Video Converter (ffmpeg) v14" `
-        -version "14.0.0.0"
+        -title   "Video Converter (ffmpeg) v15" `
+        -version "15.0.0.0"
 } catch {
     Write-Host "FAIL: $_"
     Remove-Item $tmpSrc -Force -ErrorAction SilentlyContinue

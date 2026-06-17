@@ -182,12 +182,12 @@ if "%quality%"=="92" (
 :: и подменяем через string substitution после блока IF.
 if %fmt%==0 (
     if %quality%==0 set "save_settings=-f bestaudio[ext=m4a]/bestaudio"
-    if %quality%==1 set "save_settings=-f Qbestaudio[ext=m4a]+bestvideo[heightLE360][vcodec^=avc1]/bestaudio+bestvideo[heightLE360][vcodec^=avc1]Q"
-    if %quality%==2 set "save_settings=-f Qbestaudio[ext=m4a]+bestvideo[heightLE480][vcodec^=avc1]/bestaudio+bestvideo[heightLE480][vcodec^=avc1]Q"
-    if %quality%==3 set "save_settings=-f Qbestaudio[ext=m4a]+bestvideo[heightLE720][vcodec^=avc1]/bestaudio+bestvideo[heightLE720][vcodec^=avc1]Q"
-    if %quality%==4 set "save_settings=-f Qbestaudio[ext=m4a]+bestvideo[heightLE1080][vcodec^=avc1]/bestaudio+bestvideo[heightLE1080][vcodec^=avc1]Q"
-    if %quality%==5 set "save_settings=-f Qbestaudio[ext=m4a]+bestvideo[heightLE1440][vcodec^=avc1]/bestaudio+bestvideo[heightLE1440][vcodec^=avc1]Q"
-    if %quality%==6 set "save_settings=-f Qbestaudio[ext=m4a]+bestvideo[heightLE2160][vcodec^=avc1]/bestaudio+bestvideo[heightLE2160][vcodec^=avc1]Q"
+    if %quality%==1 set "save_settings=-f Qbestaudio[ext=m4a]+bestvideo[heightLE360][vcodec^=avc1]/bestaudio+bestvideo[heightLE360]Q"
+    if %quality%==2 set "save_settings=-f Qbestaudio[ext=m4a]+bestvideo[heightLE480][vcodec^=avc1]/bestaudio+bestvideo[heightLE480]Q"
+    if %quality%==3 set "save_settings=-f Qbestaudio[ext=m4a]+bestvideo[heightLE720][vcodec^=avc1]/bestaudio+bestvideo[heightLE720]Q"
+    if %quality%==4 set "save_settings=-f Qbestaudio[ext=m4a]+bestvideo[heightLE1080][vcodec^=avc1]/bestaudio+bestvideo[heightLE1080]Q"
+    if %quality%==5 set "save_settings=-f Qbestaudio[ext=m4a]+bestvideo[heightLE1440][vcodec^=avc1]/bestaudio+bestvideo[heightLE1440]Q"
+    if %quality%==6 set "save_settings=-f Qbestaudio[ext=m4a]+bestvideo[heightLE2160][vcodec^=avc1]/bestaudio+bestvideo[heightLE2160]Q"
 )
 :: avc1_https
 if %fmt%==1 (
@@ -222,32 +222,32 @@ if %fmt%==3 (
 :: avc1_m3u8_60fps
 if %fmt%==4 (
     if %quality%==0 set "save_settings=-f 234"
-    if %quality%==1 set "save_settings=-f 234+309"
-    if %quality%==2 set "save_settings=-f 234+310/309"
-    if %quality%==3 set "save_settings=-f 234+311/310/309"
-    if %quality%==4 set "save_settings=-f 234+312/311/310/309"
-    if %quality%==5 set "save_settings=-f 234+313/312/311/310/309"
-    if %quality%==6 set "save_settings=-f 234+314/313/312/311/310/309"
+    if %quality%==1 set "save_settings=-f Q234+309/bestvideo[heightLE360][fpsGE50]+bestaudio/best[heightLE360]Q"
+    if %quality%==2 set "save_settings=-f Q234+310/309/bestvideo[heightLE480][fpsGE50]+bestaudio/best[heightLE480]Q"
+    if %quality%==3 set "save_settings=-f Q234+311/310/309/bestvideo[heightLE720][fpsGE50]+bestaudio/best[heightLE720]Q"
+    if %quality%==4 set "save_settings=-f Q234+312/311/310/309/bestvideo[heightLE1080][fpsGE50]+bestaudio/best[heightLE1080]Q"
+    if %quality%==5 set "save_settings=-f Q234+313/312/311/310/309/bestvideo[heightLE1440][fpsGE50]+bestaudio/best[heightLE1440]Q"
+    if %quality%==6 set "save_settings=-f Q234+314/313/312/311/310/309/bestvideo[heightLE2160][fpsGE50]+bestaudio/best[heightLE2160]Q"
 )
 :: avc1_https_60fps_hdr
 if %fmt%==5 (
     if %quality%==0 set "save_settings=-f 234"
-    if %quality%==1 set "save_settings=-f 234+696"
-    if %quality%==2 set "save_settings=-f 234+697/696"
-    if %quality%==3 set "save_settings=-f 234+698/697/696"
-    if %quality%==4 set "save_settings=-f 234+699/698/697/696"
-    if %quality%==5 set "save_settings=-f 234+700/699/698/697/696"
-    if %quality%==6 set "save_settings=-f 234+701/700/699/698/697/696"
+    if %quality%==1 set "save_settings=-f Q234+696/bestvideo[heightLE360][fpsGE50]+bestaudio/best[heightLE360]Q"
+    if %quality%==2 set "save_settings=-f Q234+697/696/bestvideo[heightLE480][fpsGE50]+bestaudio/best[heightLE480]Q"
+    if %quality%==3 set "save_settings=-f Q234+698/697/696/bestvideo[heightLE720][fpsGE50]+bestaudio/best[heightLE720]Q"
+    if %quality%==4 set "save_settings=-f Q234+699/698/697/696/bestvideo[heightLE1080][fpsGE50]+bestaudio/best[heightLE1080]Q"
+    if %quality%==5 set "save_settings=-f Q234+700/699/698/697/696/bestvideo[heightLE1440][fpsGE50]+bestaudio/best[heightLE1440]Q"
+    if %quality%==6 set "save_settings=-f Q234+701/700/699/698/697/696/bestvideo[heightLE2160][fpsGE50]+bestaudio/best[heightLE2160]Q"
 )
 :: old_combo
 if %fmt%==6 (
     if %quality%==0 set "save_settings=-f 140"
     if %quality%==1 set "save_settings=-f 18"
-    if %quality%==2 set "save_settings=-f 20/18"
-    if %quality%==3 set "save_settings=-f 22/20/18"
-    if %quality%==4 set "save_settings=-f 24/22/20/18"
-    if %quality%==5 set "save_settings=-f 26/24/22/20/18"
-    if %quality%==6 set "save_settings=-f 28/26/24/22/20/18"
+    if %quality%==2 set "save_settings=-f 59/22/18"
+    if %quality%==3 set "save_settings=-f 22/18"
+    if %quality%==4 set "save_settings=-f 37/22/18"
+    if %quality%==5 set "save_settings=-f 38/37/22/18"
+    if %quality%==6 set "save_settings=-f 38/37/22/18"
 )
 :: auto для не-YouTube — простой best (один поток, быстро для VK/RuTube/...)
 if %fmt%==7 (
@@ -266,6 +266,70 @@ if defined save_settings (
     set "save_settings=!save_settings:GE=>=!"
     set "save_settings=!save_settings:Q="!"
 )
+
+:: ── Доп. опции (только для реальной загрузки, не для субтитров 91/92) ─────
+:: Эти переменные ДОЛЖНЫ остаться пустыми при quality 91/92 (там --skip-download).
+set "audiofmt_arg="
+set "sb_arg="
+set "subsvid_arg="
+if "%quality%"=="91" goto :extra_done
+if "%quality%"=="92" goto :extra_done
+
+:: ── Аудио-формат (актуально только для качества 0) ───────────────────────
+echo.
+echo Аудио-формат ^(по умолчанию: 0; актуально только для качества 0^):
+echo   0 - best (как есть)
+echo   1 - mp3
+echo   2 - m4a
+echo   3 - opus
+echo.
+set /p "audiofmt_choice=Выберите номер: "
+if "%audiofmt_choice%"=="" set audiofmt_choice=0
+:: Whitelist допустимых номеров аудио-формата
+set "_ok="
+for %%v in (0 1 2 3) do if "%audiofmt_choice%"=="%%v" set "_ok=1"
+if not defined _ok set "audiofmt_choice=0"
+
+if "%quality%"=="0" (
+    if "%audiofmt_choice%"=="1" set "audiofmt_arg=--extract-audio --audio-format mp3 --audio-quality 0"
+    if "%audiofmt_choice%"=="2" set "audiofmt_arg=--extract-audio --audio-format m4a --audio-quality 0"
+    if "%audiofmt_choice%"=="3" set "audiofmt_arg=--extract-audio --audio-format opus --audio-quality 0"
+)
+
+:: ── SponsorBlock ─────────────────────────────────────────────────────────
+echo.
+echo SponsorBlock ^(по умолчанию: 0^):
+echo   0 - off (не трогать)
+echo   1 - mark (только метки глав)
+echo   2 - remove (вырезать сегменты)
+echo.
+set /p "sb_choice=Выберите номер: "
+if "%sb_choice%"=="" set sb_choice=0
+:: Whitelist допустимых номеров SponsorBlock
+set "_ok="
+for %%v in (0 1 2) do if "%sb_choice%"=="%%v" set "_ok=1"
+if not defined _ok set "sb_choice=0"
+
+if "%sb_choice%"=="1" set "sb_arg=--sponsorblock-mark all"
+if "%sb_choice%"=="2" set "sb_arg=--sponsorblock-remove all"
+
+:: ── Субтитры с видео ─────────────────────────────────────────────────────
+echo.
+echo Субтитры с видео ^(по умолчанию: 0^):
+echo   0 - off (без субтитров)
+echo   1 - sidecar (отдельным файлом)
+echo   2 - embed (вшить в контейнер)
+echo.
+set /p "subsvid_choice=Выберите номер: "
+if "%subsvid_choice%"=="" set subsvid_choice=0
+:: Whitelist допустимых номеров субтитров с видео
+set "_ok="
+for %%v in (0 1 2) do if "%subsvid_choice%"=="%%v" set "_ok=1"
+if not defined _ok set "subsvid_choice=0"
+
+if "%subsvid_choice%"=="1" set "subsvid_arg=--write-subs --write-auto-subs --sub-langs ru"
+if "%subsvid_choice%"=="2" set "subsvid_arg=--write-subs --write-auto-subs --sub-langs ru --embed-subs"
+:extra_done
 
 :: ── Шаблон пути ──────────────────────────────────────────────────────────
 set "output_tpl=%%(uploader)s\%%(upload_date)s - %%(title).100U.%%(ext)s"
@@ -310,7 +374,7 @@ if not "%translate_lang%"=="" (
     echo.>"!_dl_marker!"
 )
 
-"!dlp!" !cookie_arg! !deno_arg! !mtime_arg! -c -i -w --windows-filenames --compat-options filename-sanitization -o "!folder!\%file_tpl%" %save_settings%%sections_arg% "!url!"
+"!dlp!" !cookie_arg! !deno_arg! !mtime_arg! !audiofmt_arg! !sb_arg! !subsvid_arg! -c -i -w --windows-filenames --compat-options filename-sanitization -o "!folder!\%file_tpl%" %save_settings%%sections_arg% "!url!"
 
 set "dl_errorlevel=%errorlevel%"
 if %dl_errorlevel%==0 (
@@ -360,6 +424,7 @@ if not "%translate_lang%"=="" (
 
         if !vot_rc! geq 1 (
             echo ПРЕДУПРЕЖДЕНИЕ: не удалось получить перевод
+            rmdir /s /q "!temp_dir!" 2>nul
             goto :skip_translate
         )
 
@@ -372,16 +437,16 @@ if not "%translate_lang%"=="" (
 
         if defined trans_file if defined video_file (
             echo Объединение аудиодорожек ^(режим: %translate_mode%^)...
-            set "output_file=!video_file:.mp4=_translated.mp4!"
+            for %%E in ("!video_file!") do set "output_file=%%~dpnE_translated.mp4"
 
             if "%translate_mode%"=="dual_track" (
-                ffmpeg -y -i "!video_file!" -i "!trans_file!" -map 0:v -map 0:a -map 1:a -c:v copy -c:a:0 copy -c:a:1 aac -b:a:1 192k -metadata:s:a:0 language=eng -metadata:s:a:0 title="Original" -metadata:s:a:1 language=%translate_lang% -metadata:s:a:1 title="AI Translation" -disposition:a:0 default "!output_file!" 2>nul
+                ffmpeg -y -i "!video_file!" -i "!trans_file!" -map 0:v -map 0:a -map 1:a -c:v copy -c:a:0 copy -c:a:1 aac -b:a:1 192k -metadata:s:a:0 language=en -metadata:s:a:0 title="Original" -metadata:s:a:1 language=%translate_lang% -metadata:s:a:1 title="AI Translation" -disposition:a:0 default "!output_file!" 2>nul
             )
             if "%translate_mode%"=="replace" (
                 ffmpeg -y -i "!video_file!" -i "!trans_file!" -map 0:v -map 1:a -c:v copy -c:a aac -b:a 192k -metadata:s:a:0 language=%translate_lang% -metadata:s:a:0 title="AI Translation" "!output_file!" 2>nul
             )
             if "%translate_mode%"=="mix" (
-                ffmpeg -y -i "!video_file!" -i "!trans_file!" -filter_complex "[0:a]volume=0.3[a0];[1:a]volume=1.0[a1];[a0][a1]amix=inputs=2:duration=longest[aout]" -map 0:v -map "[aout]" -c:v copy -c:a aac -b:a 192k "!output_file!" 2>nul
+                ffmpeg -y -i "!video_file!" -i "!trans_file!" -filter_complex "[0:a]volume=0.3[a0];[1:a]volume=1.0[a1];[a0][a1]amix=inputs=2:duration=longest:normalize=0[aout]" -map 0:v -map "[aout]" -c:v copy -c:a aac -b:a 192k "!output_file!" 2>nul
             )
 
             set "ff_rc=!errorlevel!"

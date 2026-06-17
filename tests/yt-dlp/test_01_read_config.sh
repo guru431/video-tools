@@ -176,9 +176,9 @@ assert_eq "нет файла → default"  "file_default"  "$result"
 # ══════════════════════════════════════════════════════════════
 suite "Task 12: yt-dlp фиксы (анализ исходников, 3 платформы)"
 # ══════════════════════════════════════════════════════════════
-SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v14.sh"
-CMDF="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v14.cmd"
-PS1F="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v14.ps1"
+SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.sh"
+CMDF="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.cmd"
+PS1F="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.ps1"
 sh_src="$(cat "$SH")"; cmd_src="$(cat "$CMDF")"; ps1_src="$(cat "$PS1F")"
 
 # deno.exe детект (SH)

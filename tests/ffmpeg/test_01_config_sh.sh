@@ -175,9 +175,9 @@ assert_eq "my#file.log сохранён целиком"  "my#file.log"  "$(read_
 assert_eq "инлайн ' #' срезан"  "value"  "$(read_config 'note' 'other' '')"
 
 # ══════════════════════════════════════════════════════════════
-suite "run_v14.sh: Task 8 (анализ исходника)"
+suite "run_v15.sh: Task 8 (анализ исходника)"
 # ══════════════════════════════════════════════════════════════
-RUN_SH="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v14.sh"
+RUN_SH="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v15.sh"
 src_run="$(cat "$RUN_SH")"
 assert_contains "nocasematch для регистра ключей"  "shopt -s nocasematch"  "$src_run"
 assert_contains "backslash → slash в путях"  '${folder_sources//\\//}'  "$src_run"

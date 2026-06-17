@@ -33,197 +33,67 @@ run_cmd_file() {
     echo "$result"
 }
 
-# ── Хелпер: запустить quality×format блок ─────────────────────────────────
-run_format() {
-    local quality="$1"
-    local fmt="$2"
-    local TMP_DIR TMP_CMD WIN_CMD
-    TMP_DIR=$(mktemp -d /tmp/test_ytfmt_XXXXXX)
-    TMP_CMD="$TMP_DIR/fmt.cmd"
-    WIN_CMD=$(cygpath -w "$TMP_CMD")
-
-    cat > "$TMP_CMD" << CMDEOF
-@echo off
-chcp 65001 >nul 2>&1
-setlocal enabledelayedexpansion
-set quality=$quality
-set fmt=$fmt
-set "save_settings="
-if %quality%==91 (
-    set "save_settings=--sub-lang ru --write-auto-sub --sub-format vtt --skip-download"
-    goto :done
-)
-if %quality%==92 (
-    set "save_settings=--sub-lang en --write-auto-sub --sub-format vtt --skip-download"
-    goto :done
-)
-if %fmt%==0 (
-    if %quality%==0 set "save_settings=-f bestaudio[ext=m4a]/bestaudio"
-    if %quality%==1 set "save_settings=-f bestaudio[ext=m4a]+bestvideo[height<=360][vcodec^=avc1]/bestaudio+bestvideo[height<=360][vcodec^=avc1]"
-    if %quality%==2 set "save_settings=-f bestaudio[ext=m4a]+bestvideo[height<=480][vcodec^=avc1]/bestaudio+bestvideo[height<=480][vcodec^=avc1]"
-    if %quality%==3 set "save_settings=-f bestaudio[ext=m4a]+bestvideo[height<=720][vcodec^=avc1]/bestaudio+bestvideo[height<=720][vcodec^=avc1]"
-    if %quality%==4 set "save_settings=-f bestaudio[ext=m4a]+bestvideo[height<=1080][vcodec^=avc1]/bestaudio+bestvideo[height<=1080][vcodec^=avc1]"
-    if %quality%==5 set "save_settings=-f bestaudio[ext=m4a]+bestvideo[height<=1440][vcodec^=avc1]/bestaudio+bestvideo[height<=1440][vcodec^=avc1]"
-    if %quality%==6 set "save_settings=-f bestaudio[ext=m4a]+bestvideo[height<=2160][vcodec^=avc1]/bestaudio+bestvideo[height<=2160][vcodec^=avc1]"
-)
-if %fmt%==1 (
-    if %quality%==0 set "save_settings=-f 140"
-    if %quality%==1 set "save_settings=-f 140+134"
-    if %quality%==2 set "save_settings=-f 140+135/134"
-    if %quality%==3 set "save_settings=-f 140+136/135/134"
-    if %quality%==4 set "save_settings=-f 140+137/136/135/134"
-    if %quality%==5 set "save_settings=-f 140+138/137/136/135/134"
-    if %quality%==6 set "save_settings=-f 140+139/138/137/136/135/134"
-)
-if %fmt%==2 (
-    if %quality%==0 set "save_settings=-f 234"
-    if %quality%==1 set "save_settings=-f 234+230"
-    if %quality%==2 set "save_settings=-f 234+231/230"
-    if %quality%==3 set "save_settings=-f 234+232/231/230"
-    if %quality%==4 set "save_settings=-f 234+233/232/231/230"
-    if %quality%==5 set "save_settings=-f 234+234/233/232/231/230"
-    if %quality%==6 set "save_settings=-f 234+235/234/233/232/231/230"
-)
-if %fmt%==3 (
-    if %quality%==0 set "save_settings=-f 234"
-    if %quality%==1 set "save_settings=-f 234+296"
-    if %quality%==2 set "save_settings=-f 234+297/296"
-    if %quality%==3 set "save_settings=-f 234+298/297/296"
-    if %quality%==4 set "save_settings=-f 234+299/298/297/296"
-    if %quality%==5 set "save_settings=-f 234+300/299/298/297/296"
-    if %quality%==6 set "save_settings=-f 234+301/300/299/298/297/296"
-)
-if %fmt%==4 (
-    if %quality%==0 set "save_settings=-f 234"
-    if %quality%==1 set "save_settings=-f 234+309"
-    if %quality%==2 set "save_settings=-f 234+310/309"
-    if %quality%==3 set "save_settings=-f 234+311/310/309"
-    if %quality%==4 set "save_settings=-f 234+312/311/310/309"
-    if %quality%==5 set "save_settings=-f 234+313/312/311/310/309"
-    if %quality%==6 set "save_settings=-f 234+314/313/312/311/310/309"
-)
-if %fmt%==5 (
-    if %quality%==0 set "save_settings=-f 234"
-    if %quality%==1 set "save_settings=-f 234+696"
-    if %quality%==2 set "save_settings=-f 234+697/696"
-    if %quality%==3 set "save_settings=-f 234+698/697/696"
-    if %quality%==4 set "save_settings=-f 234+699/698/697/696"
-    if %quality%==5 set "save_settings=-f 234+700/699/698/697/696"
-    if %quality%==6 set "save_settings=-f 234+701/700/699/698/697/696"
-)
-if %fmt%==6 (
-    if %quality%==0 set "save_settings=-f 140"
-    if %quality%==1 set "save_settings=-f 18"
-    if %quality%==2 set "save_settings=-f 20/18"
-    if %quality%==3 set "save_settings=-f 22/20/18"
-    if %quality%==4 set "save_settings=-f 24/22/20/18"
-    if %quality%==5 set "save_settings=-f 26/24/22/20/18"
-    if %quality%==6 set "save_settings=-f 28/26/24/22/20/18"
-)
-:done
-echo !save_settings!
-CMDEOF
-
-    result=$(cmd //c "$WIN_CMD" 2>/dev/null)
-    rm -rf "$TMP_DIR"
-    echo "$result"
-}
+# ── Реальная таблица форматов CMD: сканируем исходник, а не дублируем ──────
+# Раньше здесь был свой захардкоженный (и протухший) дубликат format/quality
+# таблицы с битыми itag (20/18, 24, 26, 28). После фикса F21/F31 проверяем
+# непосредственно production-исходник, чтобы тест не расходился с кодом.
+PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
+DLP_CMD="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.cmd"
+CMD_SRC="$(cat "$DLP_CMD")"
 
 # ══════════════════════════════════════════════════════════════
 suite "CMD yt-dlp: avc1_best (ext=m4a workaround)"
 # ══════════════════════════════════════════════════════════════
+# CMD использует плейсхолдеры Q (кавычка) и LE (<=), декодируемые в рантайме.
 
-result=$(run_format 0 0)
-assert_contains "audio → bestaudio[ext=m4a]"  "bestaudio[ext=m4a]"  "$result"
-
-result=$(run_format 3 0)
-assert_contains "720p → height<=720"          "height<=720"          "$result"
-assert_contains "720p → vcodec^=avc1"         "vcodec^=avc1"         "$result"
-assert_contains "720p → ext=m4a"              "ext=m4a"              "$result"
-
-result=$(run_format 6 0)
-assert_contains "2160p → height<=2160"        "height<=2160"         "$result"
+assert_contains "audio → bestaudio[ext=m4a]"  "save_settings=-f bestaudio[ext=m4a]/bestaudio"  "$CMD_SRC"
+assert_contains "720p → heightLE720"          "heightLE720"          "$CMD_SRC"
+assert_contains "720p → vcodec^=avc1"         "vcodec^=avc1"         "$CMD_SRC"
+assert_contains "2160p → heightLE2160"        "heightLE2160"         "$CMD_SRC"
 
 # ══════════════════════════════════════════════════════════════
-suite "CMD yt-dlp: avc1_https (числовые ID)"
+suite "CMD yt-dlp: avc1_https (исправленные itag)"
 # ══════════════════════════════════════════════════════════════
 
-result=$(run_format 0 1)
-assert_eq "audio → -f 140"          "-f 140"              "$result"
-
-result=$(run_format 3 1)
-assert_eq "720p → 140+136/135/134"  "-f 140+136/135/134"  "$result"
-
-result=$(run_format 6 1)
-assert_eq "2160p → 140+139/..."     "-f 140+139/138/137/136/135/134"  "$result"
+assert_contains "audio → 140"               "save_settings=-f 140\""  "$CMD_SRC"
+assert_contains "720p → 140+136/135/134"    "140+136/135/134"  "$CMD_SRC"
+assert_contains "1440p → 140+264 (не битый 140+138)"  "140+264"  "$CMD_SRC"
+assert_contains "2160p → 140+266 (не битый 140+139)"  "140+266"  "$CMD_SRC"
+assert_not_contains "нет битого аудио-itag 138"  "140+138"  "$CMD_SRC"
+assert_not_contains "нет битого аудио-itag 139"  "140+139"  "$CMD_SRC"
 
 # ══════════════════════════════════════════════════════════════
-suite "CMD yt-dlp: avc1_m3u8"
+suite "CMD yt-dlp: avc1_m3u8 (исправленные itag)"
 # ══════════════════════════════════════════════════════════════
 
-result=$(run_format 0 2)
-assert_eq "audio → -f 234"          "-f 234"              "$result"
-
-result=$(run_format 3 2)
-assert_eq "720p → 234+232/231/230"  "-f 234+232/231/230"  "$result"
+assert_contains "720p → 234+232/231/230"  "234+232/231/230"  "$CMD_SRC"
+assert_contains "1080p → 270+234 (не битый 234+233)"  "270+234"  "$CMD_SRC"
+assert_not_contains "нет битого 234+233"  "234+233"  "$CMD_SRC"
 
 # ══════════════════════════════════════════════════════════════
-suite "CMD yt-dlp: avc1_https_60fps"
+suite "CMD yt-dlp: old_combo (исправленные legacy itag — F21)"
 # ══════════════════════════════════════════════════════════════
+# F21: old_combo чинится на 140 / 18 / 59/22/18 / 22/18 / 37/22/18 / 38/37/22/18.
 
-result=$(run_format 3 3)
-assert_eq "720p → 234+298/297/296"  "-f 234+298/297/296"  "$result"
-
-result=$(run_format 4 3)
-assert_eq "1080p → 234+299/..."     "-f 234+299/298/297/296"  "$result"
-
-# ══════════════════════════════════════════════════════════════
-suite "CMD yt-dlp: avc1_m3u8_60fps"
-# ══════════════════════════════════════════════════════════════
-
-result=$(run_format 3 4)
-assert_eq "720p → 234+311/310/309"  "-f 234+311/310/309"  "$result"
-
-# ══════════════════════════════════════════════════════════════
-suite "CMD yt-dlp: avc1_https_60fps_hdr"
-# ══════════════════════════════════════════════════════════════
-
-result=$(run_format 3 5)
-assert_eq "720p → 234+698/697/696"  "-f 234+698/697/696"  "$result"
-
-result=$(run_format 4 5)
-assert_eq "1080p → 234+699/..."     "-f 234+699/698/697/696"  "$result"
-
-# ══════════════════════════════════════════════════════════════
-suite "CMD yt-dlp: old_combo"
-# ══════════════════════════════════════════════════════════════
-
-result=$(run_format 0 6)
-assert_eq "audio → -f 140"      "-f 140"        "$result"
-
-result=$(run_format 1 6)
-assert_eq "360p → -f 18"        "-f 18"         "$result"
-
-result=$(run_format 3 6)
-assert_eq "720p → -f 22/20/18"  "-f 22/20/18"   "$result"
-
-result=$(run_format 4 6)
-assert_eq "1080p → -f 24/22/20/18"  "-f 24/22/20/18"  "$result"
-
-result=$(run_format 6 6)
-assert_eq "2160p → -f 28/..."   "-f 28/26/24/22/20/18"  "$result"
+assert_contains "audio → 140"          "save_settings=-f 140\""  "$CMD_SRC"
+assert_contains "360p → 18"            "save_settings=-f 18\""    "$CMD_SRC"
+assert_contains "480p → 59/22/18"      "59/22/18"                 "$CMD_SRC"
+assert_contains "720p → 22/18"         "save_settings=-f 22/18\"" "$CMD_SRC"
+assert_contains "1080p → 37/22/18"     "37/22/18"                 "$CMD_SRC"
+assert_contains "1440p → 38/37/22/18"  "38/37/22/18"              "$CMD_SRC"
+# Битые/несуществующие itag из протухшей таблицы должны отсутствовать.
+assert_not_contains "нет битого itag-комбо 20/18"  "20/18"  "$CMD_SRC"
+assert_not_contains "нет битого itag-комбо 24/22"  "24/22"  "$CMD_SRC"
+assert_not_contains "нет битого itag-комбо 26/24"  "26/24"  "$CMD_SRC"
+assert_not_contains "нет битого itag-комбо 28/26"  "28/26"  "$CMD_SRC"
 
 # ══════════════════════════════════════════════════════════════
 suite "CMD yt-dlp: субтитры (качество 91/92)"
 # ══════════════════════════════════════════════════════════════
 
-result=$(run_format 91 0)
-assert_contains "quality=91 → --sub-lang ru"  "--sub-lang ru"   "$result"
-assert_contains "quality=91 → --skip-download" "--skip-download" "$result"
-
-result=$(run_format 92 0)
-assert_contains "quality=92 → --sub-lang en"  "--sub-lang en"   "$result"
-assert_contains "quality=92 → --skip-download" "--skip-download" "$result"
+assert_contains "quality=91 → --sub-lang ru"   "--sub-lang ru"   "$CMD_SRC"
+assert_contains "quality=92 → --sub-lang en"   "--sub-lang en"   "$CMD_SRC"
+assert_contains "субтитры → --skip-download"   "--skip-download" "$CMD_SRC"
 
 # ══════════════════════════════════════════════════════════════
 suite "CMD yt-dlp: cookie_choice → cookie_arg"
@@ -361,7 +231,7 @@ assert_contains "Bug7: без фикса errorlevel=0 после set → naive_t
 suite "Task 10: CMD yt-dlp фиксы (анализ исходника)"
 # ══════════════════════════════════════════════════════════════
 PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
-DLP_CMD="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v14.cmd"
+DLP_CMD="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.cmd"
 src="$(cat "$DLP_CMD")"
 
 # URL через delayed expansion (!url!), не %url% — сохраняет ! и & в URL

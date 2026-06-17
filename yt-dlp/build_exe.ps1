@@ -1,5 +1,5 @@
-﻿$src      = Join-Path $PSScriptRoot 'Downloading_from_YouTube_v14.ps1'
-$out      = Join-Path $PSScriptRoot '_VideoDownloader_v14.exe'
+﻿$src      = Join-Path $PSScriptRoot 'Downloading_from_YouTube_v15.ps1'
+$out      = Join-Path $PSScriptRoot '_VideoDownloader_v15.exe'
 $ps2exePs = Join-Path $PSScriptRoot '..\tools\ps2exe.ps1'
 $ps2exeSha = 'FAEA495151AF69D2AE78783D0071186F98DC568D7B7478F639DA0E74ECF01763'  # PS2EXE @ MScholtes/PS2EXE d32d5ce
 
@@ -31,8 +31,8 @@ try {
         -noConsole `
         -STA `
         -x64 `
-        -title   "Video Downloader (yt-dlp) v14" `
-        -version "14.0.0.0"
+        -title   "Video Downloader (yt-dlp) v15" `
+        -version "15.0.0.0"
 } catch {
     Write-Host "FAIL: $_"
     exit 1

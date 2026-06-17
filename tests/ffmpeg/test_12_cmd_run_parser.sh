@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
-# test_12_cmd_run_parser.sh — Парсер config.ini в FFmpeg_Converter_run_v14.cmd
-# Прогоняет run_v14.cmd с тестовым config.ini через хук --print-config
+# test_12_cmd_run_parser.sh — Парсер config.ini в FFmpeg_Converter_run_v15.cmd
+# Прогоняет run_v15.cmd с тестовым config.ini через хук --print-config
 # (печатает распарсенные переменные, не запуская script.cmd). Ловит баги:
 #   (а) детект секций через echo|findstr (пробел + якорь $ на piped input)
 #   (б) хвостовой пробел в ключе после "key = value" — ключи не матчатся
@@ -17,18 +17,18 @@ source "$TESTS_DIR/lib/framework.sh"
 
 # Проверяем доступность cmd (Git Bash на Windows)
 if ! cmd //c "exit 0" &>/dev/null; then
-    suite "CMD: парсер config.ini (run_v14)"
+    suite "CMD: парсер config.ini (run_v15)"
     skip "Все тесты парсера" "cmd.exe не доступен"
     summary
     exit 0
 fi
 
 # ══════════════════════════════════════════════════════════════
-suite "CMD: парсер config.ini (run_v14, --print-config)"
+suite "CMD: парсер config.ini (run_v15, --print-config)"
 # ══════════════════════════════════════════════════════════════
 
 TMP_DIR=$(mktemp -d /tmp/test_cmd_run_parser_XXXXXX)
-cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v14.cmd" "$TMP_DIR/"
+cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v15.cmd" "$TMP_DIR/"
 
 # Тестовый config.ini рядом с run-скриптом (run ищет %~dp0config.ini).
 # quality имеет 5 хвостовых пробелов (баг г), codec пустой (баг д),
@@ -54,7 +54,7 @@ INIEOF
 # CRLF для cmd
 sed -i 's/$/\r/' "$TMP_DIR/config.ini"
 
-WIN_RUN=$(cygpath -w "$TMP_DIR/FFmpeg_Converter_run_v14.cmd")
+WIN_RUN=$(cygpath -w "$TMP_DIR/FFmpeg_Converter_run_v15.cmd")
 WIN_TMP=$(cygpath -w "$TMP_DIR")
 
 output=$(cmd //c "$WIN_RUN --print-config" < /dev/null 2>&1)

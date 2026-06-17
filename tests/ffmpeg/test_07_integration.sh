@@ -131,13 +131,27 @@ suite "Интеграция: audio_only режим"
 # ══════════════════════════════════════════════════════════════
 
 if [ "$HAS_TEST_VIDEO" = "1" ]; then
+    # F06: audio_only выводит контейнер+кодек из [audio] codec. default_vars
+    # задаёт codec=aac → ожидаем -c:a aac и m4a-выход (а не форсированный libmp3lame).
     run_script 'audio_only="yes"'
     if [ -f "$FFMPEG_LOG" ]; then
         call_args=$(cat "$FFMPEG_LOG")
-        assert_contains "audio_only: содержит -vn"        "-vn"        "$call_args"
-        assert_contains "audio_only: содержит libmp3lame" "libmp3lame" "$call_args"
+        assert_contains "audio_only: содержит -vn"       "-vn"      "$call_args"
+        assert_contains "audio_only aac: содержит -c:a aac"  "-c:a aac"  "$call_args"
+        assert_contains "audio_only aac: выход .m4a"     ".m4a"     "$call_args"
+        assert_not_contains "audio_only: нет -b:v"       "-b:v"     "$call_args"
     else
         skip "audio_only тест" "mock не был вызван"
+    fi
+
+    # F06: явный libmp3lame → сегодняшнее поведение (libmp3lame + mp3-выход).
+    run_script 'audio_only="yes"' 'audio_codec=":+:libmp3lame"'
+    if [ -f "$FFMPEG_LOG" ]; then
+        call_args=$(cat "$FFMPEG_LOG")
+        assert_contains "audio_only libmp3lame: содержит libmp3lame" "libmp3lame" "$call_args"
+        assert_contains "audio_only libmp3lame: выход .mp3"          ".mp3"       "$call_args"
+    else
+        skip "audio_only libmp3lame тест" "mock не был вызван"
     fi
 else
     skip "audio_only тест" "нет тестового MP4"

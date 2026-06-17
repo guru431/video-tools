@@ -328,7 +328,7 @@ assert_eq "socks5 proxy"  "socks5://socks.example.com:1080"  "$result"
 suite "Task 11: PS1 yt-dlp GUI фиксы (анализ исходника)"
 # ══════════════════════════════════════════════════════════════
 PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
-DLP_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v14.ps1"
+DLP_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.ps1"
 src="$(cat "$DLP_PS1")"
 
 assert_not_contains "нет массового Stop-Process yt-dlp"  'Get-Process -Name "yt-dlp"'  "$src"

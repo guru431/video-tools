@@ -144,10 +144,10 @@ container = +mkv
 hw_accel = -nvidia
 EOF
 
-# Загружаем bash read_config. Имя файла менялось v11→v14 — берём первое существующее,
+# Загружаем bash read_config. Имя файла менялось v11→v15 — берём первое существующее,
 # иначе тест бесшумно пропускает сравнение и даёт ложный fail на пустых значениях.
 RUN_SH=""
-for cand in "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v14.sh" "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run.sh"; do
+for cand in "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v15.sh" "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run.sh"; do
     [ -f "$cand" ] && RUN_SH="$cand" && break
 done
 if [ -n "$RUN_SH" ]; then

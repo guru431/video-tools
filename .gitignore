@@ -1,5 +1,6 @@
 # Large third-party binaries (download separately — see README)
 ffmpeg/ffmpeg.exe
+ffmpeg/ffprobe.exe
 yt-dlp/yt-dlp.exe
 yt-dlp/deno.exe
 yt-dlp/vot-cli-live.exe

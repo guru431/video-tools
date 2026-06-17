@@ -117,13 +117,20 @@ OUT=$(run_script 'audio_normalize=":-:loudnorm"')
 assert_empty "normalize -"  "$(getv "$OUT" af_chain)"
 
 # ══════════════════════════════════════════════════════════════
-suite "Аудио: audio_only"
+suite "Аудио: audio_only (F06 — контейнер/кодек из [audio] codec)"
 # ══════════════════════════════════════════════════════════════
+# F06: audio_only больше не форсит mp3/libmp3lame всегда — он выводит ext+encoder
+# из настроенного [audio] codec. default_vars задаёт codec=aac → ожидаем m4a/aac.
 
 OUT=$(run_script 'audio_only="yes"')
-assert_eq "audio_only: -vn"        "-vn"             "$(getv "$OUT" video_settings)"
-assert_eq "audio_only: format=mp3" "mp3"             "$(getv "$OUT" format_files_out)"
-assert_eq "audio_only: libmp3lame" "-c:a libmp3lame" "$(getv "$OUT" audio_codec_arg)"
+assert_eq "audio_only: -vn"         "-vn"        "$(getv "$OUT" video_settings)"
+assert_eq "audio_only aac: format=m4a"  "m4a"    "$(getv "$OUT" format_files_out)"
+assert_eq "audio_only aac: -c:a aac"    "-c:a aac" "$(getv "$OUT" audio_codec_arg)"
+
+# Явно libmp3lame → сегодняшнее поведение (mp3 / libmp3lame)
+OUT=$(run_script 'audio_only="yes"' 'audio_codec=":+:libmp3lame"')
+assert_eq "audio_only libmp3lame: format=mp3"   "mp3"             "$(getv "$OUT" format_files_out)"
+assert_eq "audio_only libmp3lame: -c:a libmp3lame" "-c:a libmp3lame" "$(getv "$OUT" audio_codec_arg)"
 
 rm -rf "$EMPTY_DIR"
 summary

@@ -88,6 +88,11 @@ function Parse-TrimFlag {
 $cfg_trim_start = Parse-TrimFlag (Read-Config "start" "trim" "-00:00:00") "00:00:00"
 $cfg_trim_end   = Parse-TrimFlag (Read-Config "end"   "trim" "-00:01:00") "00:01:00"
 $cfg_forceKf    = Read-Config "force_keyframes" "trim" "false"
+# Аудио-формат / SponsorBlock / субтитры-с-видео — по умолчанию текущее поведение.
+$cfg_audioFormat   = Read-Config "audio_format"        "download"  "best"
+$cfg_sponsorblock  = Read-Config "sponsorblock"        "download"  "off"
+$cfg_subsWithVideo = Read-Config "download_with_video" "subtitles" "off"
+$cfg_subLang       = Read-Config "lang"                "subtitles" "ru"
 
 $qualityMap = @{ "audio" = 0; "720" = 3; "360" = 1; "480" = 2; "1080" = 4; "1440" = 5; "2160" = 6 }
 $defaultQualityIdx = if ($qualityMap.ContainsKey($cfg_quality)) { $qualityMap[$cfg_quality] } else { 3 }
@@ -117,8 +122,8 @@ $global:urlQueue = [System.Collections.Generic.List[hashtable]]::new()
 
 # ── Создание формы ────────────────────────────────────────────────────────
 $form = [System.Windows.Forms.Form]::new()
-$form.Text = "Video Downloader (yt-dlp) v14"
-$form.Size = [System.Drawing.Size]::new(830, 775)
+$form.Text = "Video Downloader (yt-dlp) v15"
+$form.Size = [System.Drawing.Size]::new(830, 807)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
 $form.MaximizeBox = $false
@@ -367,6 +372,58 @@ $cfg_format = Read-Config "format_preset" "download" "auto"
 $fmtIdx = $comboFormat.Items.IndexOf($cfg_format)
 $comboFormat.SelectedIndex = if ($fmtIdx -ge 0) { $fmtIdx } else { 0 }
 $_fc.Add($comboFormat)
+
+# ── 4b. Аудио-формат / SponsorBlock / субтитры с видео ────────────────────
+$yPos += 30; $xPos = $xPos0
+$lbl = [System.Windows.Forms.Label]::new()
+$lbl.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$lbl.Size     = [System.Drawing.Size]::new(110, 20)
+$lbl.Text     = "Аудио:"
+$_fc.Add($lbl)
+
+$xPos += 110
+$comboAudioFormat = [System.Windows.Forms.ComboBox]::new()
+$comboAudioFormat.Location      = [System.Drawing.Point]::new($xPos, $yPos)
+$comboAudioFormat.Size          = [System.Drawing.Size]::new(90, 25)
+$comboAudioFormat.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+$comboAudioFormat.Items.AddRange(@("best", "mp3", "m4a", "opus"))
+$afIdx = $comboAudioFormat.Items.IndexOf($cfg_audioFormat)
+$comboAudioFormat.SelectedIndex = if ($afIdx -ge 0) { $afIdx } else { 0 }
+$_fc.Add($comboAudioFormat)
+
+$xPos += 100
+$lbl = [System.Windows.Forms.Label]::new()
+$lbl.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$lbl.Size     = [System.Drawing.Size]::new(95, 20)
+$lbl.Text     = "SponsorBlock:"
+$_fc.Add($lbl)
+
+$xPos += 95
+$comboSponsorblock = [System.Windows.Forms.ComboBox]::new()
+$comboSponsorblock.Location      = [System.Drawing.Point]::new($xPos, $yPos)
+$comboSponsorblock.Size          = [System.Drawing.Size]::new(90, 25)
+$comboSponsorblock.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+$comboSponsorblock.Items.AddRange(@("off", "mark", "remove"))
+$sbIdx = $comboSponsorblock.Items.IndexOf($cfg_sponsorblock)
+$comboSponsorblock.SelectedIndex = if ($sbIdx -ge 0) { $sbIdx } else { 0 }
+$_fc.Add($comboSponsorblock)
+
+$xPos += 100
+$lbl = [System.Windows.Forms.Label]::new()
+$lbl.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$lbl.Size     = [System.Drawing.Size]::new(70, 20)
+$lbl.Text     = "Субтитры:"
+$_fc.Add($lbl)
+
+$xPos += 70
+$comboSubsVideo = [System.Windows.Forms.ComboBox]::new()
+$comboSubsVideo.Location      = [System.Drawing.Point]::new($xPos, $yPos)
+$comboSubsVideo.Size          = [System.Drawing.Size]::new(90, 25)
+$comboSubsVideo.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+$comboSubsVideo.Items.AddRange(@("off", "sidecar", "embed"))
+$svIdx = $comboSubsVideo.Items.IndexOf($cfg_subsWithVideo)
+$comboSubsVideo.SelectedIndex = if ($svIdx -ge 0) { $svIdx } else { 0 }
+$_fc.Add($comboSubsVideo)
 
 # ── 5. Плейлист ───────────────────────────────────────────────────────────
 $yPos += 30; $xPos = $xPos0
@@ -778,6 +835,15 @@ $btnStart.Add_Click({
         return
     }
 
+    # Валидация папки: пустое поле → Test-Path '' / New-Item '' падают с сырым .NET-исключением.
+    if ([string]::IsNullOrWhiteSpace($textBoxFolder.Text)) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "Укажите папку для сохранения",
+            "Ошибка", [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning)
+        return
+    }
+
     $btnStart.Enabled = $false
     $btnStop.Enabled  = $true
     # Очередь нельзя менять во время загрузки — иначе индексы съезжают.
@@ -821,12 +887,22 @@ $btnStart.Add_Click({
             "`"140+299/bestvideo[height<=2160][fps>=50]+bestaudio[ext=m4a]/best[height<=2160]`""
         )
         "avc1_m3u8_60fps" = @(
-            "234", "234+309", "234+310/309", "234+311/310/309",
-            "234+312/311/310/309", "234+313/312/311/310/309", "234+314/313/312/311/310/309"
+            "234",
+            "`"234+309/bestvideo[height<=360][fps>=50]+bestaudio/best[height<=360]`"",
+            "`"234+310/309/bestvideo[height<=480][fps>=50]+bestaudio/best[height<=480]`"",
+            "`"234+311/310/309/bestvideo[height<=720][fps>=50]+bestaudio/best[height<=720]`"",
+            "`"234+312/311/310/309/bestvideo[height<=1080][fps>=50]+bestaudio/best[height<=1080]`"",
+            "`"234+313/312/311/310/309/bestvideo[height<=1440][fps>=50]+bestaudio/best[height<=1440]`"",
+            "`"234+314/313/312/311/310/309/bestvideo[height<=2160][fps>=50]+bestaudio/best[height<=2160]`""
         )
         "avc1_https_60fps_hdr" = @(
-            "234", "234+696", "234+697/696", "234+698/697/696",
-            "234+699/698/697/696", "234+700/699/698/697/696", "234+701/700/699/698/697/696"
+            "234",
+            "`"234+696/bestvideo[height<=360][fps>=50]+bestaudio/best[height<=360]`"",
+            "`"234+697/696/bestvideo[height<=480][fps>=50]+bestaudio/best[height<=480]`"",
+            "`"234+698/697/696/bestvideo[height<=720][fps>=50]+bestaudio/best[height<=720]`"",
+            "`"234+699/698/697/696/bestvideo[height<=1080][fps>=50]+bestaudio/best[height<=1080]`"",
+            "`"234+700/699/698/697/696/bestvideo[height<=1440][fps>=50]+bestaudio/best[height<=1440]`"",
+            "`"234+701/700/699/698/697/696/bestvideo[height<=2160][fps>=50]+bestaudio/best[height<=2160]`""
         )
         "old_combo" = @(
             "140", "18", "59/22/18", "22/18",
@@ -850,7 +926,7 @@ $btnStart.Add_Click({
 
             $progressBar.Value = 0
             $lblStatus.Text    = "Загрузка $itemNum/$totalItems  [$platform]"
-            $form.Text         = "Video Downloader (yt-dlp) v14  [$itemNum/$totalItems]"
+            $form.Text         = "Video Downloader (yt-dlp) v15  [$itemNum/$totalItems]"
             Append-Output ""
             Append-Output "═══ [$itemNum/$totalItems] [$platform]  $currentUrl" ([System.Drawing.Color]::Cyan)
 
@@ -939,6 +1015,23 @@ $btnStart.Add_Click({
                 8 { $command += "--sub-lang", "en", "--write-auto-sub", "--sub-format", "vtt", "--skip-download" }
             }
 
+            # Аудио-формат: только для «Только аудио» (qi=0) и явного mp3/m4a/opus.
+            if ($qi -eq 0 -and @("mp3", "m4a", "opus") -contains $comboAudioFormat.SelectedItem) {
+                $command += "--extract-audio", "--audio-format", $comboAudioFormat.SelectedItem, "--audio-quality", "0"
+            }
+            # SponsorBlock и субтитры-с-видео: только для реальных загрузок (qi 0..6),
+            # НЕ для режима «только субтитры» (qi 7/8).
+            if ($qi -ge 0 -and $qi -le 6) {
+                switch ($comboSponsorblock.SelectedItem) {
+                    "mark"   { $command += "--sponsorblock-mark", "all" }
+                    "remove" { $command += "--sponsorblock-remove", "all" }
+                }
+                switch ($comboSubsVideo.SelectedItem) {
+                    "sidecar" { $command += "--write-subs", "--write-auto-subs", "--sub-langs", $cfg_subLang }
+                    "embed"   { $command += "--write-subs", "--write-auto-subs", "--sub-langs", $cfg_subLang, "--embed-subs" }
+                }
+            }
+
             # Плейлист
             if ($currentUrl -match '[?&]list=') {
                 if (-not [string]::IsNullOrWhiteSpace($textBoxStart.Text)) {
@@ -1015,7 +1108,7 @@ $btnStart.Add_Click({
                         $pct = [int][math]::Floor([double]$Matches[1])
                         $progressBar.Value = [math]::Min($pct, 100)
                         $lblStatus.Text    = "Загрузка $itemNum/$totalItems  [$platform]  $pct%"
-                        $form.Text         = "Video Downloader (yt-dlp) v14  [$itemNum/$totalItems]  $pct%"
+                        $form.Text         = "Video Downloader (yt-dlp) v15  [$itemNum/$totalItems]  $pct%"
                     } elseif ($line -match '\[download\] Destination:') {
                         Append-Output $line ([System.Drawing.Color]::LightGreen)
                     } elseif ($line -match '\[Merger\]|\[info\].*Merging') {
@@ -1054,6 +1147,8 @@ $btnStart.Add_Click({
             # иначе они накапливаются между загрузками (утечка).
             if ($evtOut) { Unregister-Event -SourceIdentifier $evtOut.Name -ErrorAction SilentlyContinue; $evtOut | Remove-Job -Force -ErrorAction SilentlyContinue }
             if ($evtErr) { Unregister-Event -SourceIdentifier $evtErr.Name -ErrorAction SilentlyContinue; $evtErr | Remove-Job -Force -ErrorAction SilentlyContinue }
+            # Process освобождаем — иначе Win32-хендлы текут по всей очереди.
+            if ($global:downloadProcess) { $global:downloadProcess.Dispose() }
 
             if ($exitCode -eq 0) {
                 $progressBar.Value = 100
@@ -1122,6 +1217,7 @@ $btnStart.Add_Click({
                         $null = $votProc.StandardOutput.ReadToEnd()
                         $null = $errTask.Result
                         $votProc.WaitForExit()
+                        if ($votProc) { $votProc.Dispose() }
 
                         $transFile = Get-ChildItem -Path $tempDir -Filter "*.mp3" -File | Select-Object -First 1
 
@@ -1144,9 +1240,10 @@ $btnStart.Add_Click({
                                     "replace"    { @("-y", "-i", $latestVideo.FullName, "-i", $transFile.FullName,
                                                      "-map", "0:v", "-map", "1:a",
                                                      "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-                                                     "-metadata:s:a:0", "language=$transLang", $outputFile) }
+                                                     "-metadata:s:a:0", "language=$transLang",
+                                                     "-metadata:s:a:0", "title=AI Translation", $outputFile) }
                                     "mix"        { @("-y", "-i", $latestVideo.FullName, "-i", $transFile.FullName,
-                                                     "-filter_complex", "[0:a]volume=$cfg_transOrigVol[a0];[1:a]volume=$cfg_transTransVol[a1];[a0][a1]amix=inputs=2:duration=longest[aout]",
+                                                     "-filter_complex", "[0:a]volume=$cfg_transOrigVol[a0];[1:a]volume=$cfg_transTransVol[a1];[a0][a1]amix=inputs=2:duration=longest:normalize=0[aout]",
                                                      "-map", "0:v", "-map", "[aout]",
                                                      "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", $outputFile) }
                                 }
@@ -1181,7 +1278,7 @@ $btnStart.Add_Click({
             if ($failCount -gt 0) { $summary += "  |  Ошибки: $failCount" }
             Append-Output $summary ([System.Drawing.Color]::LightGreen)
             $lblStatus.Text = "Завершено: $successCount/$totalItems"
-            $form.Text      = "Video Downloader (yt-dlp) v14 — Готово!"
+            $form.Text      = "Video Downloader (yt-dlp) v15 — Готово!"
         } else {
             Append-Output "═══ Остановлено  |  Загружено: $successCount" ([System.Drawing.Color]::Yellow)
             $lblStatus.Text = "Остановлено"
@@ -1220,7 +1317,7 @@ $btnClear.Add_Click({
     $richOutput.Clear()
     $progressBar.Value = 0
     $lblStatus.Text    = "Готов к загрузке"
-    $form.Text         = "Video Downloader (yt-dlp) v14"
+    $form.Text         = "Video Downloader (yt-dlp) v15"
 })
 $_fc.Add($btnClear)
 

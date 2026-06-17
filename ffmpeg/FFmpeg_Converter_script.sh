@@ -126,9 +126,16 @@ fi
 
 # --- A1. Формат и настройки видео/аудио ---
 if [ "$audio_only" = "yes" ]; then
-	format_files_out="mp3"
+	# Контейнер и аудио-кодек выводятся из настроенного [audio] codec, а не жёстко mp3.
+	case "$audio_codec_value" in
+		libmp3lame|mp3) format_files_out="mp3";  set_audio_codec="-c:a libmp3lame" ;;
+		aac)            format_files_out="m4a";  set_audio_codec="-c:a aac" ;;
+		libopus|opus)   format_files_out="opus"; set_audio_codec="-c:a libopus" ;;
+		flac)           format_files_out="flac"; set_audio_codec="-c:a flac" ;;
+		libvorbis|vorbis) format_files_out="ogg"; set_audio_codec="-c:a libvorbis" ;;
+		*)              format_files_out="mp3";  set_audio_codec="-c:a libmp3lame" ;;
+	esac
 	video_settings="-vn"
-	set_audio_codec="-c:a libmp3lame"
 else
 	# D3. Выходной контейнер
 	if [ "$output_container_status" = "+" ]; then
@@ -315,7 +322,7 @@ encode_file() {
 	local file_path="$(dirname "$full_path")/"
 	local file_name="$(basename "$full_path" | sed 's/\.[^.]*$//')"
 	if [ "$save_old_extension" = "yes" ]; then file_name="$(basename "$full_path")"; fi
-	file_path="${file_path#$folder_sources}"
+	file_path="${file_path:${#folder_sources}}"
 	if [ ! -d "$folder_destination$file_path" ]; then mkdir -p "$folder_destination$file_path"; fi
 
 	# --- I. Извлечение аудио без перекодирования ---
@@ -389,7 +396,7 @@ encode_file() {
 	src_bitrate=$(echo "$ffmpeg_info" | grep -i 'bitrate:' | head -1 | grep -o 'bitrate: [0-9]*' | sed 's/bitrate: //')
 
 	local set_video_bitrate_final=""
-	if [ "$video_bitrate_status" = "+" ] && [ "$video_quality_status" != "+" ]; then
+	if [ "$audio_only" != "yes" ] && [ "$video_bitrate_status" = "+" ] && [ "$video_quality_status" != "+" ]; then
 		if [ -n "$src_bitrate" ] && [ "$src_bitrate" -lt "$set_video_bitrate_orig" ] 2>/dev/null; then
 			set_video_bitrate_final="-b:v ${src_bitrate}k"
 		else
@@ -528,7 +535,7 @@ encode_file() {
 							# subtitles — CPU-фильтр: на GPU-кадрах (hwaccel_output_format cuda/qsv)
 							# ffmpeg падает: "Impossible to convert between the formats". Скачиваем
 							# кадры в системную память перед прожигом. Проверено на RTX 5060 Ti.
-							if [ "$use_hw_accel" = "yes" ]; then
+							if [ "$use_hw_accel" = "yes" ] && [[ "$current_vf_chain" != *hwdownload* ]]; then
 								current_vf_chain="${current_vf_chain:+$current_vf_chain,}hwdownload,format=nv12"
 							fi
 							if [ -n "$subtitles_style" ]; then
@@ -592,11 +599,13 @@ encode_file() {
 						oh=$(echo "$out_time_str" | cut -d: -f1)
 						om=$(echo "$out_time_str" | cut -d: -f2)
 						os=$(echo "$out_time_str" | cut -d: -f3 | cut -d. -f1)
-						out_sec=$(( 10#$oh * 3600 + 10#$om * 60 + 10#$os ))
-						if [ "$out_sec" -gt 0 ]; then
-							pct=$((out_sec * 100 / file_duration))
-							[ $pct -gt 100 ] && pct=100
-							show_progress_bar $pct "$full_path"
+						if [[ "$oh$om$os" =~ ^[0-9]+$ ]] && [ "$file_duration" -gt 0 ]; then
+							out_sec=$(( 10#$oh * 3600 + 10#$om * 60 + 10#$os ))
+							if [ "$out_sec" -gt 0 ]; then
+								pct=$((out_sec * 100 / file_duration))
+								[ $pct -gt 100 ] && pct=100
+								show_progress_bar $pct "$full_path"
+							fi
 						fi
 					fi
 				fi
@@ -642,14 +651,14 @@ if [ "$merge_files" = "yes" ]; then
 	fname=""
 	while IFS= read -r -d '' full_path; do
 		if [ -z "$fname" ]; then fname=$(basename "$full_path"); break; fi
-	done < <(find "$folder_sources" \( "${format_find_pred[@]}" \) -print0)
+	done < <(find "$folder_sources" \( "${format_find_pred[@]}" \) -print0 | sort -z)
 	if [ ! -f "${folder_destination}/${fname}" ]; then
 		concat_list=$(mktemp)
 		# -printf — GNU-расширение (нет на macOS/BSD). Портативно: -print0 + read.
 		# Имена с ' экранируем для concat-формата ffmpeg: ' -> '\''
 		while IFS= read -r -d '' mf; do
 			printf "file '%s'\n" "${mf//\'/\'\\\'\'}" >> "$concat_list"
-		done < <(find "$folder_sources" \( "${format_find_pred[@]}" \) -print0)
+		done < <(find "$folder_sources" \( "${format_find_pred[@]}" \) -print0 | sort -z)
 		log_msg "INFO" "Объединение файлов -> ${folder_destination}/${fname}"
 		"$ffmpeg" -hide_banner -strict -2 -f concat -safe 0 -i "$concat_list" -c copy -map 0 "$folder_destination/$fname"
 		if [ $? -ne 0 ]; then

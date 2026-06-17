@@ -55,10 +55,13 @@ set "CONFIG_FILE=%~dp0config.ini"
 if not exist "%CONFIG_FILE%" goto :start_coding
 
 set "_section="
+:: Ограничение CMD: значения с '!' (напр. C:\My!Folder!) не поддерживаются — enabledelayedexpansion
+:: раскрывает '!...!' при чтении строки, а отключить его нельзя без потери поддержки '&' в значениях
+:: (напр. дефолтный subtitles_style=...&HFFFFFF&). Для путей с '!' используйте SH/PS1.
 for /f "usebackq tokens=* delims=" %%L in ("%CONFIG_FILE%") do (
 	set "_line=%%L"
-	:: Убрать пробелы в начале
-	for /f "tokens=* delims= " %%T in ("!_line!") do set "_line=%%T"
+	:: Убрать пробелы/табы в начале (delims = пробел+TAB)
+	for /f "tokens=* delims=	 " %%T in ("!_line!") do set "_line=%%T"
 	:: Пропустить пустые строки и комментарии
 	if defined _line if not "!_line:~0,1!"=="#" (
 		:: Секция? Без echo|findstr — пайп исполнял & из значений, а якорь $ не работал
@@ -71,13 +74,13 @@ for /f "usebackq tokens=* delims=" %%L in ("%CONFIG_FILE%") do (
 			for /f "tokens=1,* delims==" %%K in ("!_line!") do (
 				set "_key=%%K"
 				set "_val=%%~L"
-				:: Убрать пробелы из ключа (ведущие + хвостовые)
-				for /f "tokens=* delims= " %%T in ("!_key!") do set "_key=%%T"
+				:: Убрать пробелы/табы из ключа (ведущие + хвостовые)
+				for /f "tokens=* delims=	 " %%T in ("!_key!") do set "_key=%%T"
 				call :trim_key
 				rem Инлайн-комментарий режем только по " #" (см. :strip_inline_comment).
 				call :strip_inline_comment
-				:: Убрать ведущие пробелы и trailing
-				for /f "tokens=* delims= " %%T in ("!_val!") do set "_val=%%T"
+				:: Убрать ведущие пробелы/табы и trailing
+				for /f "tokens=* delims=	 " %%T in ("!_val!") do set "_val=%%T"
 				call :trim_val
 				:: Присвоить переменную по секции+ключу
 				call :assign_var
@@ -88,15 +91,17 @@ for /f "usebackq tokens=* delims=" %%L in ("%CONFIG_FILE%") do (
 goto :start_coding
 
 :trim_val
-:: Убрать все trailing spaces из значения
+:: Убрать все trailing spaces/tabs из значения
 if not defined _val exit /b
 if "!_val:~-1!"==" " (set "_val=!_val:~0,-1!" & goto :trim_val)
+if "!_val:~-1!"=="	" (set "_val=!_val:~0,-1!" & goto :trim_val)
 exit /b
 
 :trim_key
-:: Убрать все trailing spaces из ключа
+:: Убрать все trailing spaces/tabs из ключа
 if not defined _key exit /b
 if "!_key:~-1!"==" " (set "_key=!_key:~0,-1!" & goto :trim_key)
+if "!_key:~-1!"=="	" (set "_key=!_key:~0,-1!" & goto :trim_key)
 exit /b
 
 :strip_inline_comment
@@ -190,11 +195,15 @@ exit /b
 :: Детект абсолютного пути без echo|findstr — пайп исполнял & из значений
 set "_abs="
 if "!folder_sources:~1,2!"==":\" set "_abs=1"
+if "!folder_sources:~1,2!"==":/" set "_abs=1"
 if "!folder_sources:~0,2!"=="\\" set "_abs=1"
+if "!folder_sources:~0,2!"=="//" set "_abs=1"
 if not defined _abs set "folder_sources=%~dp0!folder_sources!"
 set "_abs="
 if "!folder_destination:~1,2!"==":\" set "_abs=1"
+if "!folder_destination:~1,2!"==":/" set "_abs=1"
 if "!folder_destination:~0,2!"=="\\" set "_abs=1"
+if "!folder_destination:~0,2!"=="//" set "_abs=1"
 if not defined _abs set "folder_destination=%~dp0!folder_destination!"
 
 rem Тестовый хук: --print-config печатает распарсенные переменные и выходит, не запуская script

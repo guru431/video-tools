@@ -49,6 +49,14 @@ run_suite() {
     fail="${fail:-0}"
     skip="${skip:-0}"
 
+    # Тест-файл, упавший ДО печати summary, даёт 0/0/0 и иначе попал бы в "зелёную"
+    # ветку. Считаем такой прогон провалом, чтобы крах не маскировался под успех.
+    if [ "$exit_code" -ne 0 ] && [ "$fail" -eq 0 ] && [ "$pass" -eq 0 ]; then
+        TOTAL_FAIL=$((TOTAL_FAIL + 1))
+        SUITE_RESULTS+=("${RED}✗${NC} $suite_name (crashed rc=$exit_code)")
+        return
+    fi
+
     TOTAL_PASS=$((TOTAL_PASS + pass))
     TOTAL_FAIL=$((TOTAL_FAIL + fail))
     TOTAL_SKIP=$((TOTAL_SKIP + skip))
@@ -74,6 +82,8 @@ FFMPEG_TESTS=(
     "$TESTS_DIR/ffmpeg/test_10_cmd.sh"
     "$TESTS_DIR/ffmpeg/test_11_cmd_smoke.sh"
     "$TESTS_DIR/ffmpeg/test_12_cmd_run_parser.sh"
+    "$TESTS_DIR/ffmpeg/test_13_parser_parity.sh"
+    "$TESTS_DIR/ffmpeg/test_14_audio_only_codec.sh"
 )
 
 YTDLP_TESTS=(
@@ -83,6 +93,7 @@ YTDLP_TESTS=(
     "$TESTS_DIR/yt-dlp/test_04_integration.sh"
     "$TESTS_DIR/yt-dlp/test_05_cmd.sh"
     "$TESTS_DIR/yt-dlp/test_06_ps1.sh"
+    "$TESTS_DIR/yt-dlp/test_07_new_features.sh"
 )
 
 # ── Баннер ───────────────────────────────────────────────────────────────────

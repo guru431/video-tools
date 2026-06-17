@@ -266,24 +266,24 @@ build_format_args() {
         avc1_m3u8_60fps)
             case "$quality" in
                 audio) fmt="234" ;;
-                360)   fmt="234+309" ;;
-                480)   fmt="234+310/309" ;;
-                720)   fmt="234+311/310/309" ;;
-                1080)  fmt="234+312/311/310/309" ;;
-                1440)  fmt="234+313/312/311/310/309" ;;
-                2160)  fmt="234+314/313/312/311/310/309" ;;
-                *)     fmt="234+311/310/309" ;;
+                360)   fmt="234+309/bestvideo[height<=360][fps>=50]+bestaudio/best[height<=360]" ;;
+                480)   fmt="234+310/309/bestvideo[height<=480][fps>=50]+bestaudio/best[height<=480]" ;;
+                720)   fmt="234+311/310/309/bestvideo[height<=720][fps>=50]+bestaudio/best[height<=720]" ;;
+                1080)  fmt="234+312/311/310/309/bestvideo[height<=1080][fps>=50]+bestaudio/best[height<=1080]" ;;
+                1440)  fmt="234+313/312/311/310/309/bestvideo[height<=1440][fps>=50]+bestaudio/best[height<=1440]" ;;
+                2160)  fmt="234+314/313/312/311/310/309/bestvideo[height<=2160][fps>=50]+bestaudio/best[height<=2160]" ;;
+                *)     fmt="234+311/310/309/bestvideo[height<=720][fps>=50]+bestaudio/best[height<=720]" ;;
             esac ;;
         avc1_https_60fps_hdr)
             case "$quality" in
                 audio) fmt="234" ;;
-                360)   fmt="234+696" ;;
-                480)   fmt="234+697/696" ;;
-                720)   fmt="234+698/697/696" ;;
-                1080)  fmt="234+699/698/697/696" ;;
-                1440)  fmt="234+700/699/698/697/696" ;;
-                2160)  fmt="234+701/700/699/698/697/696" ;;
-                *)     fmt="234+698/697/696" ;;
+                360)   fmt="234+696/bestvideo[height<=360][fps>=50]+bestaudio/best[height<=360]" ;;
+                480)   fmt="234+697/696/bestvideo[height<=480][fps>=50]+bestaudio/best[height<=480]" ;;
+                720)   fmt="234+698/697/696/bestvideo[height<=720][fps>=50]+bestaudio/best[height<=720]" ;;
+                1080)  fmt="234+699/698/697/696/bestvideo[height<=1080][fps>=50]+bestaudio/best[height<=1080]" ;;
+                1440)  fmt="234+700/699/698/697/696/bestvideo[height<=1440][fps>=50]+bestaudio/best[height<=1440]" ;;
+                2160)  fmt="234+701/700/699/698/697/696/bestvideo[height<=2160][fps>=50]+bestaudio/best[height<=2160]" ;;
+                *)     fmt="234+698/697/696/bestvideo[height<=720][fps>=50]+bestaudio/best[height<=720]" ;;
             esac ;;
         old_combo)
             case "$quality" in
@@ -355,6 +355,25 @@ download_url() {
     else
         build_format_args "$quality" "$FORMAT_PRESET" "$(detect_platform "$url")"
         cmd+=("${FMT_ARGS_ARR[@]}")
+
+        # Перекодирование в аудиоформат (только при quality=audio и заданном формате)
+        if [ "$quality" = "audio" ]; then
+            case "$AUDIO_FORMAT" in
+                mp3|m4a|opus) cmd+=(--extract-audio --audio-format "$AUDIO_FORMAT" --audio-quality 0) ;;
+            esac
+        fi
+
+        # SponsorBlock (только для реальных загрузок)
+        case "$SPONSORBLOCK" in
+            remove) cmd+=(--sponsorblock-remove all) ;;
+            mark)   cmd+=(--sponsorblock-mark all) ;;
+        esac
+
+        # Субтитры вместе с видео (sidecar/embed; opt-in, по умолчанию off)
+        case "$SUBS_WITH_VIDEO" in
+            sidecar) cmd+=(--write-subs --write-auto-subs --sub-langs "$SUB_LANG") ;;
+            embed)   cmd+=(--write-subs --write-auto-subs --sub-langs "$SUB_LANG" --embed-subs) ;;
+        esac
     fi
 
     # Фрагмент: только start = с TIME до конца; только end = с начала до TIME;
@@ -454,7 +473,7 @@ translate_audio() {
             ;;
         mix)
             ffmpeg -y -i "$video_file" -i "$translation_file" \
-                -filter_complex "[0:a]volume=${orig_vol}[a0];[1:a]volume=${trans_vol}[a1];[a0][a1]amix=inputs=2:duration=longest[aout]" \
+                -filter_complex "[0:a]volume=${orig_vol}[a0];[1:a]volume=${trans_vol}[a1];[a0][a1]amix=inputs=2:duration=longest:normalize=0[aout]" \
                 -map 0:v -map "[aout]" \
                 -c:v copy -c:a aac -b:a 192k \
                 "$output_file" 2>/dev/null
@@ -539,6 +558,25 @@ download_batch() {
         else
             build_format_args "$QUALITY" "$FORMAT_PRESET" "youtube"
             cmd+=("${FMT_ARGS_ARR[@]}")
+
+            # Перекодирование в аудиоформат (только при quality=audio и заданном формате)
+            if [ "$QUALITY" = "audio" ]; then
+                case "$AUDIO_FORMAT" in
+                    mp3|m4a|opus) cmd+=(--extract-audio --audio-format "$AUDIO_FORMAT" --audio-quality 0) ;;
+                esac
+            fi
+
+            # SponsorBlock (только для реальных загрузок)
+            case "$SPONSORBLOCK" in
+                remove) cmd+=(--sponsorblock-remove all) ;;
+                mark)   cmd+=(--sponsorblock-mark all) ;;
+            esac
+
+            # Субтитры вместе с видео (sidecar/embed; opt-in, по умолчанию off)
+            case "$SUBS_WITH_VIDEO" in
+                sidecar) cmd+=(--write-subs --write-auto-subs --sub-langs "$SUB_LANG") ;;
+                embed)   cmd+=(--write-subs --write-auto-subs --sub-langs "$SUB_LANG" --embed-subs) ;;
+            esac
         fi
 
         if [ "$mode" = "playlists" ]; then
@@ -652,6 +690,8 @@ load_config() {
     CONTINUE_ON_ERROR=$(read_config "continue_on_error" "download" "true")
     USE_ARCHIVE=$(read_config "use_archive" "download" "true")
     ARCHIVE_FILE=$(read_config "archive_file" "download" "download_archive.txt")
+    AUDIO_FORMAT=$(read_config "audio_format" "download" "best")
+    SPONSORBLOCK=$(read_config "sponsorblock" "download" "off")
 
     # Trim: парсим +/-VALUE из [trim]
     local raw
@@ -666,6 +706,7 @@ load_config() {
     FORCE_KEYFRAMES=$(read_config "force_keyframes" "trim" "false")
     SUB_LANG=$(read_config "lang" "subtitles" "ru")
     SUB_FORMAT=$(read_config "format" "subtitles" "vtt")
+    SUBS_WITH_VIDEO=$(read_config "download_with_video" "subtitles" "off")
 
     # Перевод
     TRANSLATE_ENABLED=$(read_config "enabled" "translation" "false")
@@ -834,6 +875,11 @@ main() {
         local dl_marker
         dl_marker=$(mktemp 2>/dev/null) || dl_marker="/tmp/ytdlp_marker_$$"
         : > "$dl_marker"
+        # Backdate 1s: -newer is strict '>' on mtime; on 1-second-granularity
+        # filesystems a file written in the marker's whole second would be missed.
+        # touch -d '1 second ago' — GNU coreutils; на macOS/BSD тихо no-op (edge с
+        # точностью mtime 1 сек там не покрывается, но загрузка/перевод работают).
+        touch -d '1 second ago' "$dl_marker" 2>/dev/null || true
 
         download_url "$URL" "$template" "$QUALITY" "$SUBS_ONLY" "$archive_path" \
             "$TRIM_START_ON" "$TRIM_START_VAL" "$TRIM_END_ON" "$TRIM_END_VAL" "$FORCE_KEYFRAMES"
@@ -841,11 +887,12 @@ main() {
 
         # AI-перевод только при успешной загрузке (паритет с CMD) и не для субтитров
         if [ "$dl_rc" -eq 0 ] && [ "$TRANSLATE_ENABLED" = "true" ] && [ "$SUBS_ONLY" != "true" ]; then
-            # Найти последний скачанный файл. Среди появившихся после marker берём
-            # самый свежий по mtime (ls -t) — find порядок не сортирует, и при
-            # нескольких новых mp4 (плейлист) head -1 брал произвольный.
+            # Найти последний скачанный файл — самый свежий по mtime среди появившихся
+            # после marker. find -exec ls -1t {} + : пусто-безопасно (при нуле совпадений
+            # ls не запускается; иначе ls без аргументов листил бы CWD и брал чужой mp4)
+            # и портируемо (без GNU-only -printf; ls -1t есть и на macOS/BSD).
             local latest
-            latest=$(find "$BASE_DIR" -name "*.mp4" -newer "$dl_marker" -type f -print0 2>/dev/null | xargs -0 ls -1t 2>/dev/null | head -1)
+            latest=$(find "$BASE_DIR" -name '*.mp4' -newer "$dl_marker" -type f -exec ls -1t {} + 2>/dev/null | head -1)
             if [ -n "$latest" ]; then
                 translate_audio "$latest" "$URL" "$TRANSLATE_LANG" "$TRANSLATE_VOICE" \
                     "$TRANSLATE_MODE" "$TRANSLATE_ORIG_LANG" \

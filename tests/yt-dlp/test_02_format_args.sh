@@ -234,9 +234,9 @@ assert_contains "неизвестный пресет → avc1"      "vcodec^=avc
 # ══════════════════════════════════════════════════════════════
 suite "Task 9: исправленные itag-таблицы во всех 3 платформах (анализ исходников)"
 # ══════════════════════════════════════════════════════════════
-SH_SRC="$(cat "$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v14.sh")"
-CMD_SRC="$(cat "$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v14.cmd")"
-PS1_SRC="$(cat "$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v14.ps1")"
+SH_SRC="$(cat "$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.sh")"
+CMD_SRC="$(cat "$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.cmd")"
+PS1_SRC="$(cat "$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.ps1")"
 
 # SH
 assert_contains "SH: avc1_https 2160 → 140+266"  "140+266"  "$SH_SRC"
@@ -247,6 +247,7 @@ assert_contains "SH: avc1_best fallback /bestaudio+bestvideo"  "/bestaudio+bestv
 # CMD
 assert_contains "CMD: avc1_https q6 → 140+266"  "140+266"  "$CMD_SRC"
 assert_not_contains "CMD: нет битого 140+139"  "140+139"  "$CMD_SRC"
+assert_not_contains "CMD: old_combo без itag 20/18"  "20/18"  "$CMD_SRC"
 assert_contains "CMD: GE-плейсхолдер декодируется в >="  "save_settings:GE=>=!"  "$CMD_SRC"
 # PS1
 assert_contains "PS1: avc1_https 2160 → 140+266"  "140+266"  "$PS1_SRC"

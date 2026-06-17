@@ -34,12 +34,18 @@ continue_on_error = true
 # Пропускать уже скачанные видео (download archive)
 use_archive = true
 archive_file = download_archive.txt
+# Формат аудио при выборе "только аудио": best (как отдаёт сервер), mp3, m4a, opus
+audio_format = best
+# SponsorBlock: off (выкл), mark (отметить главами), remove (вырезать сегменты)
+sponsorblock = off
 
 [subtitles]
 # Язык субтитров
 lang = ru
 # Формат: vtt, srt
 format = vtt
+# Скачивать субтитры вместе с видео: off, sidecar (отдельный файл), embed (встроить в контейнер)
+download_with_video = off
 
 [batch]
 # Период для batch-загрузки: now-1month, now-3months, now-6months, now-1year

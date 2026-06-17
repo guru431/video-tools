@@ -117,7 +117,7 @@ $_cfg_log_file     = Read-Config "log_file"           "other" "ffmpeg_convert.lo
 
 # Main Form
 $form = [System.Windows.Forms.Form]::new()
-$form.Text = "Video Converter (ffmpeg) v14"
+$form.Text = "Video Converter (ffmpeg) v15"
 $form.Size = [System.Drawing.Size]::new(820, 850)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
@@ -505,7 +505,7 @@ $comboAudioCodec.Location = [System.Drawing.Point]::new($_ainp, 18)
 $comboAudioCodec.Size = [System.Drawing.Size]::new($_aw, 21)
 $comboAudioCodec.Items.AddRange(@("aac", "libmp3lame"))
 $_acIdx = $comboAudioCodec.Items.IndexOf($_cfg_audio_codec.value)
-$comboAudioCodec.SelectedIndex = if ($_acIdx -ge 0) { $_acIdx } else { 0 }
+if ($_acIdx -ge 0) { $comboAudioCodec.SelectedIndex = $_acIdx } else { $comboAudioCodec.Text = $_cfg_audio_codec.value }
 $_ge.Add($comboAudioCodec)
 
 # Audio Channels
@@ -584,7 +584,7 @@ $comboAudioNorm.Location = [System.Drawing.Point]::new($_ainp, 106)
 $comboAudioNorm.Size = [System.Drawing.Size]::new($_aw, 21)
 $comboAudioNorm.Items.AddRange(@("loudnorm", "dynaudnorm"))
 $_anIdx = $comboAudioNorm.Items.IndexOf($_cfg_audio_norm.value)
-$comboAudioNorm.SelectedIndex = if ($_anIdx -ge 0) { $_anIdx } else { 0 }
+if ($_anIdx -ge 0) { $comboAudioNorm.SelectedIndex = $_anIdx } else { $comboAudioNorm.Text = $_cfg_audio_norm.value }
 $_ge.Add($comboAudioNorm)
 
 # --- Video column 1 (x=265) ---
@@ -608,7 +608,7 @@ $comboVideoCodec.Location = [System.Drawing.Point]::new($_vinp, 18)
 $comboVideoCodec.Size = [System.Drawing.Size]::new($_vw, 21)
 $comboVideoCodec.Items.AddRange(@("libx264", "libx265", "libsvtav1", "h264_nvenc", "hevc_nvenc", "av1_nvenc", "h264_qsv"))
 $_vcIdx = $comboVideoCodec.Items.IndexOf($_cfg_video_codec.value)
-$comboVideoCodec.SelectedIndex = if ($_vcIdx -ge 0) { $_vcIdx } else { 0 }
+if ($_vcIdx -ge 0) { $comboVideoCodec.SelectedIndex = $_vcIdx } else { $comboVideoCodec.Text = $_cfg_video_codec.value }
 $_ge.Add($comboVideoCodec)
 
 # Video Resolution
@@ -629,7 +629,7 @@ $comboVideoResolution.Location = [System.Drawing.Point]::new($_vinp, 40)
 $comboVideoResolution.Size = [System.Drawing.Size]::new($_vw, 21)
 $comboVideoResolution.Items.AddRange(@("1920x1080", "1280x720", "854x480", "640x360", "1440x1080", "960x720", "640x480", "480x360"))
 $_vrIdx = $comboVideoResolution.Items.IndexOf($_cfg_video_resolution.value)
-$comboVideoResolution.SelectedIndex = if ($_vrIdx -ge 0) { $_vrIdx } else { 1 }
+if ($_vrIdx -ge 0) { $comboVideoResolution.SelectedIndex = $_vrIdx } else { $comboVideoResolution.Text = $_cfg_video_resolution.value }
 $_ge.Add($comboVideoResolution)
 
 # Video Bitrate
@@ -750,7 +750,7 @@ $comboContainer.Location = [System.Drawing.Point]::new($_v2inp, 62)
 $comboContainer.Size = [System.Drawing.Size]::new($_v2w, 21)
 $comboContainer.Items.AddRange(@("mp4", "mkv", "webm", "avi", "ts"))
 $_cntIdx = $comboContainer.Items.IndexOf($_cfg_container.value)
-$comboContainer.SelectedIndex = if ($_cntIdx -ge 0) { $_cntIdx } else { 0 }
+if ($_cntIdx -ge 0) { $comboContainer.SelectedIndex = $_cntIdx } else { $comboContainer.Text = $_cfg_container.value }
 $_ge.Add($comboContainer)
 
 $groupEncoding.Controls.AddRange($_ge.ToArray())
@@ -1178,7 +1178,8 @@ $buttonRun.Add_Click({
     $script:merge_files         = if ($checkMergeFiles.Checked)  { "yes" } else { "no" }
     $script:create_frame        = if ($checkCreateFrames.Checked) { "yes" } else { "no" }
     $script:copy_codecs         = if ($checkCopyCodecs.Checked)  { "yes" } else { "no" }
-    $script:multithreads        = if ($checkMultithreads.Checked) { ":+:$($textThreads.Text)" } else { ":-:1" }
+    $_threadsVal = if ($textThreads.Text -match '^[0-9]+$') { $textThreads.Text } else { '4' }
+    $script:multithreads        = if ($checkMultithreads.Checked) { ":+:$_threadsVal" } else { ":-:1" }
     $script:parallel_files      = ":-:1"
     $script:dry_run             = if ($checkDryRun.Checked)      { "yes" } else { "no" }
     $script:enable_log          = if ($checkLog.Checked)         { "yes" } else { "no" }
@@ -1186,15 +1187,15 @@ $buttonRun.Add_Click({
     $script:extract_audio_copy  = if ($checkExtractAudioCopy.Checked) { "yes" } else { "no" }
 
     # Audio settings
-    $script:audio_codec          = if ($checkAudioCodec.Checked)      { ":+:$($comboAudioCodec.SelectedItem)" }    else { ":-:$($comboAudioCodec.SelectedItem)" }
+    $script:audio_codec          = if ($checkAudioCodec.Checked)      { ":+:$($comboAudioCodec.Text)" }    else { ":-:$($comboAudioCodec.Text)" }
     $script:audio_number_channels = if ($checkAudioChannels.Checked)  { ":+:$($comboAudioChannels.SelectedIndex + 1)" } else { ":-:$($comboAudioChannels.SelectedIndex + 1)" }
     $script:audio_bitrate        = if ($checkAudioBitrate.Checked)    { ":+:$($textAudioBitrate.Text)" }           else { ":-:$($textAudioBitrate.Text)" }
     $script:audio_sampling_rate  = if ($checkAudioSampleRate.Checked)  { ":+:$($textAudioSampleRate.Text)" }        else { ":-:$($textAudioSampleRate.Text)" }
-    $script:audio_normalize      = if ($checkAudioNorm.Checked)       { ":+:$($comboAudioNorm.SelectedItem)" }     else { ":-:$($comboAudioNorm.SelectedItem)" }
+    $script:audio_normalize      = if ($checkAudioNorm.Checked)       { ":+:$($comboAudioNorm.Text)" }     else { ":-:$($comboAudioNorm.Text)" }
 
     # Video settings
-    $script:video_codec          = if ($checkVideoCodec.Checked)      { ":+:$($comboVideoCodec.SelectedItem)" }    else { ":-:$($comboVideoCodec.SelectedItem)" }
-    $script:video_resolution     = if ($checkVideoResolution.Checked) { ":+:$($comboVideoResolution.SelectedItem)" } else { ":-:$($comboVideoResolution.SelectedItem)" }
+    $script:video_codec          = if ($checkVideoCodec.Checked)      { ":+:$($comboVideoCodec.Text)" }    else { ":-:$($comboVideoCodec.Text)" }
+    $script:video_resolution     = if ($checkVideoResolution.Checked) { ":+:$($comboVideoResolution.Text)" } else { ":-:$($comboVideoResolution.Text)" }
     $script:video_bitrate        = if ($checkVideoBitrate.Checked)    { ":+:$($textVideoBitrate.Text)" }           else { ":-:$($textVideoBitrate.Text)" }
     $script:video_number_frames  = if ($checkFrameRate.Checked)       { ":+:$($textFrameRate.Text)" }              else { ":-:$($textFrameRate.Text)" }
     # Значение rotation берём из первой цифры текста ("1 - По часовой" → "1"),
@@ -1203,7 +1204,7 @@ $buttonRun.Add_Click({
     $script:video_rotation       = if ($checkVideoRotation.Checked)   { ":+:$_rotVal" } else { ":-:$_rotVal" }
     $script:video_quality        = if ($checkVideoQuality.Checked)    { ":+:$($textVideoQuality.Text)" }           else { ":-:$($textVideoQuality.Text)" }
     $script:keep_aspect_ratio    = if ($checkKeepAspect.Checked)      { ":+:yes" }                                 else { ":-:no" }
-    $script:output_container     = if ($checkContainer.Checked)       { ":+:$($comboContainer.SelectedItem)" }     else { ":-:$($comboContainer.SelectedItem)" }
+    $script:output_container     = if ($checkContainer.Checked)       { ":+:$($comboContainer.Text)" }     else { ":-:$($comboContainer.Text)" }
 
     $subtitlesMode = if ($comboSubtitlesMode.SelectedIndex -eq 0) { "burn" } else { "meta" }
     $script:video_subtitles = if ($checkVideoSubtitles.Checked) { ":+:$subtitlesMode" } else { ":-:$subtitlesMode" }
@@ -1319,6 +1320,7 @@ $buttonRun.Add_Click({
         # Проверяем, завершился ли фоновый процесс
         if ($global:_guiHandle.IsCompleted) {
             $this.Stop()
+            $this.Dispose()
 
             # Проверяем ошибки Runspace
             try { $global:_guiPS.EndInvoke($global:_guiHandle) | Out-Null } catch {}

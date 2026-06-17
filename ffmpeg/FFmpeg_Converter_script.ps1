@@ -135,9 +135,16 @@ if ($length_coding_status -eq "+") {
 # осиротевший `-vf` с пустым значением ломает каждый файл.
 $vf_parts = @()
 if ($audio_only -eq "yes") {
-	$format_files_out = "mp3"
+	# Контейнер и аудио-кодек выводятся из настроенного [audio] codec, а не жёстко mp3.
+	switch ($audio_codec_value) {
+		{ $_ -eq "libmp3lame" -or $_ -eq "mp3" } { $format_files_out = "mp3";  $set_audio_codec = "-c:a libmp3lame"; break }
+		"aac"                                    { $format_files_out = "m4a";  $set_audio_codec = "-c:a aac"; break }
+		{ $_ -eq "libopus" -or $_ -eq "opus" }   { $format_files_out = "opus"; $set_audio_codec = "-c:a libopus"; break }
+		"flac"                                   { $format_files_out = "flac"; $set_audio_codec = "-c:a flac"; break }
+		{ $_ -eq "libvorbis" -or $_ -eq "vorbis" } { $format_files_out = "ogg"; $set_audio_codec = "-c:a libvorbis"; break }
+		default                                  { $format_files_out = "mp3";  $set_audio_codec = "-c:a libmp3lame" }
+	}
 	$video_settings_args = @("-vn")
-	$set_audio_codec = "-c:a libmp3lame"
 } else {
 	# D3. Выходной контейнер
 	if ($output_container_status -eq "+") {
@@ -409,7 +416,7 @@ function Encode-File {
 	if ($bitrate_match.Success) { $src_bitrate = [int]$bitrate_match.Groups[1].Value }
 
 	$set_video_bitrate_final = @()
-	if ($video_bitrate_status -eq "+" -and $video_quality_status -ne "+") {
+	if ($audio_only -ne "yes" -and $video_bitrate_status -eq "+" -and $video_quality_status -ne "+") {
 		if ($src_bitrate -and $src_bitrate -lt [int]$set_video_bitrate_orig) {
 			$set_video_bitrate_final = @("-b:v", "${src_bitrate}k")
 		} else {
@@ -524,11 +531,11 @@ function Encode-File {
 					$sub_file = "$folder_sources$file_path$file_name.$ext"
 					if (Test-Path $sub_file) {
 						if ($video_subtitles_value -eq "burn") {
-							$sub_escaped = $sub_file -replace '\\', '\\\\' -replace "'", "\\\'" -replace ":", "\:" -replace '\[', '\[' -replace '\]', '\]' -replace ';', '\;' -replace '%', '\%'
+							$sub_escaped = $sub_file -replace '\\','/' -replace "'","\'" -replace ':','\:' -replace '\[','\[' -replace '\]','\]' -replace ';','\;' -replace '%','\%'
 							# subtitles — CPU-фильтр: на GPU-кадрах (hwaccel_output_format cuda/qsv)
 							# ffmpeg падает с "Impossible to convert between the formats". Скачиваем
 							# кадры в системную память перед прожигом. Проверено на RTX 5060 Ti.
-							if ($use_hw_accel) {
+							if ($use_hw_accel -and ($current_vf_parts -notcontains "hwdownload")) {
 								$current_vf_parts.Add("hwdownload") | Out-Null
 								$current_vf_parts.Add("format=nv12") | Out-Null
 							}
@@ -576,6 +583,9 @@ function Encode-File {
 		# D7. Dry-run
 		if ($dry_run -eq "yes") {
 			Write-Host "[DRY-RUN] $ffmpeg $($ffmpegArgs -join ' ')"
+			$_cmdStr = "$ffmpeg $($ffmpegArgs -join ' ')"
+			$script:countOk++
+			Write-GUIProgress -FilePercent 100 -CurrentFile $file.Name -Command $_cmdStr
 		} else {
 			Log-Msg "INFO" "Кодирование: $($file.Name) -> $(Split-Path $out_file -Leaf)"
 			$_cmdStr = "$ffmpeg $($ffmpegArgs -join ' ')"
@@ -589,12 +599,21 @@ function Encode-File {
 			$proc = New-Object System.Diagnostics.Process
 			$proc.StartInfo.FileName = $ffmpeg
 			$proc.StartInfo.UseShellExecute = $false
-			$proc.StartInfo.CreateNoWindow = $false
+			$proc.StartInfo.CreateNoWindow = $true
+			$proc.StartInfo.RedirectStandardError = $true
 			# Аргументы передаём как строку с экранированием
 			$proc.StartInfo.Arguments = ($ffmpegArgsWithProgress | ForEach-Object {
 				if ($_ -match '[ "\\]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
 			}) -join " "
+			# F08. stderr дренируем АСИНХРОННО в буфер, чтобы не было дедлока с
+			# чтением -progress temp-файла; на ошибке покажем последние строки.
+			$errBuf = New-Object System.Collections.ArrayList
+			$errHandler = {
+				if ($null -ne $EventArgs.Data) { [void]$Event.MessageData.Add($EventArgs.Data) }
+			}
+			$errSub = Register-ObjectEvent -InputObject $proc -EventName ErrorDataReceived -Action $errHandler -MessageData $errBuf
 			$proc.Start() | Out-Null
+			$proc.BeginErrorReadLine()
 
 			# Обновляем прогресс в GUI-файл (если GUI) или Write-Progress (если CLI)
 			while (!$proc.HasExited) {
@@ -631,6 +650,8 @@ function Encode-File {
 			}
 
 			if (!$proc.HasExited) { $proc.WaitForExit() }
+			try { $proc.CancelErrorRead() } catch {}
+			if ($errSub) { Unregister-Event -SourceIdentifier $errSub.Name -ErrorAction SilentlyContinue; Remove-Job $errSub -Force -ErrorAction SilentlyContinue }
 			$exitCode = $proc.ExitCode
 			Remove-Item $progressTempFile -Force -ErrorAction SilentlyContinue
 			if (-not $guiProgressFile) { Write-Progress -Activity "Кодирование" -Completed }
@@ -641,6 +662,9 @@ function Encode-File {
 			# E2. Обработка ошибок
 			if ($exitCode -ne 0) {
 				Log-Msg "FAIL" "$($file.Name) (exit code $exitCode, $elapsedStr)"
+				if ($errBuf.Count -gt 0) {
+					$errBuf | Select-Object -Last 3 | ForEach-Object { Log-Msg "FAIL" "  $_" }
+				}
 				# Ждём освобождения файла после Kill
 				Start-Sleep -Milliseconds 500
 				if (Test-Path $out_file) { Remove-Item $out_file -Force -ErrorAction SilentlyContinue }
@@ -665,7 +689,7 @@ if ($merge_files -eq "yes") {
 	$fname = $format_files_in_list[0].Name
 	if (!(Test-Path "$folder_destination\$fname")) {
 		$tmpFile = [System.IO.Path]::GetTempFileName()
-		[System.IO.File]::WriteAllLines($tmpFile, ($format_files_in_list.FullName | ForEach-Object { "file '$_'" }))
+		[System.IO.File]::WriteAllLines($tmpFile, ($format_files_in_list.FullName | ForEach-Object { "file '" + ($_ -replace "'", "'\''") + "'" }))
 		Log-Msg "INFO" "Объединение файлов -> $folder_destination\$fname"
 		& $ffmpeg -hide_banner -strict -2 -f concat -safe 0 -i $tmpFile -c copy -map 0 "$folder_destination\$fname"
 		if ($LASTEXITCODE -ne 0) {
@@ -684,6 +708,7 @@ if ($merge_files -eq "yes") {
 	# всех переменных и функций через $using:, что несовместимо с текущей архитектурой
 	# (Encode-File использует $script:-переменные). Используется последовательная обработка.
 	foreach ($file in $format_files_in_list) {
+		if ($guiCancelFile -and (Test-Path $guiCancelFile)) { break }
 		Encode-File -file $file
 	}
 }

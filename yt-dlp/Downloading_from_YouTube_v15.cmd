@@ -99,6 +99,19 @@ set "trim_start="
 set "trim_end="
 set /p "trim_start=Начало (Enter = с 0): "
 set /p "trim_end=Конец  (Enter = до конца): "
+rem Валидация формата времени: разрешены только цифры, ':' и '.'. Иначе значение
+rem могло бы содержать '"' и сломать кавычки в --download-sections. Значение пишем
+rem в файл редиректом (НЕ pipe: pipe порождает дочерний cmd, который ре-парсит '&').
+set "_trimchk=%temp%\ytdlp_trimchk_%random%.txt"
+if not "!trim_start!"=="" (
+    >"!_trimchk!" echo(!trim_start!
+    findstr /r /c:"^[0-9:.][0-9:.]*$" "!_trimchk!" >nul || (echo [WARN] Некорректное время начала - игнорируется & set "trim_start=")
+)
+if not "!trim_end!"=="" (
+    >"!_trimchk!" echo(!trim_end!
+    findstr /r /c:"^[0-9:.][0-9:.]*$" "!_trimchk!" >nul || (echo [WARN] Некорректное время конца - игнорируется & set "trim_end=")
+)
+del "!_trimchk!" 2>nul
 set "sections_arg="
 if not "%trim_start%%trim_end%"=="" (
     set "kf="

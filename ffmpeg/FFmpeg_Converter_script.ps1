@@ -390,9 +390,12 @@ function Encode-File {
 	$out_base = "$folder_destination$file_path$file_name"
 
 	# E3. Проверка валидности существующего файла
+	# Судим по exit code (как SH/CMD), а не по тексту stderr: ffmpeg с -v error может
+	# вывести не-фатальную диагностику для полностью декодируемого файла — тогда
+	# непустой stderr ошибочно удалял бы валидный готовый результат.
 	if (Test-Path "$out_base.$current_format_out") {
-		$check = & $ffmpeg -v error -i "$out_base.$current_format_out" -f null - 2>&1
-		if (-not $check) {
+		& $ffmpeg -v error -i "$out_base.$current_format_out" -f null - 2>&1 | Out-Null
+		if ($LASTEXITCODE -eq 0) {
 			$script:countSkip++
 			Write-GUIProgress -CurrentFile $file.Name
 			return
@@ -601,9 +604,15 @@ function Encode-File {
 			$proc.StartInfo.UseShellExecute = $false
 			$proc.StartInfo.CreateNoWindow = $true
 			$proc.StartInfo.RedirectStandardError = $true
-			# Аргументы передаём как строку с экранированием
+			# Аргументы передаём как строку с экранированием по правилам CommandLineToArgvW:
+			# backslash перед кавычкой и в конце токена удваиваем, иначе trailing `\`
+			# (напр. путь "C:\dir\") экранирует закрывающую кавычку и смещает границу аргумента.
 			$proc.StartInfo.Arguments = ($ffmpegArgsWithProgress | ForEach-Object {
-				if ($_ -match '[ "\\]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
+				if ($_ -match '[ "\\]') {
+					$a = [regex]::Replace($_, '(\\*)"', '$1$1\"')
+					$a = [regex]::Replace($a, '(\\+)$', '$1$1')
+					'"' + $a + '"'
+				} else { $_ }
 			}) -join " "
 			# F08. stderr дренируем АСИНХРОННО в буфер, чтобы не было дедлока с
 			# чтением -progress temp-файла; на ошибке покажем последние строки.

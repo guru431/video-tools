@@ -1222,11 +1222,13 @@ $btnStart.Add_Click({
                         $transFile = Get-ChildItem -Path $tempDir -Filter "*.mp3" -File | Select-Object -First 1
 
                         if ($transFile) {
-                            $latestVideo = Get-ChildItem -Path $folder -Filter "*.mp4" -Recurse -File |
-                                Where-Object { $_.LastWriteTime -ge $dlStartTime } |
+                            # Ищем mp4/mkv/webm (yt-dlp для не-YouTube/fallback-пресетов отдаёт не только mp4).
+                            $latestVideo = Get-ChildItem -Path $folder -Recurse -File |
+                                Where-Object { $_.Extension -in @('.mp4','.mkv','.webm') -and $_.LastWriteTime -ge $dlStartTime } |
                                 Sort-Object LastWriteTime -Descending | Select-Object -First 1
                             if ($latestVideo) {
-                                $outputFile = $latestVideo.FullName -replace '\.mp4$', '_translated.mp4'
+                                # Сохраняем исходное расширение: -c:v copy VP9/AV1 в mp4 может упасть.
+                                $outputFile = $latestVideo.FullName -replace ([regex]::Escape($latestVideo.Extension) + '$'), ('_translated' + $latestVideo.Extension)
                                 Append-Output "Мерж аудиодорожек ($transMode)..." ([System.Drawing.Color]::Cyan)
                                 $ffArgs = switch ($transMode) {
                                     "dual_track" { @("-y", "-i", $latestVideo.FullName, "-i", $transFile.FullName,
@@ -1256,7 +1258,7 @@ $btnStart.Add_Click({
                                     Append-Output "Ошибка мержа аудиодорожек — оригинал сохранён" ([System.Drawing.Color]::Red)
                                 }
                             } else {
-                                Append-Output "Видео .mp4 для мержа не найдено — перевод пропущен" ([System.Drawing.Color]::Yellow)
+                                Append-Output "Видео для мержа не найдено — перевод пропущен" ([System.Drawing.Color]::Yellow)
                             }
                         } else {
                             Append-Output "Не удалось получить перевод" ([System.Drawing.Color]::Yellow)

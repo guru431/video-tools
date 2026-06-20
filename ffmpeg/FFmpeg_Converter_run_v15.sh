@@ -55,6 +55,12 @@ read_config() {
 				value="${value%% #*}"
 				value="${value%"${value##*[![:space:]]}"}"
 			fi
+			# Подстановка ${ENV_VAR} из окружения (паритет с yt-dlp). Не задана → пусто + WARN.
+			while [[ "$value" == *'${'*'}'* ]]; do
+				local _vn="${value#*\$\{}"; _vn="${_vn%%\}*}"
+				[ -n "${!_vn:-}" ] || echo "WARN: переменная $_vn не задана" >&2
+				value="${value//\$\{$_vn\}/${!_vn:-}}"
+			done
 			result="$value"
 			break
 		fi
@@ -140,4 +146,8 @@ enable_log="$(read_config "enable_log" "other" "no")"
 log_file="$(read_config "log_file" "other" "ffmpeg_convert.log")"
 
 # start coding #
+if [ ! -f "${SCRIPT_DIR}/FFmpeg_Converter_script.sh" ]; then
+	echo "Ошибка: не найден FFmpeg_Converter_script.sh рядом с этим файлом." >&2
+	exit 1
+fi
 source "${SCRIPT_DIR}/FFmpeg_Converter_script.sh"

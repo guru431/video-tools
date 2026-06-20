@@ -450,7 +450,10 @@ translate_audio() {
         return 1
     fi
 
-    local output_file="${video_file%.mp4}_translated.mp4"
+    # Сохраняем исходное расширение (.mp4/.mkv/.webm): -c:v copy VP9/AV1 в mp4 может
+    # упасть, а mv ниже целит в оригинальное имя видеофайла.
+    local ext="${video_file##*.}"
+    local output_file="${video_file%.*}_translated.${ext}"
 
     log_info "Мерж аудиодорожек (режим: $mode)..."
 
@@ -892,7 +895,7 @@ main() {
             # ls не запускается; иначе ls без аргументов листил бы CWD и брал чужой mp4)
             # и портируемо (без GNU-only -printf; ls -1t есть и на macOS/BSD).
             local latest
-            latest=$(find "$BASE_DIR" -name '*.mp4' -newer "$dl_marker" -type f -exec ls -1t {} + 2>/dev/null | head -1)
+            latest=$(find "$BASE_DIR" \( -name '*.mp4' -o -name '*.mkv' -o -name '*.webm' \) -newer "$dl_marker" -type f -exec ls -1t {} + 2>/dev/null | head -1)
             if [ -n "$latest" ]; then
                 translate_audio "$latest" "$URL" "$TRANSLATE_LANG" "$TRANSLATE_VOICE" \
                     "$TRANSLATE_MODE" "$TRANSLATE_ORIG_LANG" \

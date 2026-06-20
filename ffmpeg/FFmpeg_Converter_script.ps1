@@ -634,12 +634,12 @@ function Encode-File {
 				}
 				# Читаем прогресс-файл ffmpeg
 				$fpct = 0
-				try {
-					if (Test-Path $progressTempFile) {
+				if (Test-Path $progressTempFile) {
+					$fs = $null; $sr = $null
+					try {
 						$fs = [System.IO.FileStream]::new($progressTempFile, 'Open', 'Read', 'ReadWrite')
 						$sr = [System.IO.StreamReader]::new($fs)
 						$fc = $sr.ReadToEnd()
-						$sr.Close()
 						$m = [regex]::Matches($fc, "out_time=(\d+):(\d+):(\d+)")
 						if ($m.Count -gt 0 -and $fileDuration -gt 0) {
 							$last = $m[$m.Count - 1]
@@ -647,8 +647,12 @@ function Encode-File {
 							$fpct = [int]($outSec / $fileDuration * 100)
 							$fpct = [Math]::Min($fpct, 99)
 						}
+					} catch {} finally {
+						# Закрываем в finally — иначе при исключении в ReadToEnd хендл файла течёт
+						# каждые 400мс. StreamReader.Dispose() закрывает и нижележащий FileStream.
+						if ($sr) { $sr.Dispose() } elseif ($fs) { $fs.Dispose() }
 					}
-				} catch {}
+				}
 
 				if ($guiProgressFile) {
 					Write-GUIProgress -FilePercent $fpct -CurrentFile $file.Name

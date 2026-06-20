@@ -23,10 +23,30 @@ echo.
 
 :: ── URL ──────────────────────────────────────────────────────────────────
 set /p "url=URL видео/плейлиста: "
-if "%url%"=="" (
+rem if defined (а не "%url%"=="") — immediate-раскрытие %url% в кавычках условия
+rem допускало инъекцию: кавычка в URL закрывала кавычки сравнения и открывала & команду.
+if not defined url (
     color 04
     echo.
     echo ОШИБКА: URL обязателен!
+    echo.
+    pause
+    exit /b 1
+)
+rem Валидация URL: только схемы http(s):// и без кавычек. Запись через redirect
+rem (не pipe: pipe порождает дочерний cmd, ре-парсящий & ^| ^< ^>). Кавычку ловим
+rem substring-заменой через delayed expansion (findstr /c:"\"" ломает quote-tracking).
+set "_urlchk=%temp%\ytdlp_urlchk_%random%.txt"
+>"!_urlchk!" echo(!url!
+set "_urlok=1"
+findstr /r /i /c:"^https*://" "!_urlchk!" >nul || set "_urlok="
+del "!_urlchk!" 2>nul
+set "_nq=!url:"=!"
+if not "!url!"=="!_nq!" set "_urlok="
+if not defined _urlok (
+    color 04
+    echo.
+    echo ОШИБКА: URL должен начинаться с http:// или https:// и не содержать кавычек!
     echo.
     pause
     exit /b 1
@@ -146,6 +166,10 @@ if "%translate_choice%"=="1" (set "translate_lang=ru" & set "translate_mode=dual
 if "%translate_choice%"=="2" (set "translate_lang=ru" & set "translate_mode=mix")
 if "%translate_choice%"=="3" (set "translate_lang=ru" & set "translate_mode=replace")
 if "%translate_choice%"=="4" (set "translate_lang=en" & set "translate_mode=dual_track")
+rem Громкости для режима mix (паритет с .sh/.ps1, где это original_volume/translation_volume).
+rem CMD-вариант интерактивный (без config.ini) — значения по умолчанию вынесены в переменные.
+set "translate_orig_vol=0.3"
+set "translate_trans_vol=1.0"
 
 :: ── Определение платформы по URL ────────────────────────────────────────
 set "platform=other"
@@ -354,10 +378,12 @@ echo "!url!" | findstr /R /C:"[?&]list=" >nul && (
 )
 
 :: ── Прокси через переменные окружения (пароль не виден в tasklist /v) ────
-if not "%proxy%"=="" (
-    set "HTTP_PROXY=%proxy%"
-    set "HTTPS_PROXY=%proxy%"
-    set "ALL_PROXY=%proxy%"
+rem if defined (а не "%proxy%"=="") — immediate-раскрытие %proxy% в кавычках условия
+rem допускало инъекцию через кавычку в значении; присвоение !proxy! ниже безопасно.
+if defined proxy (
+    set "HTTP_PROXY=!proxy!"
+    set "HTTPS_PROXY=!proxy!"
+    set "ALL_PROXY=!proxy!"
 )
 
 :: ── Получение названия видео ─────────────────────────────────────────────
@@ -446,11 +472,13 @@ if not "%translate_lang%"=="" (
         :: выбираем по дате через PowerShell (паритет с .ps1, глобальная сортировка).
         for %%f in ("!temp_dir!\*.mp3") do set "trans_file=%%f"
         set "video_file="
-        for /f "delims=" %%f in ('powershell -NoProfile -Command "$m=(Get-Item -LiteralPath '!_dl_marker!' -ErrorAction SilentlyContinue).LastWriteTime; Get-ChildItem -LiteralPath '!folder!' -Recurse -Filter *.mp4 -File ^| Where-Object {-not $m -or $_.LastWriteTime -ge $m} ^| Sort-Object LastWriteTime -Descending ^| Select-Object -First 1 -ExpandProperty FullName" 2^>nul') do set "video_file=%%f"
+        for /f "delims=" %%f in ('powershell -NoProfile -Command "$m=(Get-Item -LiteralPath '!_dl_marker!' -ErrorAction SilentlyContinue).LastWriteTime; Get-ChildItem -LiteralPath '!folder!' -Recurse -File ^| Where-Object {$_.Extension -in '.mp4','.mkv','.webm' -and (-not $m -or $_.LastWriteTime -ge $m)} ^| Sort-Object LastWriteTime -Descending ^| Select-Object -First 1 -ExpandProperty FullName" 2^>nul') do set "video_file=%%f"
 
         if defined trans_file if defined video_file (
             echo Объединение аудиодорожек ^(режим: %translate_mode%^)...
-            for %%E in ("!video_file!") do set "output_file=%%~dpnE_translated.mp4"
+            rem %%~xE сохраняет исходное расширение (.mp4/.mkv/.webm) — иначе -c:v copy
+            rem VP9/AV1 в mp4-контейнер может упасть; move ниже целит в оригинальное имя.
+            for %%E in ("!video_file!") do set "output_file=%%~dpnE_translated%%~xE"
 
             if "%translate_mode%"=="dual_track" (
                 ffmpeg -y -i "!video_file!" -i "!trans_file!" -map 0:v -map 0:a -map 1:a -c:v copy -c:a:0 copy -c:a:1 aac -b:a:1 192k -metadata:s:a:0 language=en -metadata:s:a:0 title="Original" -metadata:s:a:1 language=%translate_lang% -metadata:s:a:1 title="AI Translation" -disposition:a:0 default "!output_file!" 2>nul
@@ -459,7 +487,7 @@ if not "%translate_lang%"=="" (
                 ffmpeg -y -i "!video_file!" -i "!trans_file!" -map 0:v -map 1:a -c:v copy -c:a aac -b:a 192k -metadata:s:a:0 language=%translate_lang% -metadata:s:a:0 title="AI Translation" "!output_file!" 2>nul
             )
             if "%translate_mode%"=="mix" (
-                ffmpeg -y -i "!video_file!" -i "!trans_file!" -filter_complex "[0:a]volume=0.3[a0];[1:a]volume=1.0[a1];[a0][a1]amix=inputs=2:duration=longest:normalize=0[aout]" -map 0:v -map "[aout]" -c:v copy -c:a aac -b:a 192k "!output_file!" 2>nul
+                ffmpeg -y -i "!video_file!" -i "!trans_file!" -filter_complex "[0:a]volume=!translate_orig_vol![a0];[1:a]volume=!translate_trans_vol![a1];[a0][a1]amix=inputs=2:duration=longest:normalize=0[aout]" -map 0:v -map "[aout]" -c:v copy -c:a aac -b:a 192k "!output_file!" 2>nul
             )
 
             set "ff_rc=!errorlevel!"

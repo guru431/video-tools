@@ -21,6 +21,12 @@ function Read-Config {
 		}
 		if ($inSection -and $line -match "^${Key}\s*=\s*(.*)") {
 			$val = $Matches[1] -replace '\s+#.*', ''
+			# Подстановка ${ENV_VAR} из окружения (паритет с yt-dlp). Не задана → пусто + WARN.
+			$val = [regex]::Replace($val, '\$\{(\w+)\}', {
+				param($m)
+				$ev = [Environment]::GetEnvironmentVariable($m.Groups[1].Value)
+				if ($null -eq $ev) { Write-Host "WARN: переменная $($m.Groups[1].Value) не задана"; "" } else { $ev }
+			})
 			return $val.Trim()
 		}
 	}
@@ -92,4 +98,9 @@ $enable_log         = Read-Config "enable_log"         "other" "no"
 $log_file           = Read-Config "log_file"           "other" "ffmpeg_convert.log"
 
 # start coding
-. "$PSScriptRoot\FFmpeg_Converter_script.ps1"
+$scriptPath = Join-Path $PSScriptRoot "FFmpeg_Converter_script.ps1"
+if (-not (Test-Path $scriptPath)) {
+	Write-Error "Ошибка: не найден FFmpeg_Converter_script.ps1 рядом с этим файлом."
+	exit 1
+}
+. $scriptPath

@@ -82,6 +82,8 @@ for /f "usebackq tokens=* delims=" %%L in ("%CONFIG_FILE%") do (
 				:: Убрать ведущие пробелы/табы и trailing
 				for /f "tokens=* delims=	 " %%T in ("!_val!") do set "_val=%%T"
 				call :trim_val
+				:: Подстановка ${ENV_VAR} из окружения (паритет с yt-dlp/SH/PS1)
+				call :expand_env
 				:: Присвоить переменную по секции+ключу
 				call :assign_var
 			)
@@ -112,6 +114,18 @@ if not defined _val exit /b
 set "_val_nc=!_val: #=|CUT|!"
 for /f "tokens=1 delims=|" %%V in ("!_val_nc!") do set "_val=%%V"
 exit /b
+
+:expand_env
+:: Подстановка ${ENV_VAR} из окружения (паритет с yt-dlp/SH/PS1). Не задана → пусто.
+:: Substring-проверка на ${ вместо echo|findstr (пайп исполнял бы & из значения).
+:: Ограничение: значения env-переменной с '!' не поддерживаются (см. шапку про delayed expansion).
+if not defined _val exit /b
+:_ee_loop
+if "!_val!"=="!_val:${=!" exit /b
+for /f "tokens=2 delims={}" %%V in ("!_val!") do set "_ee_name=%%V"
+call set "_ee_val=%%%_ee_name%%%"
+set "_val=!_val:${%_ee_name%}=%_ee_val%!"
+goto :_ee_loop
 
 :assign_var
 :: Вспомогательная: конвертировать +val/-val в :+:val/:-:val
@@ -213,4 +227,8 @@ if "%~1"=="--print-config" (
 )
 
 :: start coding
+if not exist "%~dp0FFmpeg_Converter_script.cmd" (
+	echo Ошибка: не найден FFmpeg_Converter_script.cmd рядом с этим файлом.
+	exit /b 1
+)
 call "%~dp0FFmpeg_Converter_script.cmd"

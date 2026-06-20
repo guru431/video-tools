@@ -44,6 +44,12 @@ if (Test-Path $configFile) {
         }
         if ($curSection -and $line -match '^([^=]+?)\s*=\s*(.*)') {
             $val = $Matches[2] -replace '\s+#.*', ''
+            # Подстановка ${ENV_VAR} из окружения (паритет с yt-dlp/CLI). Не задана → пусто + WARN.
+            $val = [regex]::Replace($val, '\$\{(\w+)\}', {
+                param($m)
+                $ev = [Environment]::GetEnvironmentVariable($m.Groups[1].Value)
+                if ($null -eq $ev) { Write-Host "WARN: переменная $($m.Groups[1].Value) не задана"; "" } else { $ev }
+            })
             $script:_configCache["${curSection}::$($Matches[1].Trim())"] = $val.Trim()
         }
     }
@@ -1375,6 +1381,8 @@ $buttonRun.Add_Click({
       } catch {}
     })
     $timer.Start()
+    # Глобальная ссылка — чтобы FormClosing мог детерминированно остановить таймер.
+    $global:_guiTimer = $timer
   } catch {
     [System.Windows.Forms.MessageBox]::Show("LINE $($_.InvocationInfo.ScriptLineNumber): $_", "DEBUG: Click Error", "OK", "Error") | Out-Null
     $buttonRun.Enabled = $true
@@ -1442,9 +1450,18 @@ $form.Add_Shown({
 # и убивает свой ffmpeg-процесс), освобождаем runspace, удаляем временные файлы —
 # иначе остаётся осиротевший ffmpeg.exe и неудалённый мусор.
 $form.Add_FormClosing({
+    # Сначала детерминированно гасим UI-таймер — иначе отложенный Tick мог бы дёрнуть
+    # уже освобождённый runspace или удалённые файлы прогресса после закрытия формы.
+    if ($global:_guiTimer) { try { $global:_guiTimer.Stop(); $global:_guiTimer.Dispose() } catch {} }
     if ($global:_guiPS -and $global:_guiHandle -and -not $global:_guiHandle.IsCompleted) {
         try { "cancel" | Set-Content $global:_guiCancel -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
-        try { $global:_guiPS.Stop() } catch {}
+        # Даём воркеру до ~3с увидеть cancel-файл и сам убить свой ffmpeg.exe; иначе Stop()
+        # обрывает pipeline, а внешний ffmpeg.exe остаётся осиротевшим процессом.
+        $waited = 0
+        while (-not $global:_guiHandle.IsCompleted -and $waited -lt 3000) {
+            Start-Sleep -Milliseconds 100; $waited += 100
+        }
+        if (-not $global:_guiHandle.IsCompleted) { try { $global:_guiPS.Stop() } catch {} }
     }
     foreach ($f in @($global:_guiProgress, $global:_guiCancel)) {
         if ($f) { try { Remove-Item $f -Force -ErrorAction SilentlyContinue } catch {} }

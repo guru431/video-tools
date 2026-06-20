@@ -674,7 +674,7 @@ else
 	# B1b. Параллельная обработка файлов
 	if [ "$parallel_count" -gt 1 ] 2>/dev/null; then
 		export -f encode_file log_msg show_progress_bar human_size
-		export folder_sources folder_destination ffmpeg format_files_out video_settings audio_settings
+		export audio_only folder_sources folder_destination ffmpeg format_files_out video_settings audio_settings
 		export save_old_extension create_frame copy_codecs split_by_silence extract_audio_copy
 		export video_bitrate_status set_video_bitrate_orig video_quality_status
 		export length_coding_status length_coding_value set_length_coding start_coding_status start_coding_value

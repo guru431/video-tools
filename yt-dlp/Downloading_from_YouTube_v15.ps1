@@ -103,14 +103,16 @@ if (Test-Path $dlpLocal) { $dlp = $dlpLocal } else { $dlp = "yt-dlp" }
 # ── Определение платформы по URL ──────────────────────────────────────────
 function Get-Platform {
     param([string]$Url)
+    # Домен якорим по границе (начало, '/', '.', '@'), иначе notyoutube.com и т.п.
+    # ошибочно матчатся как подстрока.
     switch -Regex ($Url) {
-        'youtube\.com|youtu\.be' { return 'YouTube' }
-        'rutube\.ru'             { return 'RuTube' }
-        'vk\.com'               { return 'VK Video' }
-        'twitch\.tv'            { return 'Twitch' }
-        'vimeo\.com'            { return 'Vimeo' }
-        'dailymotion\.com'      { return 'Dailymotion' }
-        default                  { return 'Video' }
+        '(^|[./@])(youtube\.com|youtu\.be)([/:?#]|$)' { return 'YouTube' }
+        '(^|[./@])rutube\.ru([/:?#]|$)'               { return 'RuTube' }
+        '(^|[./@])vk\.com([/:?#]|$)'                  { return 'VK Video' }
+        '(^|[./@])twitch\.tv([/:?#]|$)'               { return 'Twitch' }
+        '(^|[./@])vimeo\.com([/:?#]|$)'               { return 'Vimeo' }
+        '(^|[./@])dailymotion\.com([/:?#]|$)'         { return 'Dailymotion' }
+        default                                        { return 'Video' }
     }
 }
 
@@ -1032,21 +1034,33 @@ $btnStart.Add_Click({
                 }
             }
 
-            # Плейлист
+            # Плейлист (номера проверяем — нечисловой ввод иначе уронит yt-dlp)
             if ($currentUrl -match '[?&]list=') {
                 if (-not [string]::IsNullOrWhiteSpace($textBoxStart.Text)) {
-                    $command += "--playlist-start", $textBoxStart.Text
+                    $v = $textBoxStart.Text.Trim()
+                    if ($v -match '^\d+$') { $command += "--playlist-start", $v }
+                    else { Append-Output "Некорректный номер начала плейлиста: '$v' (игнорирую)" ([System.Drawing.Color]::Firebrick) }
                 }
                 if (-not [string]::IsNullOrWhiteSpace($textBoxEnd.Text)) {
-                    $command += "--playlist-end", $textBoxEnd.Text
+                    $v = $textBoxEnd.Text.Trim()
+                    if ($v -match '^\d+$') { $command += "--playlist-end", $v }
+                    else { Append-Output "Некорректный номер конца плейлиста: '$v' (игнорирую)" ([System.Drawing.Color]::Firebrick) }
                 }
             }
 
             # Фрагмент: только start = с TIME до конца; только end = с начала до TIME;
             # оба = фрагмент TIME1..TIME2; ни один = весь ролик.
             if ($chkTrimStart.Checked -or $chkTrimEnd.Checked) {
-                $tFrom = if ($chkTrimStart.Checked -and -not [string]::IsNullOrWhiteSpace($textTrimStart.Text)) { $textTrimStart.Text.Trim() } else { "0" }
-                $tTo   = if ($chkTrimEnd.Checked   -and -not [string]::IsNullOrWhiteSpace($textTrimEnd.Text))   { $textTrimEnd.Text.Trim()   } else { "inf" }
+                # Метки валидируем (паритет с CMD: ^[0-9:.]+$), невалидные — игнорируем.
+                $tFrom = "0"; $tTo = "inf"
+                if ($chkTrimStart.Checked -and -not [string]::IsNullOrWhiteSpace($textTrimStart.Text)) {
+                    $v = $textTrimStart.Text.Trim()
+                    if ($v -match '^[0-9:.]+$') { $tFrom = $v } else { Append-Output "Некорректная метка начала фрагмента: '$v' (игнорирую)" ([System.Drawing.Color]::Firebrick) }
+                }
+                if ($chkTrimEnd.Checked -and -not [string]::IsNullOrWhiteSpace($textTrimEnd.Text)) {
+                    $v = $textTrimEnd.Text.Trim()
+                    if ($v -match '^[0-9:.]+$') { $tTo = $v } else { Append-Output "Некорректная метка конца фрагмента: '$v' (игнорирую)" ([System.Drawing.Color]::Firebrick) }
+                }
                 $command += "--download-sections", "`"*${tFrom}-${tTo}`""
                 if ($chkForceKf.Checked) { $command += "--force-keyframes-at-cuts" }
             }

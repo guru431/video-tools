@@ -49,6 +49,13 @@ function To-Flag {
 # --- Загрузка настроек из config.ini ---
 $folder_sources      = Read-Config "source"      "folders" "_video_\0"
 $folder_destination  = Read-Config "destination"  "folders" "_video_\1"
+# Нормализуем '\' -> разделитель платформы (паритет с .sh): на не-Windows pwsh
+# обратный слэш из дефолта/конфига остался бы литералом. На Windows это no-op
+# ('\'->'\'), чтобы абсолютные backslash-пути совпадали с FileInfo.DirectoryName
+# при strip-префиксе в script.ps1 (иначе ломается зеркалирование подпапок).
+$_sep                = [string][System.IO.Path]::DirectorySeparatorChar
+$folder_sources      = $folder_sources.Replace('\', $_sep)
+$folder_destination  = $folder_destination.Replace('\', $_sep)
 if (-not [System.IO.Path]::IsPathRooted($folder_sources))     { $folder_sources     = Join-Path $PSScriptRoot $folder_sources }
 if (-not [System.IO.Path]::IsPathRooted($folder_destination)) { $folder_destination = Join-Path $PSScriptRoot $folder_destination }
 

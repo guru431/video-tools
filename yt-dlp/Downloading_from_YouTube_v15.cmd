@@ -173,7 +173,10 @@ set "translate_trans_vol=1.0"
 
 :: ── Определение платформы по URL ────────────────────────────────────────
 set "platform=other"
-echo "!url!" | findstr /I /C:"youtube.com" /C:"youtu.be" >nul 2>&1
+rem Домен якорим по границе. В класс включена кавычка ("): URL пайпится в "...",
+rem поэтому для bare-URL (youtube.com без схемы) граница слева — это кавычка.
+rem notyoutube.com (буква перед youtube) при этом не матчится.
+echo "!url!" | findstr /I /R /C:"[\"./@]youtube[.]com" /C:"[\"./@]youtu[.]be" >nul 2>&1
 if not errorlevel 1 set "platform=youtube"
 
 :: ── Пресет формата ───────────────────────────────────────────────────────
@@ -451,9 +454,9 @@ if not "%translate_lang%"=="" (
             goto :skip_translate
         )
 
-        :: Скачать перевод. temp_dir фиксированный — чистим перед запуском, чтобы
-        :: остаток mp3 от прошлого (упавшего до rmdir) запуска не был выбран ниже.
-        set "temp_dir=%TEMP%\yt-dlp-translate"
+        :: Скачать перевод. temp_dir уникален на запуск (!random!) — паритет с
+        :: .sh (mktemp -d) и .ps1 (Get-Random): нет гонки и остатка mp3 от прошлого.
+        set "temp_dir=%TEMP%\yt-dlp-translate-!random!"
         rmdir /s /q "!temp_dir!" 2>nul
         mkdir "!temp_dir!" 2>nul
         set "NODE_TLS_REJECT_UNAUTHORIZED=0"

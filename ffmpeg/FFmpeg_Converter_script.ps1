@@ -2,7 +2,9 @@
 # FFmpeg Converter Script (PowerShell)
 # ============================================================
 
-# Перехват всех ошибок (не даёт исключениям выйти из Runspace в ps2exe)
+# Перехват ошибок верхнего уровня: пишем строку с номером в Error-stream и
+# пере-выбрасываем (break) как терминирующую — её ловит вызывающий: CLI падает с
+# ненулевым кодом, GUI читает через EndInvoke()/$ps.Streams.Error.
 trap {
 	Write-Error "LINE $($_.InvocationInfo.ScriptLineNumber): $_"
 	break
@@ -608,7 +610,7 @@ function Encode-File {
 			# backslash перед кавычкой и в конце токена удваиваем, иначе trailing `\`
 			# (напр. путь "C:\dir\") экранирует закрывающую кавычку и смещает границу аргумента.
 			$proc.StartInfo.Arguments = ($ffmpegArgsWithProgress | ForEach-Object {
-				if ($_ -match '[ "\\]') {
+				if ($_ -match '[ \t"\\]') {
 					$a = [regex]::Replace($_, '(\\*)"', '$1$1\"')
 					$a = [regex]::Replace($a, '(\\+)$', '$1$1')
 					'"' + $a + '"'

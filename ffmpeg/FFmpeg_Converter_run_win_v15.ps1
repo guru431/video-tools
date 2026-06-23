@@ -176,9 +176,26 @@ $btnCheckFfmpeg.Add_Click({
     $btnCheckFfmpeg.Enabled = $false
     $btnCheckFfmpeg.Text    = "Запрос..."
     $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+    $wc = $null
     try {
         Ensure-SslBypass
-        $wc = New-Object System.Net.WebClient
+        # WebClient без таймаута висит ~100с на UI-потоке при сетевых проблемах —
+        # подкласс с Timeout (компилируется один раз за процесс).
+        if (-not ('TimeoutWebClient' -as [type])) {
+            Add-Type @"
+using System;
+using System.Net;
+public class TimeoutWebClient : WebClient {
+    public int TimeoutMs = 8000;
+    protected override WebRequest GetWebRequest(Uri address) {
+        WebRequest r = base.GetWebRequest(address);
+        if (r != null) { r.Timeout = TimeoutMs; }
+        return r;
+    }
+}
+"@
+        }
+        $wc = New-Object TimeoutWebClient
         $wc.Headers.Add("User-Agent", "ffmpeg-gui/1.0")
         $wc.Proxy = [System.Net.WebRequest]::GetSystemWebProxy()
         $wc.Proxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials
@@ -210,6 +227,7 @@ $btnCheckFfmpeg.Add_Click({
         [System.Windows.Forms.MessageBox]::Show($errMsg, "Ошибка проверки обновлений", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
     }
     finally {
+        if ($wc) { $wc.Dispose(); $wc = $null }
         $btnCheckFfmpeg.Enabled = $true
         $btnCheckFfmpeg.Text    = "Проверить обновления"
         $form.Cursor = [System.Windows.Forms.Cursors]::Default
@@ -1418,16 +1436,22 @@ $form.Add_Shown({
                 $lblFfmpegVersion.Text      = "ffmpeg: $($Matches[1])"
                 $lblFfmpegVersion.ForeColor = [System.Drawing.Color]::DarkGreen
 
-                # Probe выбранного GPU-энкодера — на VM/без драйвера откатываемся на CPU
+                # Probe реально выбранного энкодера (семейство по выбранному кодеку),
+                # а не всегда h264 — иначе для HEVC/AV1 проверка нерелевантна.
                 $selIdx = $comboHWAccel.SelectedIndex
+                $encBase = switch -Regex ($comboVideoCodec.Text) {
+                    'x265|hevc' { 'hevc'; break }
+                    'av1'       { 'av1';  break }
+                    default     { 'h264' }
+                }
                 if ($selIdx -eq 1) {
-                    if (-not (Test-GpuEncoder $ffmpegBin "h264_nvenc")) {
+                    if (-not (Test-GpuEncoder $ffmpegBin "${encBase}_nvenc")) {
                         $comboHWAccel.SelectedIndex = 0
                         $labelHWInfo.Text = "NVIDIA NVENC недоступен (нет GPU/драйвера) — переключено на CPU"
                         $labelHWInfo.ForeColor = [System.Drawing.Color]::Firebrick
                     }
                 } elseif ($selIdx -eq 2) {
-                    if (-not (Test-GpuEncoder $ffmpegBin "h264_qsv")) {
+                    if (-not (Test-GpuEncoder $ffmpegBin "${encBase}_qsv")) {
                         $comboHWAccel.SelectedIndex = 0
                         $labelHWInfo.Text = "Intel QSV недоступен (нет GPU/драйвера) — переключено на CPU"
                         $labelHWInfo.ForeColor = [System.Drawing.Color]::Firebrick

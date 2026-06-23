@@ -27,29 +27,29 @@ if ! command -v "$ffmpeg" &> /dev/null; then
 fi
 
 # --- Парсинг настроек (формат :+:value или :-:value) ---
-IFS=':' read -r foo video_codec_status video_codec_value <<< $video_codec
-IFS=':' read -r foo video_number_frames_status video_number_frames_value <<< $video_number_frames
-IFS=':' read -r foo video_bitrate_status video_bitrate_value <<< $video_bitrate
-IFS=':' read -r foo video_resolution_status video_resolution_value <<< $video_resolution
-IFS=':' read -r foo video_rotation_status video_rotation_value <<< $video_rotation
-IFS=':' read -r foo video_quality_status video_quality_value <<< $video_quality
+IFS=':' read -r foo video_codec_status video_codec_value <<< "$video_codec"
+IFS=':' read -r foo video_number_frames_status video_number_frames_value <<< "$video_number_frames"
+IFS=':' read -r foo video_bitrate_status video_bitrate_value <<< "$video_bitrate"
+IFS=':' read -r foo video_resolution_status video_resolution_value <<< "$video_resolution"
+IFS=':' read -r foo video_rotation_status video_rotation_value <<< "$video_rotation"
+IFS=':' read -r foo video_quality_status video_quality_value <<< "$video_quality"
 
-IFS=':' read -r foo audio_codec_status audio_codec_value <<< $audio_codec
-IFS=':' read -r foo audio_number_channels_status audio_number_channels_value <<< $audio_number_channels
-IFS=':' read -r foo audio_bitrate_status audio_bitrate_value <<< $audio_bitrate
-IFS=':' read -r foo audio_sampling_rate_status audio_sampling_rate_value <<< $audio_sampling_rate
-IFS=':' read -r foo audio_normalize_status audio_normalize_value <<< $audio_normalize
+IFS=':' read -r foo audio_codec_status audio_codec_value <<< "$audio_codec"
+IFS=':' read -r foo audio_number_channels_status audio_number_channels_value <<< "$audio_number_channels"
+IFS=':' read -r foo audio_bitrate_status audio_bitrate_value <<< "$audio_bitrate"
+IFS=':' read -r foo audio_sampling_rate_status audio_sampling_rate_value <<< "$audio_sampling_rate"
+IFS=':' read -r foo audio_normalize_status audio_normalize_value <<< "$audio_normalize"
 
-IFS=':' read -r foo multithreads_status multithreads_value <<< $multithreads
-IFS=':' read -r foo parallel_files_status parallel_files_value <<< $parallel_files
-IFS=':' read -r foo video_subtitles_status video_subtitles_value <<< $video_subtitles
-IFS=':' read -r foo hw_accel_status hw_accel_value <<< $hw_accel
-IFS=':' read -r foo gpu_preset_status gpu_preset_value <<< $gpu_preset
-IFS=':' read -r foo gpu_tune_status gpu_tune_value <<< $gpu_tune
-IFS=':' read -r foo gpu_rc_status gpu_rc_value <<< $gpu_rc
-IFS=':' read -r foo playback_speed_status playback_speed_value <<< $playback_speed
-IFS=':' read -r foo keep_aspect_ratio_status keep_aspect_ratio_value <<< $keep_aspect_ratio
-IFS=':' read -r foo output_container_status output_container_value <<< $output_container
+IFS=':' read -r foo multithreads_status multithreads_value <<< "$multithreads"
+IFS=':' read -r foo parallel_files_status parallel_files_value <<< "$parallel_files"
+IFS=':' read -r foo video_subtitles_status video_subtitles_value <<< "$video_subtitles"
+IFS=':' read -r foo hw_accel_status hw_accel_value <<< "$hw_accel"
+IFS=':' read -r foo gpu_preset_status gpu_preset_value <<< "$gpu_preset"
+IFS=':' read -r foo gpu_tune_status gpu_tune_value <<< "$gpu_tune"
+IFS=':' read -r foo gpu_rc_status gpu_rc_value <<< "$gpu_rc"
+IFS=':' read -r foo playback_speed_status playback_speed_value <<< "$playback_speed"
+IFS=':' read -r foo keep_aspect_ratio_status keep_aspect_ratio_value <<< "$keep_aspect_ratio"
+IFS=':' read -r foo output_container_status output_container_value <<< "$output_container"
 
 # --- Формирование аудио-параметров ---
 if [ "$audio_codec_status" = "+" ]; then set_audio_codec="-c:a $audio_codec_value"; else set_audio_codec=""; fi
@@ -105,18 +105,18 @@ if [ "$hw_accel_status" = "+" ]; then
 fi
 
 # --- Время начала и длительности ---
-IFS=':' read -r foo start_coding_status start_coding_value <<< $start_coding
+IFS=':' read -r foo start_coding_status start_coding_value <<< "$start_coding"
 if [ "$start_coding_status" = "+" ]; then
-	IFS='-' read -r x y z <<< $start_coding_value
+	IFS='-' read -r x y z <<< "$start_coding_value"
 	start_coding_value=$((${x#0}*3600+${y#0}*60+${z#0}))
 	set_start_coding="-ss $start_coding_value"
 else
 	set_start_coding=""
 fi
 
-IFS=':' read -r foo length_coding_status length_coding_value <<< $length_coding
+IFS=':' read -r foo length_coding_status length_coding_value <<< "$length_coding"
 if [ "$length_coding_status" = "+" ]; then
-	IFS='-' read -r x y z <<< $length_coding_value
+	IFS='-' read -r x y z <<< "$length_coding_value"
 	length_coding_value=$((${x#0}*3600+${y#0}*60+${z#0}))
 	set_length_coding="-t $length_coding_value"
 else
@@ -127,7 +127,8 @@ fi
 # --- A1. Формат и настройки видео/аудио ---
 if [ "$audio_only" = "yes" ]; then
 	# Контейнер и аудио-кодек выводятся из настроенного [audio] codec, а не жёстко mp3.
-	case "$audio_codec_value" in
+	# Сравнение регистронезависимо (паритет с PS1 switch): AAC/FLAC не падают в дефолт.
+	case "$(printf '%s' "$audio_codec_value" | tr '[:upper:]' '[:lower:]')" in
 		libmp3lame|mp3) format_files_out="mp3";  set_audio_codec="-c:a libmp3lame" ;;
 		aac)            format_files_out="m4a";  set_audio_codec="-c:a aac" ;;
 		libopus|opus)   format_files_out="opus"; set_audio_codec="-c:a libopus" ;;
@@ -293,7 +294,7 @@ log_msg() {
 }
 
 # --- J2. Счётчики и хелперы ---
-results_dir=$(mktemp -d)
+results_dir=$(mktemp -d "${TMPDIR:-/tmp}/ffconv.XXXXXXXX")
 start_time_global=$(date +%s)
 
 human_size() {
@@ -574,8 +575,8 @@ encode_file() {
 
 			# J1. Запуск ffmpeg в фоне с прогресс-файлом
 			local progress_file err_file
-			progress_file=$(mktemp)
-			err_file=$(mktemp)
+			progress_file=$(mktemp "${TMPDIR:-/tmp}/ffconv.XXXXXXXX")
+			err_file=$(mktemp "${TMPDIR:-/tmp}/ffconv.XXXXXXXX")
 
 			local seek_arg=""
 			if [ "$b" -gt 0 ] 2>/dev/null; then seek_arg="-ss $b"; fi
@@ -652,8 +653,10 @@ if [ "$merge_files" = "yes" ]; then
 	while IFS= read -r -d '' full_path; do
 		if [ -z "$fname" ]; then fname=$(basename "$full_path"); break; fi
 	done < <(find "$folder_sources" \( "${format_find_pred[@]}" \) -print0 | sort -z)
-	if [ ! -f "${folder_destination}/${fname}" ]; then
-		concat_list=$(mktemp)
+	if [ -z "$fname" ]; then
+		log_msg "WARN" "Нет файлов для объединения в $folder_sources"
+	elif [ ! -f "${folder_destination}/${fname}" ]; then
+		concat_list=$(mktemp "${TMPDIR:-/tmp}/ffconv.XXXXXXXX")
 		# -printf — GNU-расширение (нет на macOS/BSD). Портативно: -print0 + read.
 		# Имена с ' экранируем для concat-формата ffmpeg: ' -> '\''
 		while IFS= read -r -d '' mf; do

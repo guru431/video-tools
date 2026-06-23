@@ -138,12 +138,13 @@ if "%audio_only%"=="yes" (
 	rem Контейнер и аудио-кодек выводятся из настроенного [audio] codec, а не жёстко mp3.
 	set "format_files_out=mp3"
 	set "set_audio_codec=-c:a libmp3lame"
-	if "!audio_codec_value!"=="aac" (set "format_files_out=m4a" & set "set_audio_codec=-c:a aac")
-	if "!audio_codec_value!"=="libopus" (set "format_files_out=opus" & set "set_audio_codec=-c:a libopus")
-	if "!audio_codec_value!"=="opus" (set "format_files_out=opus" & set "set_audio_codec=-c:a libopus")
-	if "!audio_codec_value!"=="flac" (set "format_files_out=flac" & set "set_audio_codec=-c:a flac")
-	if "!audio_codec_value!"=="libvorbis" (set "format_files_out=ogg" & set "set_audio_codec=-c:a libvorbis")
-	if "!audio_codec_value!"=="vorbis" (set "format_files_out=ogg" & set "set_audio_codec=-c:a libvorbis")
+	rem /i — регистронезависимо (паритет с PS1 switch): AAC/FLAC и т.п. не падают в дефолт mp3.
+	if /i "!audio_codec_value!"=="aac" (set "format_files_out=m4a" & set "set_audio_codec=-c:a aac")
+	if /i "!audio_codec_value!"=="libopus" (set "format_files_out=opus" & set "set_audio_codec=-c:a libopus")
+	if /i "!audio_codec_value!"=="opus" (set "format_files_out=opus" & set "set_audio_codec=-c:a libopus")
+	if /i "!audio_codec_value!"=="flac" (set "format_files_out=flac" & set "set_audio_codec=-c:a flac")
+	if /i "!audio_codec_value!"=="libvorbis" (set "format_files_out=ogg" & set "set_audio_codec=-c:a libvorbis")
+	if /i "!audio_codec_value!"=="vorbis" (set "format_files_out=ogg" & set "set_audio_codec=-c:a libvorbis")
 	set "video_settings=-vn"
 ) else (
 	if "!output_container_status!"=="+" (set "format_files_out=!output_container_value!") else (set "format_files_out=mp4")
@@ -256,10 +257,14 @@ set /a "start_total_sec=(1%start_hh%-100)*3600+(1%start_mm%-100)*60+(1%start_ss%
 rem --- Основная логика ---
 if "%merge_files%"=="yes" (
 	for /r "%folder_sources%" %%a in (%format_files_in_pattern%) do (if not defined fname set "fname=%%~nxa")
-	if not exist "%folder_destination%\!fname!" (
+	if not defined fname (
+		echo [WARN] Нет файлов для объединения в "%folder_sources%"
+	) else if not exist "%folder_destination%\!fname!" (
 		set "full_path=%temp%\%random%.tmp"
-		cmd /u /c "(for /r "%folder_sources%" %%a in (%format_files_in_pattern%) do @echo file '%%a')" > "!full_path!.u16"
-		powershell "[System.IO.File]::WriteAllLines('!full_path!', (Get-Content -Encoding unicode '!full_path!.u16'))"
+		rem Шаг 1: сырые пути в UTF-16 (Unicode-имена). Шаг 2: PowerShell оборачивает в
+		rem concat-формат и экранирует апостроф в имени (паритет с .sh/.ps1).
+		cmd /u /c "(for /r "%folder_sources%" %%a in (%format_files_in_pattern%) do @echo %%a)" > "!full_path!.u16"
+		powershell -NoProfile "[System.IO.File]::WriteAllLines('!full_path!', @((Get-Content -Encoding unicode '!full_path!.u16') | ForEach-Object { 'file ''' + ($_ -replace '''','''\''''') + '''' }))"
 		echo [INFO] Объединение файлов
 		"%ffmpeg%" -hide_banner -strict -2 -f concat -safe 0 -i "!full_path!" -c copy -map 0 "%folder_destination%\!fname!"
 		if errorlevel 1 (

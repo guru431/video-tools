@@ -177,15 +177,16 @@ build_cookie_args() {
 # ── Определение платформы по URL ───────────────────────────────────────────
 detect_platform() {
     local url="$1"
-    case "$url" in
-        *youtube.com*|*youtu.be*) echo "youtube" ;;
-        *vk.com*)                 echo "vk" ;;
-        *rutube.ru*)              echo "rutube" ;;
-        *twitch.tv*)              echo "twitch" ;;
-        *vimeo.com*)              echo "vimeo" ;;
-        *dailymotion.com*)        echo "dailymotion" ;;
-        *)                        echo "other" ;;
-    esac
+    # Домен якорим по границе (начало строки, '/', '.', '@'), иначе notyoutube.com
+    # ошибочно распознаётся как youtube (подстрочный матч).
+    if   [[ "$url" =~ (^|[./@])youtube\.com([/:?#]|$) ]] || [[ "$url" =~ (^|[./@])youtu\.be([/:?#]|$) ]]; then echo "youtube"
+    elif [[ "$url" =~ (^|[./@])vk\.com([/:?#]|$) ]];         then echo "vk"
+    elif [[ "$url" =~ (^|[./@])rutube\.ru([/:?#]|$) ]];      then echo "rutube"
+    elif [[ "$url" =~ (^|[./@])twitch\.tv([/:?#]|$) ]];      then echo "twitch"
+    elif [[ "$url" =~ (^|[./@])vimeo\.com([/:?#]|$) ]];      then echo "vimeo"
+    elif [[ "$url" =~ (^|[./@])dailymotion\.com([/:?#]|$) ]];then echo "dailymotion"
+    else echo "other"
+    fi
 }
 
 # ── Формирование аргументов формата (записывает в global FMT_ARGS_ARR) ─────

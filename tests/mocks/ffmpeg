@@ -8,6 +8,8 @@
 #   MOCK_FFMPEG_ENCODERS=       — пустой список (по умолчанию)
 #   MOCK_FFMPEG_FAIL=1         — вернуть exit code 1
 #   MOCK_FFMPEG_LOG=           — путь к файлу лога (по умолчанию /tmp/mock_ffmpeg_calls.txt)
+#   MOCK_FFMPEG_SILENCE="10:12 25:27" — при -af silencedetect эмитить пары
+#                                       silence_start/silence_end (секунды)
 # ============================================================
 
 LOG_FILE="${MOCK_FFMPEG_LOG:-/tmp/mock_ffmpeg_calls.txt}"
@@ -50,6 +52,16 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'input.mp4':
     Stream #0:0(und): Video: h264 (High), yuv420p, 1920x1080, 1808 kb/s, 30 fps, 30 tbr, 15360 tbn
     Stream #0:1(und): Audio: ${AUDIO_CODEC}, 48000 Hz, stereo, fltp, 192 kb/s
 MEDIAEOF
+fi
+
+# Имитация silencedetect: синтетические silence_start/silence_end в stderr
+# (реальный ffmpeg пишет их туда; script.sh делает 2>&1 | grep silence_).
+if [[ "$*" == *"silencedetect"* ]] && [ -n "${MOCK_FFMPEG_SILENCE:-}" ]; then
+    for _pair in $MOCK_FFMPEG_SILENCE; do
+        _s="${_pair%%:*}"; _e="${_pair##*:}"
+        echo "[silencedetect @ 0x0] silence_start: ${_s}" >&2
+        echo "[silencedetect @ 0x0] silence_end: ${_e} | silence_duration: 2" >&2
+    done
 fi
 
 # Имитация прогресса для -progress

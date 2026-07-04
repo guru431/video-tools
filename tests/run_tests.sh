@@ -96,6 +96,12 @@ YTDLP_TESTS=(
     "$TESTS_DIR/yt-dlp/test_07_new_features.sh"
 )
 
+# Кросс-платформенные инварианты (кодировки, паритет ключей config.ini)
+COMMON_TESTS=(
+    "$TESTS_DIR/common/test_encoding.sh"
+    "$TESTS_DIR/common/test_config_keys.sh"
+)
+
 # ── Баннер ───────────────────────────────────────────────────────────────────
 echo -e "${BOLD}${CYAN}"
 echo "╔══════════════════════════════════════════════════╗"
@@ -118,6 +124,12 @@ case "$FILTER" in
             [ -f "$test_file" ] && run_suite "$test_file"
         done
         ;;
+    common)
+        echo -e "${BOLD}Модуль: Общие инварианты${NC}"
+        for test_file in "${COMMON_TESTS[@]}"; do
+            [ -f "$test_file" ] && run_suite "$test_file"
+        done
+        ;;
     all|*)
         echo -e "${BOLD}Модуль: FFmpeg Converter${NC}"
         for test_file in "${FFMPEG_TESTS[@]}"; do
@@ -126,6 +138,11 @@ case "$FILTER" in
         echo ""
         echo -e "${BOLD}Модуль: YT-DLP Downloader${NC}"
         for test_file in "${YTDLP_TESTS[@]}"; do
+            [ -f "$test_file" ] && run_suite "$test_file"
+        done
+        echo ""
+        echo -e "${BOLD}Модуль: Общие инварианты${NC}"
+        for test_file in "${COMMON_TESTS[@]}"; do
             [ -f "$test_file" ] && run_suite "$test_file"
         done
         ;;

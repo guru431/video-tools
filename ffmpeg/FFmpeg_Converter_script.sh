@@ -150,10 +150,15 @@ else
 	# rotation+GPU: CUDA-варианта фильтра поворота не существует. Если включён поворот
 	# и используется GPU — вся цепочка фильтров переводится на CPU (transpose+scale),
 	# иначе получилась бы несовместимая смесь CPU transpose + scale_cuda/scale_qsv.
-	if [ "$video_rotation_status" = "+" ] && [ "$use_hw_accel" = "yes" ]; then
-		scale_backend="cpu"
-	else
-		scale_backend="$hw_accel_type"
+	# keep_aspect_ratio+GPU: scale_cuda/scale_qsv не умеют pad hw-кадры → GPU-путь дал бы
+	# иную геометрию (без letterbox), чем CPU. Тоже форсим CPU scale+pad для паритета.
+	scale_backend="$hw_accel_type"
+	if [ "$use_hw_accel" = "yes" ]; then
+		if [ "$video_rotation_status" = "+" ]; then
+			scale_backend="cpu"
+		elif [ "$keep_aspect_ratio_status" = "+" ] && [ "$keep_aspect_ratio_value" = "yes" ] && [ -n "$set_video_resolution" ]; then
+			scale_backend="cpu"
+		fi
 	fi
 	# Поворот
 	if [ "$video_rotation_status" = "+" ]; then
@@ -209,15 +214,19 @@ else
 		if [ "$hw_accel_type" = "nvidia" ]; then
 			if [ "$gpu_tune_status" = "+" ]; then gpu_args="$gpu_args -tune $gpu_tune_value"; fi
 			if [ "$gpu_rc_status" = "+" ]; then gpu_args="$gpu_args -rc $gpu_rc_value"; fi
-			if [ "$video_quality_status" = "+" ]; then gpu_args="$gpu_args -cq $video_quality_value"; fi
-		elif [ "$hw_accel_type" = "intel" ]; then
-			if [ "$video_quality_status" = "+" ]; then gpu_args="$gpu_args -global_quality $video_quality_value"; fi
 		fi
 	fi
-	# CRF для программных кодеков
+	# Флаг качества по РЕШЁННОМУ энкодеру, а не по use_hw_accel: nvenc/qsv отвергают -crf.
+	# Если codec задан напрямую как *_nvenc/*_qsv при выключенном hw_accel, всё равно
+	# нужен -cq/-global_quality, иначе ffmpeg падает "Unrecognized option crf".
 	crf_args=""
-	if [ "$use_hw_accel" != "yes" ] && [ "$video_quality_status" = "+" ]; then
-		crf_args="-crf $video_quality_value"
+	if [ "$video_quality_status" = "+" ]; then
+		case "$set_video_codec" in
+			*_nvenc) crf_args="-cq $video_quality_value" ;;
+			*_qsv)   crf_args="-global_quality $video_quality_value" ;;
+			*_amf)   crf_args="-qp $video_quality_value" ;;
+			*)       crf_args="-crf $video_quality_value" ;;
+		esac
 	fi
 	# Имя muxer для -f: mkv/ts — это расширения файла, а не имена форматов ffmpeg.
 	# Расширение выходного файла не меняется, только аргумент -f.
@@ -296,6 +305,18 @@ log_msg() {
 # --- J2. Счётчики и хелперы ---
 results_dir=$(mktemp -d "${TMPDIR:-/tmp}/ffconv.XXXXXXXX")
 start_time_global=$(date +%s)
+
+# Cleanup при Ctrl-C/SIGTERM: убить текущий ffmpeg-процесс и удалить temp-каталог
+# результатов, иначе остаётся осиротевший ffmpeg и мусор в /tmp. НЕ ловим EXIT —
+# нормальное завершение чистит results_dir явно, а trap EXIT клобберил бы trap теста
+# (тесты ставят свой trap EXIT для дампа переменных при source).
+_current_ffmpeg_pid=""
+_cleanup_on_int() {
+	[ -n "$_current_ffmpeg_pid" ] && kill "$_current_ffmpeg_pid" 2>/dev/null
+	[ -n "$results_dir" ] && rm -rf "$results_dir"
+	exit 130
+}
+trap _cleanup_on_int INT TERM
 
 human_size() {
 	local bytes=$1
@@ -409,7 +430,9 @@ encode_file() {
 	if [ "$copy_codecs" = "yes" ]; then
 		convert_settings="-c copy -map 0"
 	else
-		convert_settings="$video_settings $set_video_bitrate_final $audio_settings"
+		# -map_metadata 0 сохраняет глобальные теги источника (title/artist/date) при
+		# перекодировании; несовместимые с контейнером — ffmpeg тихо отбрасывает.
+		convert_settings="$video_settings $set_video_bitrate_final $audio_settings -map_metadata 0"
 	fi
 
 	local file_duration=0
@@ -522,13 +545,17 @@ encode_file() {
 
 		# B2. Субтитры с subtitles_style
 		local subtitles_params=()
-		if [ "$video_subtitles_status" = "+" ] && [ "$copy_codecs" = "no" ]; then
+		local sub_burned="no"
+		# audio_only != yes: при -vn прожиг субтитров (-vf) даёт "Video filtergraph but no
+		# video output" — каждый файл падает. Субтитры имеют смысл только с видео-выходом.
+		if [ "$video_subtitles_status" = "+" ] && [ "$copy_codecs" = "no" ] && [ "$audio_only" != "yes" ]; then
 			local sub_found=""
 			for ext in srt vtt; do
 				if [ -z "$sub_found" ]; then
 					local sub_file="${folder_sources}${file_path}${file_name}.${ext}"
 					if [ -f "$sub_file" ]; then
 						if [ "$video_subtitles_value" = "burn" ]; then
+							sub_burned="yes"
 							# Экранирование пути для subtitles=: backslash → forward slash (Windows-пути),
 							# затем ' : — спецсимволы значения, [ ] ; — разделители graph-синтаксиса
 							# фильтров, % — timecode-плейсхолдер. Порядок: слэши первыми.
@@ -563,12 +590,28 @@ encode_file() {
 
 		local out_file="${folder_destination}${file_path}${file_name}${pref}.${current_format_out}"
 
+		# -ss обычно ДО -i: fast seek по контейнеру (мгновенно), не декодируя от 0.
+		# F5-исключение: при прожиге субтитров (sub_burned) с ненулевым стартом input-side
+		# -ss обнуляет PTS кадров, а фильтр subtitles выбирает события по PTS → титры
+		# съезжают/пропадают. Тогда -ss ставим на ВЫХОД (после -i): subtitles видит
+		# исходные PTS, лишние кадры отбрасываются после прожига (медленнее, но верно).
+		local in_seek="" out_seek=""
+		if [ "$b" -gt 0 ] 2>/dev/null; then
+			if [ "$sub_burned" = "yes" ]; then out_seek="-ss $b"; else in_seek="-ss $b"; fi
+		fi
+		# F11. Прогресс — против эффективной длины сегмента, а не полной длительности:
+		# с -t L (или split-частями) out_time доходит лишь до L; иначе бар ползёт до крох %.
+		local progress_dur="$file_duration"
+		if [[ "$current_set_length" == "-t "* ]]; then
+			progress_dur="${current_set_length#-t }"
+		elif [ "$b" -gt 0 ] 2>/dev/null; then
+			progress_dur=$((file_duration - b))
+		fi
+		[ "${progress_dur:-0}" -gt 0 ] 2>/dev/null || progress_dur="$file_duration"
+
 		# D7. Dry-run
-		# -ss располагается ДО -i: ffmpeg делает fast seek по контейнеру (мгновенно),
-		# а не декодирует файл от 0 до start_coding_value (могут быть минуты для крупных видео).
 		if [ "$dry_run" = "yes" ]; then
-			local dry_seek=""; if [ "$b" -gt 0 ] 2>/dev/null; then dry_seek="-ss $b"; fi
-			echo "[DRY-RUN] $ffmpeg -nostdin -hide_banner -strict -2 $hw_decode_args $dry_seek -i \"$full_path\" ${subtitles_params[*]} $convert_settings $thread_args ${vf_args[*]} ${af_args[*]} $current_set_length \"$out_file\""
+			echo "[DRY-RUN] $ffmpeg -nostdin -hide_banner -strict -2 $hw_decode_args $in_seek -i \"$full_path\" ${subtitles_params[*]} $convert_settings $thread_args ${vf_args[*]} ${af_args[*]} $current_set_length $out_seek \"$out_file\""
 		else
 			log_msg "INFO" "Кодирование: $(basename "$full_path") -> $(basename "$out_file")"
 			local encode_start=$(date +%s)
@@ -578,21 +621,19 @@ encode_file() {
 			progress_file=$(mktemp "${TMPDIR:-/tmp}/ffconv.XXXXXXXX")
 			err_file=$(mktemp "${TMPDIR:-/tmp}/ffconv.XXXXXXXX")
 
-			local seek_arg=""
-			if [ "$b" -gt 0 ] 2>/dev/null; then seek_arg="-ss $b"; fi
-
 			"$ffmpeg" -nostdin -hide_banner -strict -2 $hw_decode_args \
-				$seek_arg -i "$full_path" "${subtitles_params[@]}" \
+				$in_seek -i "$full_path" "${subtitles_params[@]}" \
 				$convert_settings $thread_args "${vf_args[@]}" "${af_args[@]}" \
-				$current_set_length \
+				$current_set_length $out_seek \
 				-progress "$progress_file" -nostats \
 				"$out_file" -y 2>"$err_file" &
 			local ffmpeg_pid=$!
+			_current_ffmpeg_pid=$ffmpeg_pid
 
 			# Показываем прогресс-бар пока ffmpeg работает
 			while kill -0 $ffmpeg_pid 2>/dev/null; do
 				sleep 0.4
-				if [ "$file_duration" -gt 0 ] 2>/dev/null; then
+				if [ "$progress_dur" -gt 0 ] 2>/dev/null; then
 					local out_time_str
 					out_time_str=$(grep "^out_time=" "$progress_file" 2>/dev/null | tail -1 | cut -d= -f2)
 					if [ -n "$out_time_str" ]; then
@@ -600,10 +641,10 @@ encode_file() {
 						oh=$(echo "$out_time_str" | cut -d: -f1)
 						om=$(echo "$out_time_str" | cut -d: -f2)
 						os=$(echo "$out_time_str" | cut -d: -f3 | cut -d. -f1)
-						if [[ "$oh$om$os" =~ ^[0-9]+$ ]] && [ "$file_duration" -gt 0 ]; then
+						if [[ "$oh$om$os" =~ ^[0-9]+$ ]] && [ "$progress_dur" -gt 0 ]; then
 							out_sec=$(( 10#$oh * 3600 + 10#$om * 60 + 10#$os ))
 							if [ "$out_sec" -gt 0 ]; then
-								pct=$((out_sec * 100 / file_duration))
+								pct=$((out_sec * 100 / progress_dur))
 								[ $pct -gt 100 ] && pct=100
 								show_progress_bar $pct "$full_path"
 							fi
@@ -613,6 +654,7 @@ encode_file() {
 			done
 			wait $ffmpeg_pid
 			local exit_code=$?
+			_current_ffmpeg_pid=""
 			printf "\n"
 			rm -f "$progress_file"
 
@@ -737,4 +779,6 @@ fi
 echo "══════════════════════════════════════════════"
 echo -e "\n"
 read -p "Нажмите [Enter], чтобы продолжить..."
-exit
+# Exit code отражает наличие ошибок — cron/CI/GUI могут детектировать провал батча.
+[ "$total_fail" -gt 0 ] && exit 1
+exit 0

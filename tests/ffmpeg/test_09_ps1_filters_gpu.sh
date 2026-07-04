@@ -317,7 +317,7 @@ order="bad"; [ -n "$init_ln" ] && [ -n "$ao_ln" ] && [ "$init_ln" -lt "$ao_ln" ]
 assert_eq "vf_parts инициализирован ДО audio_only (нет осиротевшего -vf)"  "ok"  "$order"
 
 # (б) -ss добавляется только при $b -gt 0 (иначе -ss 0 с -c copy дропает видео)
-assert_contains "-ss guard: if (\$b -gt 0)"  'if ($b -gt 0) { $ffmpegArgs += @("-ss"'  "$src_ps1"
+assert_contains "-ss guard: if (\$b -gt 0)"  'if ($b -gt 0 -and -not $sub_burned) { $ffmpegArgs += @("-ss"'  "$src_ps1"
 assert_not_contains "старое условие -ss убрано"  'if ($b -ne 0 -or $set_start_coding)'  "$src_ps1"
 
 # (в) muxer map mkv->matroska / ts->mpegts; -f использует $muxer_out

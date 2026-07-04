@@ -194,6 +194,68 @@ else
     skip "GPU+burn субтитры" "нет тестового MP4"
 fi
 
+# ══════════════════════════════════════════════════════════════
+suite "F4: keep_aspect + GPU → CPU scale+pad (одинаковая геометрия с CPU-путём)"
+# ══════════════════════════════════════════════════════════════
+# scale_cuda/scale_qsv не умеют pad hw-кадры → GPU-путь давал бы иную геометрию.
+# Форсим CPU scale+pad; hwdownload,format=nv12 качает кадры в RAM перед CPU-фильтрами.
+
+if [ "$HAS_TEST_VIDEO" = "1" ]; then
+    rm -rf "$OUTPUT_DIR"; mkdir -p "$OUTPUT_DIR"
+    run_script 'export MOCK_FFMPEG_ENCODERS=nvenc' 'hw_accel=":+:nvidia"' \
+               'video_resolution=":+:1280x720"' 'keep_aspect_ratio=":+:yes"'
+    if [ -f "$FFMPEG_LOG" ]; then
+        call_args=$(cat "$FFMPEG_LOG")
+        assert_contains     "keep_aspect+GPU: CPU scale+pad"          "scale=1280:720:force_original_aspect_ratio=decrease,pad=" "$call_args"
+        assert_contains     "keep_aspect+GPU: hwdownload перед scale"  "hwdownload,format=nv12,scale=" "$call_args"
+        assert_not_contains "keep_aspect+GPU: не scale_cuda"           "scale_cuda" "$call_args"
+    else
+        skip "F4 keep_aspect+GPU" "mock не вызван"
+    fi
+else
+    skip "F4 keep_aspect+GPU" "нет тестового MP4"
+fi
+
+# ══════════════════════════════════════════════════════════════
+suite "F19: audio_only + subtitles=burn → -vn без -vf (нет падения filtergraph)"
+# ══════════════════════════════════════════════════════════════
+
+if [ "$HAS_TEST_VIDEO" = "1" ]; then
+    printf '1\n00:00:00,000 --> 00:00:01,000\nTEST\n' > "$INPUT_DIR/test_video.srt"
+    rm -rf "$OUTPUT_DIR"; mkdir -p "$OUTPUT_DIR"
+    run_script 'audio_only="yes"' 'video_subtitles=":+:burn"'
+    if [ -f "$FFMPEG_LOG" ]; then
+        call_args=$(cat "$FFMPEG_LOG")
+        assert_contains     "audio_only+burn: есть -vn"        "-vn"        "$call_args"
+        assert_not_contains "audio_only+burn: нет -vf"         "-vf"        "$call_args"
+        assert_not_contains "audio_only+burn: нет subtitles="  "subtitles=" "$call_args"
+    else
+        skip "F19 audio_only+burn" "mock не вызван"
+    fi
+    rm -f "$INPUT_DIR/test_video.srt"
+else
+    skip "F19 audio_only+burn" "нет тестового MP4"
+fi
+
+# ══════════════════════════════════════════════════════════════
+suite "split_by_silence: граница сдвигается к ближайшей паузе (mock silencedetect)"
+# ══════════════════════════════════════════════════════════════
+# duration=30, length=10 → временные границы 0/10/20. Паузы mid=12 и 26.
+# part_start=10 → пауза 12 (diff 2 <= half 5) → сдвиг на 12.
+# part_start=20 → пауза 26 (diff 6 > 5) → остаётся 20. Итог: -ss 12 есть, -ss 10 нет.
+rm -rf "$INPUT_DIR" "$OUTPUT_DIR"; mkdir -p "$INPUT_DIR" "$OUTPUT_DIR"
+: > "$INPUT_DIR/silence_test.mp4"
+run_script 'export MOCK_FFMPEG_DURATION=00:00:30.00' 'export MOCK_FFMPEG_SILENCE="11:13 25:27"' \
+           'length_coding=":+:00-00-10"' 'split_by_silence=yes'
+if [ -f "$FFMPEG_LOG" ]; then
+    call_args=$(cat "$FFMPEG_LOG")
+    assert_contains     "split_silence: silencedetect вызван"             "silencedetect"  "$call_args"
+    assert_contains     "split_silence: граница сдвинута к паузе (-ss 12)" "-ss 12"         "$call_args"
+    assert_not_contains "split_silence: временная граница 10 заменена"     "-ss 10"         "$call_args"
+else
+    fail "split_silence: mock вызван" "лог создан" "нет лога"
+fi
+
 # ── Cleanup ───────────────────────────────────────────────────
 rm -f "$FFMPEG_LOG"
 rm -rf "$INPUT_DIR" "$OUTPUT_DIR"

@@ -2,20 +2,11 @@
 $scriptPs1 = Join-Path $PSScriptRoot 'FFmpeg_Converter_script.ps1'
 $out       = Join-Path $PSScriptRoot '_VideoConverter_v15.exe'
 $ps2exePs  = Join-Path $PSScriptRoot '..\tools\ps2exe.ps1'
-$ps2exeSha = 'FAEA495151AF69D2AE78783D0071186F98DC568D7B7478F639DA0E74ECF01763'  # PS2EXE @ MScholtes/PS2EXE d32d5ce
 $tmpSrc    = Join-Path $PSScriptRoot '_build_tmp.ps1'
 
-# ps2exe вендорится в репозитории (tools/ps2exe.ps1) и не качается на лету:
-# pin на коммит d32d5ce + проверка SHA256 перед dot-source (supply-chain).
-if (-not (Test-Path $ps2exePs)) {
-    Write-Host "ERROR: vendored ps2exe not found: $ps2exePs"
-    exit 1
-}
-$ps2exeActual = (Get-FileHash -Algorithm SHA256 $ps2exePs).Hash
-if ($ps2exeActual -ne $ps2exeSha) {
-    Write-Host "ERROR: ps2exe.ps1 SHA256 mismatch (expected $ps2exeSha, got $ps2exeActual)"
-    exit 1
-}
+# Общие константы (SHA-пин ps2exe + версия) и проверка — один источник на оба build-скрипта.
+. (Join-Path $PSScriptRoot '../tools/_build_common.ps1')
+Assert-Ps2Exe $ps2exePs
 
 # --- Встраиваем script.ps1 в run_win.ps1 ---
 Write-Host "Embedding FFmpeg_Converter_script.ps1..."
@@ -53,7 +44,7 @@ try {
         -STA `
         -x64 `
         -title   "Video Converter (ffmpeg) v15" `
-        -version "15.0.0.0"
+        -version $script:BuildVersion
 } catch {
     Write-Host "FAIL: $_"
     Remove-Item $tmpSrc -Force -ErrorAction SilentlyContinue
@@ -65,6 +56,7 @@ Remove-Item $tmpSrc -Force -ErrorAction SilentlyContinue
 if (Test-Path $out) {
     $size = [math]::Round((Get-Item $out).Length / 1KB)
     Write-Host "SUCCESS: $out ($size KB)"
+    Write-ExeChecksum $out
 } else {
     Write-Host "FAILED: EXE not created"
     exit 1

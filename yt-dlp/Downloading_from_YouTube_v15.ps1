@@ -168,6 +168,13 @@ $btnCheckUpdate.Add_Click({
             $pType = $comboProxyType.SelectedItem
             $pHost = $textProxyHost.Text
             $pPort = $textProxyPort.Text
+            # .NET Framework WebProxy не умеет SOCKS → проверка обновлений через SOCKS невозможна.
+            if ($pType -match "^socks") {
+                $lnkUpdateResult.Links.Clear()
+                $lnkUpdateResult.Text = "проверка недоступна через SOCKS"
+                $lnkUpdateResult.ForeColor = [System.Drawing.Color]::Gray
+                return
+            }
             # ServicePointManager не поддерживает https:// как схему прокси — используем http://
             $proxyScheme = if ($pType -match "^socks") { $pType } else { "http" }
             $proxyUri = "${proxyScheme}://${pHost}"
@@ -883,10 +890,10 @@ $btnStart.Add_Click({
             "140",
             "`"140+134/best[height<=360]`"",
             "`"140+135/best[height<=480]`"",
-            "234+298/297/296",
-            "234+299/298/297/296",
-            "`"140+299/bestvideo[height<=1440][fps>=50]+bestaudio[ext=m4a]/best[height<=1440]`"",
-            "`"140+299/bestvideo[height<=2160][fps>=50]+bestaudio[ext=m4a]/best[height<=2160]`""
+            "`"140+298/best[height<=720]`"",
+            "`"140+299/298/best[height<=1080]`"",
+            "`"bestvideo[height<=1440][fps>=50]+bestaudio[ext=m4a]/140+299/best[height<=1440]`"",
+            "`"bestvideo[height<=2160][fps>=50]+bestaudio[ext=m4a]/140+299/best[height<=2160]`""
         )
         "avc1_m3u8_60fps" = @(
             "234",
@@ -939,7 +946,7 @@ $btnStart.Add_Click({
 
             # continue_on_error: true → -i (пропускать ошибки), false → --abort-on-error.
             $errFlag = if ($cfg_continueOnErr -eq "false") { "--abort-on-error" } else { "-i" }
-            $command = @("-c", $errFlag, "-w", "--windows-filenames", "--compat-options", "filename-sanitization")
+            $command = @("-c", $errFlag, "-w", "--windows-filenames", "--compat-options", "filename-sanitization", "--retries", "10", "--fragment-retries", "10", "--file-access-retries", "5", "--socket-timeout", "30", "--concurrent-fragments", "4")
             # --no-mtime при переводе: выбор свежескачанного файла опирается на mtime.
             if ($chkTranslate.Checked) { $command += "--no-mtime" }
             # Архив загруженного (паритет с .sh): не перекачивать уже скачанное.
@@ -1024,6 +1031,8 @@ $btnStart.Add_Click({
             # SponsorBlock и субтитры-с-видео: только для реальных загрузок (qi 0..6),
             # НЕ для режима «только субтитры» (qi 7/8).
             if ($qi -ge 0 -and $qi -le 6) {
+                # Метаданные и главы источника (архивная ценность; без глав — no-op).
+                $command += "--embed-metadata", "--embed-chapters"
                 switch ($comboSponsorblock.SelectedItem) {
                     "mark"   { $command += "--sponsorblock-mark", "all" }
                     "remove" { $command += "--sponsorblock-remove", "all" }
@@ -1209,6 +1218,7 @@ $btnStart.Add_Click({
                         $votPsi.RedirectStandardError  = $true
                         $votPsi.UseShellExecute        = $false
                         $votPsi.CreateNoWindow         = $true
+                        Append-Output "WARN: TLS-проверка отключена для AI-перевода (vot-cli-live) — риск MITM." ([System.Drawing.Color]::Yellow)
                         $votPsi.EnvironmentVariables["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
                         # Перевод тоже должен ходить через proxy (как и загрузка), иначе
                         # vot-cli-live стучится напрямую и падает там, где доступ только через прокси.
@@ -1244,10 +1254,12 @@ $btnStart.Add_Click({
                                 # Сохраняем исходное расширение: -c:v copy VP9/AV1 в mp4 может упасть.
                                 $outputFile = $latestVideo.FullName -replace ([regex]::Escape($latestVideo.Extension) + '$'), ('_translated' + $latestVideo.Extension)
                                 Append-Output "Мерж аудиодорожек ($transMode)..." ([System.Drawing.Color]::Cyan)
+                                # WebM-контейнер не принимает AAC → для .webm кодируем перевод в libopus.
+                                $mergeACodec = if ($latestVideo.Extension -eq ".webm") { "libopus" } else { "aac" }
                                 $ffArgs = switch ($transMode) {
                                     "dual_track" { @("-y", "-i", $latestVideo.FullName, "-i", $transFile.FullName,
                                                      "-map", "0:v", "-map", "0:a", "-map", "1:a",
-                                                     "-c:v", "copy", "-c:a:0", "copy", "-c:a:1", "aac", "-b:a:1", "192k",
+                                                     "-c:v", "copy", "-c:a:0", "copy", "-c:a:1", $mergeACodec, "-b:a:1", "192k",
                                                      "-metadata:s:a:0", "language=$cfg_transOrigLang",
                                                      "-metadata:s:a:0", "title=Original",
                                                      "-metadata:s:a:1", "language=$transLang",
@@ -1255,13 +1267,13 @@ $btnStart.Add_Click({
                                                      "-disposition:a:0", "default", $outputFile) }
                                     "replace"    { @("-y", "-i", $latestVideo.FullName, "-i", $transFile.FullName,
                                                      "-map", "0:v", "-map", "1:a",
-                                                     "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+                                                     "-c:v", "copy", "-c:a", $mergeACodec, "-b:a", "192k",
                                                      "-metadata:s:a:0", "language=$transLang",
                                                      "-metadata:s:a:0", "title=AI Translation", $outputFile) }
                                     "mix"        { @("-y", "-i", $latestVideo.FullName, "-i", $transFile.FullName,
                                                      "-filter_complex", "[0:a]volume=$cfg_transOrigVol[a0];[1:a]volume=$cfg_transTransVol[a1];[a0][a1]amix=inputs=2:duration=longest:normalize=0[aout]",
                                                      "-map", "0:v", "-map", "[aout]",
-                                                     "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", $outputFile) }
+                                                     "-c:v", "copy", "-c:a", $mergeACodec, "-b:a", "192k", $outputFile) }
                                 }
                                 & ffmpeg @ffArgs 2>&1 | Out-Null
                                 if ($LASTEXITCODE -eq 0 -and (Test-Path $outputFile)) {

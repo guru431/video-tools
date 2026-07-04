@@ -25,7 +25,7 @@ function Read-Config {
 			$val = [regex]::Replace($val, '\$\{(\w+)\}', {
 				param($m)
 				$ev = [Environment]::GetEnvironmentVariable($m.Groups[1].Value)
-				if ($null -eq $ev) { Write-Host "WARN: переменная $($m.Groups[1].Value) не задана"; "" } else { $ev }
+				if ([string]::IsNullOrEmpty($ev)) { Write-Host "WARN: переменная $($m.Groups[1].Value) не задана"; "" } else { $ev }
 			})
 			return $val.Trim()
 		}
@@ -99,7 +99,7 @@ $silence_threshold = Read-Config "silence_threshold" "split" "-30dB"
 
 $save_old_extension = Read-Config "save_old_extension" "other" "no"
 $format_files_in    = Read-Config "format_files_in"    "other" "3gp,avi,flv,mp4,mpg,mpeg,wmv,mov,asf,mkv,m4v,webm,mts,vob,m4b,mp3,wma,ogg,m4a,aac"
-$subtitles_style    = Read-Config "subtitles_style"    "other" "FontName=Arial:FontSize=24:PrimaryColour=&HFFFFFF&"
+$subtitles_style    = Read-Config "subtitles_style"    "other" "FontName=Arial,FontSize=24,PrimaryColour=&HFFFFFF&"
 $dry_run            = Read-Config "dry_run"            "other" "no"
 $enable_log         = Read-Config "enable_log"         "other" "no"
 $log_file           = Read-Config "log_file"           "other" "ffmpeg_convert.log"

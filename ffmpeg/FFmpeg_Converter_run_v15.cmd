@@ -45,7 +45,7 @@ set "silence_duration=2.0"
 set "silence_threshold=-30dB"
 set "save_old_extension=no"
 set "format_files_in=3gp,avi,flv,mp4,mpg,mpeg,wmv,mov,asf,mkv,m4v,webm,mts,vob,m4b,mp3,wma,ogg,m4a,aac"
-set "subtitles_style=FontName=Arial:FontSize=24:PrimaryColour=&HFFFFFF&"
+set "subtitles_style=FontName=Arial,FontSize=24,PrimaryColour=&HFFFFFF&"
 set "dry_run=no"
 set "enable_log=no"
 set "log_file=ffmpeg_convert.log"
@@ -123,6 +123,7 @@ if not defined _val exit /b
 :_ee_loop
 if "!_val!"=="!_val:${=!" exit /b
 for /f "tokens=2 delims={}" %%V in ("!_val!") do set "_ee_name=%%V"
+if not defined !_ee_name! echo WARN: переменная !_ee_name! не задана 1>&2
 call set "_ee_val=%%%_ee_name%%%"
 set "_val=!_val:${%_ee_name%}=%_ee_val%!"
 goto :_ee_loop
@@ -208,16 +209,16 @@ exit /b
 :: --- Резолвинг относительных путей от директории скрипта ---
 :: Детект абсолютного пути без echo|findstr — пайп исполнял & из значений
 set "_abs="
-if "!folder_sources:~1,2!"==":\" set "_abs=1"
-if "!folder_sources:~1,2!"==":/" set "_abs=1"
-if "!folder_sources:~0,2!"=="\\" set "_abs=1"
-if "!folder_sources:~0,2!"=="//" set "_abs=1"
+rem Абсолютным считаем: 2-й символ ':' (C:\, C:/, C:foo) ИЛИ ведущий '\'/'/' (\foo, /foo, UNC).
+rem Паритет с SH-правилом /*|[A-Za-z]:* (раньше drive-relative C:foo и /foo считались относительными).
+if "!folder_sources:~1,1!"==":" set "_abs=1"
+if "!folder_sources:~0,1!"=="\" set "_abs=1"
+if "!folder_sources:~0,1!"=="/" set "_abs=1"
 if not defined _abs set "folder_sources=%~dp0!folder_sources!"
 set "_abs="
-if "!folder_destination:~1,2!"==":\" set "_abs=1"
-if "!folder_destination:~1,2!"==":/" set "_abs=1"
-if "!folder_destination:~0,2!"=="\\" set "_abs=1"
-if "!folder_destination:~0,2!"=="//" set "_abs=1"
+if "!folder_destination:~1,1!"==":" set "_abs=1"
+if "!folder_destination:~0,1!"=="\" set "_abs=1"
+if "!folder_destination:~0,1!"=="/" set "_abs=1"
 if not defined _abs set "folder_destination=%~dp0!folder_destination!"
 
 rem Тестовый хук: --print-config печатает распарсенные переменные и выходит, не запуская script

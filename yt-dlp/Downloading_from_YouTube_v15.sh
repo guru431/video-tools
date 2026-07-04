@@ -94,10 +94,12 @@ read_config() {
         # Ключ=значение внутри нужной секции
         if $in_section && [[ "$line" =~ ^${key}[[:space:]]*=[[:space:]]*(.*) ]]; then
             value="${BASH_REMATCH[1]}"
-            # Inline-комментарий: " # ..." (с пробелом перед #) — режем через bash regex.
-            # `val#ue` без пробела не комментарий, остаётся как есть.
-            if [[ "$value" =~ ^(.*[^[:space:]])[[:space:]]+#.*$ ]]; then
-                value="${BASH_REMATCH[1]}"
+            # Inline-комментарий: режем по ПЕРВОМУ " # " (пробел+решётка) через parameter
+            # expansion — как ffmpeg run.sh. Прежний regex с жадным .* резал по ПОСЛЕДНЕМУ
+            # " #", утаскивая часть значения. `val#ue` без пробела не комментарий.
+            if [[ "$value" == *' #'* ]]; then
+                value="${value%% #*}"
+                value="${value%"${value##*[![:space:]]}"}"
             fi
             # Подстановка ${ENV_VAR} из окружения. Не задана → пустая строка + WARN.
             # Несколько вхождений поддерживаются (цикл по первому ${...} за итерацию).
@@ -258,11 +260,11 @@ build_format_args() {
                 audio) fmt="140" ;;
                 360)   fmt="140+134/best[height<=360]" ;;
                 480)   fmt="140+135/best[height<=480]" ;;
-                720)   fmt="234+298/297/296" ;;
-                1080)  fmt="234+299/298/297/296" ;;
-                1440)  fmt="140+299/bestvideo[height<=1440][fps>=50]+bestaudio[ext=m4a]/best[height<=1440]" ;;
-                2160)  fmt="140+299/bestvideo[height<=2160][fps>=50]+bestaudio[ext=m4a]/best[height<=2160]" ;;
-                *)     fmt="234+298/297/296" ;;
+                720)   fmt="140+298/best[height<=720]" ;;
+                1080)  fmt="140+299/298/best[height<=1080]" ;;
+                1440)  fmt="bestvideo[height<=1440][fps>=50]+bestaudio[ext=m4a]/140+299/best[height<=1440]" ;;
+                2160)  fmt="bestvideo[height<=2160][fps>=50]+bestaudio[ext=m4a]/140+299/best[height<=2160]" ;;
+                *)     fmt="140+298/best[height<=720]" ;;
             esac ;;
         avc1_m3u8_60fps)
             case "$quality" in
@@ -321,7 +323,8 @@ download_url() {
 
     # continue_on_error: true → -i (пропускать ошибки), false → --abort-on-error.
     local _err_flag="-i"; [ "${CONTINUE_ON_ERROR:-true}" = "false" ] && _err_flag="--abort-on-error"
-    local -a cmd=("$YTDLP" -c "$_err_flag" -w --windows-filenames --compat-options filename-sanitization)
+    local -a cmd=("$YTDLP" -c "$_err_flag" -w --windows-filenames --compat-options filename-sanitization
+                  --retries 10 --fragment-retries 10 --file-access-retries 5 --socket-timeout 30 --concurrent-fragments 4)
 
     # Deno рядом со скриптом (deno или deno.exe на Windows)
     local script_dir
@@ -356,6 +359,9 @@ download_url() {
     else
         build_format_args "$quality" "$FORMAT_PRESET" "$(detect_platform "$url")"
         cmd+=("${FMT_ARGS_ARR[@]}")
+
+        # Метаданные и главы источника (архивная ценность; для видео без глав — no-op).
+        cmd+=(--embed-metadata --embed-chapters)
 
         # Перекодирование в аудиоформат (только при quality=audio и заданном формате)
         if [ "$quality" = "audio" ]; then
@@ -431,6 +437,10 @@ translate_audio() {
 
     # Перевод тоже должен ходить через proxy (как и сама загрузка), иначе
     # vot-cli-live стучится напрямую и падает в сетях, где доступ только через прокси.
+    # NODE_TLS_REJECT_UNAUTHORIZED=0 отключает проверку сертификата для дочернего
+    # vot-процесса — требование vot-cli-live. Явно предупреждаем: в враждебной сети
+    # (Wi-Fi/proxy/DNS) возможен MITM аудиодорожки перевода.
+    log_warn "TLS-проверка отключена для AI-перевода (vot-cli-live) — риск MITM во враждебной сети."
     local -a vot_env=("NODE_TLS_REJECT_UNAUTHORIZED=0")
     if [ -n "$proxy_url" ]; then
         vot_env+=("HTTP_PROXY=$proxy_url" "HTTPS_PROXY=$proxy_url" "ALL_PROXY=$proxy_url")
@@ -455,6 +465,9 @@ translate_audio() {
     # упасть, а mv ниже целит в оригинальное имя видеофайла.
     local ext="${video_file##*.}"
     local output_file="${video_file%.*}_translated.${ext}"
+    # WebM-контейнер не принимает AAC → для .webm-источника кодируем перевод в libopus.
+    local a_codec="aac"
+    [ "${ext,,}" = "webm" ] && a_codec="libopus"
 
     log_info "Мерж аудиодорожек (режим: $mode)..."
 
@@ -462,7 +475,7 @@ translate_audio() {
         dual_track)
             ffmpeg -y -i "$video_file" -i "$translation_file" \
                 -map 0:v -map 0:a -map 1:a \
-                -c:v copy -c:a:0 copy -c:a:1 aac -b:a:1 192k \
+                -c:v copy -c:a:0 copy -c:a:1 "$a_codec" -b:a:1 192k \
                 -metadata:s:a:0 language="$orig_lang" -metadata:s:a:0 title="Original" \
                 -metadata:s:a:1 language="$target_lang" -metadata:s:a:1 title="AI Translation" \
                 -disposition:a:0 default \
@@ -471,7 +484,7 @@ translate_audio() {
         replace)
             ffmpeg -y -i "$video_file" -i "$translation_file" \
                 -map 0:v -map 1:a \
-                -c:v copy -c:a aac -b:a 192k \
+                -c:v copy -c:a "$a_codec" -b:a 192k \
                 -metadata:s:a:0 language="$target_lang" -metadata:s:a:0 title="AI Translation" \
                 "$output_file" 2>/dev/null
             ;;
@@ -479,7 +492,7 @@ translate_audio() {
             ffmpeg -y -i "$video_file" -i "$translation_file" \
                 -filter_complex "[0:a]volume=${orig_vol}[a0];[1:a]volume=${trans_vol}[a1];[a0][a1]amix=inputs=2:duration=longest:normalize=0[aout]" \
                 -map 0:v -map "[aout]" \
-                -c:v copy -c:a aac -b:a 192k \
+                -c:v copy -c:a "$a_codec" -b:a 192k \
                 "$output_file" 2>/dev/null
             ;;
     esac
@@ -523,7 +536,8 @@ download_batch() {
         fi
 
         local _err_flag="-i"; [ "${CONTINUE_ON_ERROR:-true}" = "false" ] && _err_flag="--abort-on-error"
-        local -a cmd=("$YTDLP" -c "$_err_flag" -w --windows-filenames --compat-options filename-sanitization)
+        local -a cmd=("$YTDLP" -c "$_err_flag" -w --windows-filenames --compat-options filename-sanitization
+                  --retries 10 --fragment-retries 10 --file-access-retries 5 --socket-timeout 30 --concurrent-fragments 4)
         local sdir
         sdir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
         if [ -x "$sdir/deno" ]; then
@@ -562,6 +576,9 @@ download_batch() {
         else
             build_format_args "$QUALITY" "$FORMAT_PRESET" "youtube"
             cmd+=("${FMT_ARGS_ARR[@]}")
+
+            # Метаданные и главы источника (архивная ценность; для видео без глав — no-op).
+            cmd+=(--embed-metadata --embed-chapters)
 
             # Перекодирование в аудиоформат (только при quality=audio и заданном формате)
             if [ "$QUALITY" = "audio" ]; then
@@ -912,6 +929,13 @@ main() {
     fi
 
     print_summary
+    # Exit code отражает наличие ошибок — cron/CI могут детектировать провал.
+    [ "$COUNT_FAIL" -gt 0 ] && exit 1
+    exit 0
 }
 
-main "$@"
+# Guard: main() запускается только при прямом вызове, не при dot-source (тесты
+# подключают build_format_args/read_config напрямую — паритет с реальным кодом).
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    main "$@"
+fi

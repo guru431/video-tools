@@ -14,11 +14,18 @@ function Ensure-SslBypass {
 # короткий тестовый encode 64×64. Ловит случай ВМ без GPU, отсутствия драйвера и др.
 function Test-GpuEncoder {
     param([string]$Bin, [string]$Encoder)
+    # Ограничение по времени: зависший ffmpeg-probe не морозит UI-поток бесконечно.
     try {
-        & $Bin -hide_banner -loglevel error `
-            -f lavfi -i "color=size=64x64:duration=0.1:rate=1" `
-            -c:v $Encoder -f null - 2>&1 | Out-Null
-        return ($LASTEXITCODE -eq 0)
+        $psi = [System.Diagnostics.ProcessStartInfo]::new()
+        $psi.FileName = $Bin
+        $psi.Arguments = "-hide_banner -loglevel error -f lavfi -i color=size=64x64:duration=0.1:rate=1 -c:v $Encoder -f null -"
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $psi.RedirectStandardError = $true
+        $psi.RedirectStandardOutput = $true
+        $p = [System.Diagnostics.Process]::Start($psi)
+        if (-not $p.WaitForExit(5000)) { try { $p.Kill() } catch {}; return $false }
+        return ($p.ExitCode -eq 0)
     } catch {
         return $false
     }
@@ -48,7 +55,7 @@ if (Test-Path $configFile) {
             $val = [regex]::Replace($val, '\$\{(\w+)\}', {
                 param($m)
                 $ev = [Environment]::GetEnvironmentVariable($m.Groups[1].Value)
-                if ($null -eq $ev) { Write-Host "WARN: переменная $($m.Groups[1].Value) не задана"; "" } else { $ev }
+                if ([string]::IsNullOrEmpty($ev)) { Write-Host "WARN: переменная $($m.Groups[1].Value) не задана"; "" } else { $ev }
             })
             $script:_configCache["${curSection}::$($Matches[1].Trim())"] = $val.Trim()
         }
@@ -116,7 +123,7 @@ $_cfg_silence_thresh   = Read-Config "silence_threshold" "split" "-30dB"
 
 $_cfg_save_ext     = Read-Config "save_old_extension" "other" "no"
 $_cfg_formats      = Read-Config "format_files_in"    "other" "3gp,avi,flv,mp4,mpg,mpeg,wmv,mov,asf,mkv,m4v,webm,mts,vob,m4b,mp3,wma,ogg,m4a,aac"
-$_cfg_sub_style    = Read-Config "subtitles_style"    "other" "FontName=Arial:FontSize=24:PrimaryColour=&HFFFFFF&"
+$_cfg_sub_style    = Read-Config "subtitles_style"    "other" "FontName=Arial,FontSize=24,PrimaryColour=&HFFFFFF&"
 $_cfg_dry_run      = Read-Config "dry_run"            "other" "no"
 $_cfg_log          = Read-Config "enable_log"         "other" "no"
 $_cfg_log_file     = Read-Config "log_file"           "other" "ffmpeg_convert.log"
@@ -1263,6 +1270,20 @@ $buttonRun.Add_Click({
     $script:format_files_in    = $textInputFormats.Text
     $script:subtitles_style    = $textSubtitlesStyle.Text
 
+    # ---- Валидация числовых полей (до запуска — иначе ошибка ffmpeg на каждом файле) ----
+    $numErr = $null
+    if     ($checkAudioBitrate.Checked    -and $textAudioBitrate.Text    -notmatch '^\d+$')            { $numErr = "Аудио битрейт должен быть целым числом (кбит/с)" }
+    elseif ($checkAudioSampleRate.Checked -and $textAudioSampleRate.Text -notmatch '^\d+$')            { $numErr = "Частота дискретизации должна быть целым числом (Гц)" }
+    elseif ($checkFrameRate.Checked       -and $textFrameRate.Text       -notmatch '^\d+(\.\d+)?$')    { $numErr = "Кадры/с должны быть числом" }
+    elseif ($checkVideoBitrate.Checked    -and $textVideoBitrate.Text    -notmatch '^\d+$')            { $numErr = "Видео битрейт должен быть целым числом (кбит/с)" }
+    elseif ($checkVideoQuality.Checked    -and (($textVideoQuality.Text  -notmatch '^\d+$') -or ([int]$textVideoQuality.Text -gt 51))) { $numErr = "Качество (CRF/CQ) должно быть целым 0-51" }
+    elseif ($checkSpeed.Checked           -and (($textSpeed.Text -notmatch '^\d+(\.\d+)?$') -or ([double]$textSpeed.Text -lt 0.25) -or ([double]$textSpeed.Text -gt 4.0))) { $numErr = "Скорость должна быть 0.25 - 4.0 (точка как разделитель)" }
+    elseif ($checkSplitSilence.Checked    -and $textSilenceDuration.Text -notmatch '^\d+(\.\d+)?$')    { $numErr = "Мин. тишина должна быть числом (секунды)" }
+    if ($numErr) {
+        [System.Windows.Forms.MessageBox]::Show($numErr, "Проверка настроек", "OK", "Warning") | Out-Null
+        return
+    }
+
     # ---- Валидация ----
     if ([string]::IsNullOrWhiteSpace($script:folder_sources) -or !(Test-Path $script:folder_sources)) {
         [System.Windows.Forms.MessageBox]::Show("Папка источника не найдена:`n$($script:folder_sources)", "Ошибка", "OK", "Error")
@@ -1430,7 +1451,19 @@ $form.Add_Shown({
         try {
             $this.Stop(); $this.Dispose()
             $ffmpegBin = $textFFmpegPath.Text
-            $versionLine = (& $ffmpegBin -version 2>&1 | Select-Object -First 1).ToString().Trim()
+            # Ограниченный по времени probe версии — зависший бинарь не морозит UI навсегда.
+            $vpsi = [System.Diagnostics.ProcessStartInfo]::new()
+            $vpsi.FileName = $ffmpegBin; $vpsi.Arguments = "-version"
+            $vpsi.UseShellExecute = $false; $vpsi.CreateNoWindow = $true
+            $vpsi.RedirectStandardOutput = $true; $vpsi.RedirectStandardError = $true
+            $vp = [System.Diagnostics.Process]::Start($vpsi)
+            $vOutTask = $vp.StandardOutput.ReadToEndAsync()
+            $vErrTask = $vp.StandardError.ReadToEndAsync()
+            if (-not $vp.WaitForExit(5000)) { try { $vp.Kill() } catch {} }
+            $versionOut = ""; try { $versionOut = $vOutTask.Result } catch {}
+            try { $null = $vErrTask.Result } catch {}
+            $versionLine = (($versionOut -split "`n") | Select-Object -First 1)
+            if ($versionLine) { $versionLine = $versionLine.Trim() } else { $versionLine = "" }
             if ($versionLine -match 'ffmpeg version (\S+)') {
                 $script:ffmpegCurrentVersion = $Matches[1]
                 $lblFfmpegVersion.Text      = "ffmpeg: $($Matches[1])"

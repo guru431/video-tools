@@ -159,7 +159,9 @@ if ($audio_only -eq "yes") {
 	# rotation+GPU: CUDA-варианта фильтра поворота не существует. Если включён поворот
 	# и используется GPU — вся цепочка фильтров переводится на CPU (transpose+scale),
 	# иначе получилась бы несовместимая смесь CPU transpose + scale_cuda/scale_qsv.
-	$force_cpu_filters = ($video_rotation_status -eq "+" -and $use_hw_accel)
+	# force_cpu: поворот (нет CUDA-transpose) ИЛИ keep_aspect+разрешение (scale_cuda/qsv не умеют
+	# pad hw-кадры → иная геометрия без letterbox). Тогда scale идёт через CPU (паритет с .sh).
+	$force_cpu_filters = ($use_hw_accel -and (($video_rotation_status -eq "+") -or ($keep_aspect_ratio_status -eq "+" -and $keep_aspect_ratio_value -eq "yes" -and $set_video_resolution)))
 	$scale_backend = if ($force_cpu_filters) { "cpu" } else { $hw_accel_type }
 
 	# Поворот
@@ -208,17 +210,19 @@ if ($audio_only -eq "yes") {
 		if ($hw_accel_type -eq "nvidia") {
 			if ($gpu_tune_status -eq "+") { $gpu_args += @("-tune", $gpu_tune_value) }
 			if ($gpu_rc_status -eq "+") { $gpu_args += @("-rc", $gpu_rc_value) }
-			if ($video_quality_status -eq "+") { $gpu_args += @("-cq", $video_quality_value) }
-		}
-		elseif ($hw_accel_type -eq "intel") {
-			if ($video_quality_status -eq "+") { $gpu_args += @("-global_quality", $video_quality_value) }
 		}
 	}
 
-	# CRF для программных кодеков
+	# Флаг качества по РЕШЁННОМУ энкодеру, а не по use_hw_accel: nvenc/qsv отвергают -crf.
+	# При codec=*_nvenc/*_qsv с выключенным hw_accel всё равно нужен -cq/-global_quality.
 	$crf_args = @()
-	if (-not $use_hw_accel -and $video_quality_status -eq "+") {
-		$crf_args = @("-crf", $video_quality_value)
+	if ($video_quality_status -eq "+") {
+		$crf_args = switch -Regex ($set_video_codec) {
+			'_nvenc$' { @("-cq", $video_quality_value); break }
+			'_qsv$'   { @("-global_quality", $video_quality_value); break }
+			'_amf$'   { @("-qp", $video_quality_value); break }
+			default   { @("-crf", $video_quality_value) }
+		}
 	}
 
 	# Имя muxer для -f: mkv/ts — это расширения файла, а не имена форматов ffmpeg.
@@ -241,16 +245,16 @@ if ($playback_speed_status -eq "+" -and $playback_speed_value -ne "1.0") {
 			$af_parts += "atempo=2.0"
 			$remaining = $remaining / 2.0
 		}
-		$af_parts += "atempo=$remaining"
+		$af_parts += "atempo=" + $remaining.ToString([System.Globalization.CultureInfo]::InvariantCulture)
 	} elseif ($speed -lt 0.5) {
 		$remaining = $speed
 		while ($remaining -lt 0.5) {
 			$af_parts += "atempo=0.5"
 			$remaining = $remaining / 0.5
 		}
-		$af_parts += "atempo=$remaining"
+		$af_parts += "atempo=" + $remaining.ToString([System.Globalization.CultureInfo]::InvariantCulture)
 	} else {
-		$af_parts += "atempo=$speed"
+		$af_parts += "atempo=" + $speed.ToString([System.Globalization.CultureInfo]::InvariantCulture)
 	}
 }
 
@@ -436,6 +440,7 @@ function Encode-File {
 		$convert_args += $video_settings_args
 		$convert_args += $set_video_bitrate_final
 		$convert_args += $audio_settings_args
+			$convert_args += @("-map_metadata", "0")  # сохранить глобальные теги источника
 	}
 
 	$fileDuration = 0
@@ -515,7 +520,7 @@ function Encode-File {
 		if ($num.Count -gt 1 -or $num[0] -ne 0) { $pref = " (part.$c)" }
 
 		# Сброс из базы — см. _base снимки выше.
-		$convert_args = @() + $convert_args_base
+		$convert_args = @() + $convert_args_base; $sub_burned = $false
 		$current_vf_parts = [System.Collections.ArrayList]@($vf_parts_base)
 		$current_af_parts = [System.Collections.ArrayList]@($af_parts_base)
 
@@ -529,14 +534,14 @@ function Encode-File {
 
 		# B2. Субтитры с subtitles_style
 		$subtitles_args = @()
-		if ($video_subtitles_status -eq "+" -and $copy_codecs -ne "yes") {
+		if ($video_subtitles_status -eq "+" -and $copy_codecs -ne "yes" -and $audio_only -ne "yes") {
 			$sub_found = $false
 			foreach ($ext in @("srt", "vtt")) {
 				if (-not $sub_found) {
 					$sub_file = "$folder_sources$file_path$file_name.$ext"
 					if (Test-Path $sub_file) {
 						if ($video_subtitles_value -eq "burn") {
-							$sub_escaped = $sub_file -replace '\\','/' -replace "'","\'" -replace ':','\:' -replace '\[','\[' -replace '\]','\]' -replace ';','\;' -replace '%','\%'
+							$sub_escaped = $sub_file -replace '\\','/' -replace "'","\'" -replace ':','\:' -replace '\[','\[' -replace '\]','\]' -replace ';','\;' -replace '%','\%'; $sub_burned = $true
 							# subtitles — CPU-фильтр: на GPU-кадрах (hwaccel_output_format cuda/qsv)
 							# ffmpeg падает с "Impossible to convert between the formats". Скачиваем
 							# кадры в системную память перед прожигом. Проверено на RTX 5060 Ti.
@@ -569,18 +574,23 @@ function Encode-File {
 		if ($copy_codecs -eq "yes") { $vf_args = @(); $af_args = @() }
 
 		$out_file = "$out_base$pref.$current_format_out"
+		# F11. Прогресс — против эффективной длины сегмента (-t L или dur-b), не полной длительности.
+		$progressDur = if ($current_set_length -match '^-t (\d+)') { [int]$Matches[1] } elseif ($b -gt 0) { $fileDuration - $b } else { $fileDuration }
+		if ($progressDur -le 0) { $progressDur = $fileDuration }
 
 		# Сборка аргументов (A5 — без Split, через массив).
 		# -ss располагается ДО -i: fast seek по контейнеру вместо декодирования от 0.
 		$ffmpegArgs = @("-hide_banner", "-strict", "-2")
 		$ffmpegArgs += $hw_decode_args
-		if ($b -gt 0) { $ffmpegArgs += @("-ss", "$b") }
+		# F5: при прожиге субтитров input-side -ss сбивает PTS кадров → -ss на выход (ниже).
+		if ($b -gt 0 -and -not $sub_burned) { $ffmpegArgs += @("-ss", "$b") }
 		$ffmpegArgs += @("-i", $full_path)
 		$ffmpegArgs += $subtitles_args
 		$ffmpegArgs += $convert_args
 		$ffmpegArgs += $thread_args
 		$ffmpegArgs += $vf_args
 		$ffmpegArgs += $af_args
+		if ($b -gt 0 -and $sub_burned) { $ffmpegArgs += @("-ss", "$b") }
 		if ($current_set_length) { $ffmpegArgs += $current_set_length -split ' ' }
 		$ffmpegArgs += @($out_file, "-y")
 		$ffmpegArgs = $ffmpegArgs | Where-Object { $_ -ne "" -and $_ -ne $null }
@@ -589,7 +599,6 @@ function Encode-File {
 		if ($dry_run -eq "yes") {
 			Write-Host "[DRY-RUN] $ffmpeg $($ffmpegArgs -join ' ')"
 			$_cmdStr = "$ffmpeg $($ffmpegArgs -join ' ')"
-			$script:countOk++
 			Write-GUIProgress -FilePercent 100 -CurrentFile $file.Name -Command $_cmdStr
 		} else {
 			Log-Msg "INFO" "Кодирование: $($file.Name) -> $(Split-Path $out_file -Leaf)"
@@ -643,10 +652,10 @@ function Encode-File {
 						$sr = [System.IO.StreamReader]::new($fs)
 						$fc = $sr.ReadToEnd()
 						$m = [regex]::Matches($fc, "out_time=(\d+):(\d+):(\d+)")
-						if ($m.Count -gt 0 -and $fileDuration -gt 0) {
+						if ($m.Count -gt 0 -and $progressDur -gt 0) {
 							$last = $m[$m.Count - 1]
 							$outSec = [int]$last.Groups[1].Value * 3600 + [int]$last.Groups[2].Value * 60 + [int]$last.Groups[3].Value
-							$fpct = [int]($outSec / $fileDuration * 100)
+							$fpct = [int]($outSec / $progressDur * 100)
 							$fpct = [Math]::Min($fpct, 99)
 						}
 					} catch {} finally {
@@ -701,10 +710,11 @@ if ($merge_files -eq "yes") {
 	if (($format_files_in_list | Measure-Object).Count -eq 0) {
 		Log-Msg "WARN" "Нет файлов для объединения в $folder_sources"
 	} else {
-	$fname = $format_files_in_list[0].Name
+	$_mergeSorted = $format_files_in_list | Sort-Object FullName  # F10: паритет с .sh sort -z
+		$fname = $_mergeSorted[0].Name
 	if (!(Test-Path "$folder_destination\$fname")) {
 		$tmpFile = [System.IO.Path]::GetTempFileName()
-		[System.IO.File]::WriteAllLines($tmpFile, ($format_files_in_list.FullName | ForEach-Object { "file '" + ($_ -replace "'", "'\''") + "'" }))
+		[System.IO.File]::WriteAllLines($tmpFile, ($_mergeSorted.FullName | ForEach-Object { "file '" + ($_ -replace "'", "'\''") + "'" }))
 		Log-Msg "INFO" "Объединение файлов -> $folder_destination\$fname"
 		& $ffmpeg -hide_banner -strict -2 -f concat -safe 0 -i $tmpFile -c copy -map 0 "$folder_destination\$fname"
 		if ($LASTEXITCODE -ne 0) {
@@ -758,4 +768,6 @@ if (-not $guiProgressFile) {
 	Write-GUIProgress -FilePercent 100 -CurrentFile "Готово"
 }
 
-exit
+# Exit code отражает наличие ошибок — cron/CI могут детектировать провал батча.
+if ($script:countFail -gt 0) { exit 1 }
+exit 0

@@ -170,6 +170,7 @@ rem Громкости для режима mix (паритет с .sh/.ps1, гд
 rem CMD-вариант интерактивный (без config.ini) — значения по умолчанию вынесены в переменные.
 set "translate_orig_vol=0.3"
 set "translate_trans_vol=1.0"
+set "translate_orig_lang=en"
 
 :: ── Определение платформы по URL ────────────────────────────────────────
 set "platform=other"
@@ -254,10 +255,10 @@ if %fmt%==3 (
     if %quality%==0 set "save_settings=-f 140"
     if %quality%==1 set "save_settings=-f Q140+134/best[heightLE360]Q"
     if %quality%==2 set "save_settings=-f Q140+135/best[heightLE480]Q"
-    if %quality%==3 set "save_settings=-f 234+298/297/296"
-    if %quality%==4 set "save_settings=-f 234+299/298/297/296"
-    if %quality%==5 set "save_settings=-f Q140+299/bestvideo[heightLE1440][fpsGE50]+bestaudio[ext=m4a]/best[heightLE1440]Q"
-    if %quality%==6 set "save_settings=-f Q140+299/bestvideo[heightLE2160][fpsGE50]+bestaudio[ext=m4a]/best[heightLE2160]Q"
+    if %quality%==3 set "save_settings=-f Q140+298/best[heightLE720]Q"
+    if %quality%==4 set "save_settings=-f Q140+299/298/best[heightLE1080]Q"
+    if %quality%==5 set "save_settings=-f Qbestvideo[heightLE1440][fpsGE50]+bestaudio[ext=m4a]/140+299/best[heightLE1440]Q"
+    if %quality%==6 set "save_settings=-f Qbestvideo[heightLE2160][fpsGE50]+bestaudio[ext=m4a]/140+299/best[heightLE2160]Q"
 )
 :: avc1_m3u8_60fps
 if %fmt%==4 (
@@ -312,8 +313,13 @@ if defined save_settings (
 set "audiofmt_arg="
 set "sb_arg="
 set "subsvid_arg="
+set "archive_arg="
+set "embed_arg="
 if "%quality%"=="91" goto :extra_done
 if "%quality%"=="92" goto :extra_done
+:: Архив + встраивание метаданных/глав — только для реальной загрузки (не субтитры 91/92).
+set "archive_arg=--download-archive "!folder!\download_archive.txt""
+set "embed_arg=--embed-metadata --embed-chapters"
 
 :: ── Аудио-формат (актуально только для качества 0) ───────────────────────
 echo.
@@ -416,7 +422,7 @@ if not "%translate_lang%"=="" (
     echo.>"!_dl_marker!"
 )
 
-"!dlp!" !cookie_arg! !deno_arg! !mtime_arg! !audiofmt_arg! !sb_arg! !subsvid_arg! -c -i -w --windows-filenames --compat-options filename-sanitization -o "!folder!\%file_tpl%" %save_settings%%sections_arg% "!url!"
+"!dlp!" !cookie_arg! !deno_arg! !mtime_arg! !audiofmt_arg! !sb_arg! !subsvid_arg! !archive_arg! !embed_arg! --retries 10 --fragment-retries 10 --file-access-retries 5 --socket-timeout 30 --concurrent-fragments 4 -c -i -w --windows-filenames --compat-options filename-sanitization -o "!folder!\%file_tpl%" %save_settings%%sections_arg% "!url!"
 
 set "dl_errorlevel=%errorlevel%"
 if %dl_errorlevel%==0 (
@@ -459,6 +465,7 @@ if not "%translate_lang%"=="" (
         set "temp_dir=%TEMP%\yt-dlp-translate-!random!"
         rmdir /s /q "!temp_dir!" 2>nul
         mkdir "!temp_dir!" 2>nul
+        echo [WARN] TLS-проверка отключена для AI-перевода vot-cli-live - риск MITM во враждебной сети.
         set "NODE_TLS_REJECT_UNAUTHORIZED=0"
         "!vot_cmd!" --output="!temp_dir!" --voice-style=live --reslang=%translate_lang% "!url!"
         set "vot_rc=!errorlevel!"
@@ -481,16 +488,16 @@ if not "%translate_lang%"=="" (
             echo Объединение аудиодорожек ^(режим: %translate_mode%^)...
             rem %%~xE сохраняет исходное расширение (.mp4/.mkv/.webm) — иначе -c:v copy
             rem VP9/AV1 в mp4-контейнер может упасть; move ниже целит в оригинальное имя.
-            for %%E in ("!video_file!") do set "output_file=%%~dpnE_translated%%~xE"
+            for %%E in ("!video_file!") do (set "output_file=%%~dpnE_translated%%~xE" & set "a_codec=aac" & if /i "%%~xE"==".webm" set "a_codec=libopus")
 
             if "%translate_mode%"=="dual_track" (
-                ffmpeg -y -i "!video_file!" -i "!trans_file!" -map 0:v -map 0:a -map 1:a -c:v copy -c:a:0 copy -c:a:1 aac -b:a:1 192k -metadata:s:a:0 language=en -metadata:s:a:0 title="Original" -metadata:s:a:1 language=%translate_lang% -metadata:s:a:1 title="AI Translation" -disposition:a:0 default "!output_file!" 2>nul
+                ffmpeg -y -i "!video_file!" -i "!trans_file!" -map 0:v -map 0:a -map 1:a -c:v copy -c:a:0 copy -c:a:1 !a_codec! -b:a:1 192k -metadata:s:a:0 language=%translate_orig_lang% -metadata:s:a:0 title="Original" -metadata:s:a:1 language=%translate_lang% -metadata:s:a:1 title="AI Translation" -disposition:a:0 default "!output_file!" 2>nul
             )
             if "%translate_mode%"=="replace" (
-                ffmpeg -y -i "!video_file!" -i "!trans_file!" -map 0:v -map 1:a -c:v copy -c:a aac -b:a 192k -metadata:s:a:0 language=%translate_lang% -metadata:s:a:0 title="AI Translation" "!output_file!" 2>nul
+                ffmpeg -y -i "!video_file!" -i "!trans_file!" -map 0:v -map 1:a -c:v copy -c:a !a_codec! -b:a 192k -metadata:s:a:0 language=%translate_lang% -metadata:s:a:0 title="AI Translation" "!output_file!" 2>nul
             )
             if "%translate_mode%"=="mix" (
-                ffmpeg -y -i "!video_file!" -i "!trans_file!" -filter_complex "[0:a]volume=!translate_orig_vol![a0];[1:a]volume=!translate_trans_vol![a1];[a0][a1]amix=inputs=2:duration=longest:normalize=0[aout]" -map 0:v -map "[aout]" -c:v copy -c:a aac -b:a 192k "!output_file!" 2>nul
+                ffmpeg -y -i "!video_file!" -i "!trans_file!" -filter_complex "[0:a]volume=!translate_orig_vol![a0];[1:a]volume=!translate_trans_vol![a1];[a0][a1]amix=inputs=2:duration=longest:normalize=0[aout]" -map 0:v -map "[aout]" -c:v copy -c:a !a_codec! -b:a 192k "!output_file!" 2>nul
             )
 
             set "ff_rc=!errorlevel!"

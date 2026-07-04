@@ -81,11 +81,14 @@ OUT=$(run_script "nvenc" \
     'video_quality=":+:28"' 'gpu_preset=":+:p5"' 'gpu_tune=":+:hq"' 'gpu_rc=":+:vbr"')
 
 GP=$(getv "$OUT" gpu_args)
-assert_contains "nvidia: -cq 28"      "-cq 28"     "$GP"
+CR=$(getv "$OUT" crf_args)
+# F6: флаг качества выбирается по суффиксу энкодера и живёт в crf_args (nvenc → -cq);
+# gpu_args держит только preset/tune/rc. Итоговая команда содержит -cq в любом случае.
+assert_contains "nvidia: -cq 28 (crf_args)"  "-cq 28"     "$CR"
 assert_contains "nvidia: -preset p5"  "-preset p5" "$GP"
 assert_contains "nvidia: -tune hq"    "-tune hq"   "$GP"
 assert_contains "nvidia: -rc vbr"     "-rc vbr"    "$GP"
-assert_empty    "nvidia: нет crf_args" "$(getv "$OUT" crf_args)"
+assert_not_contains "nvidia: -cq не в gpu_args" "-cq" "$GP"
 
 # ══════════════════════════════════════════════════════════════
 suite "GPU Intel QSV: замена кодека"
@@ -111,9 +114,10 @@ OUT=$(run_script "qsv" \
     'video_quality=":+:23"' 'gpu_preset=":+:fast"')
 
 GP=$(getv "$OUT" gpu_args)
-assert_contains "intel: -global_quality 23"  "-global_quality 23"  "$GP"
+CR=$(getv "$OUT" crf_args)
+assert_contains "intel: -global_quality 23 (crf_args)"  "-global_quality 23"  "$CR"
 assert_contains "intel: -preset fast"        "-preset fast"        "$GP"
-assert_empty    "intel: нет crf_args"        "$(getv "$OUT" crf_args)"
+assert_not_contains "intel: -global_quality не в gpu_args" "-global_quality" "$GP"
 
 # ══════════════════════════════════════════════════════════════
 suite "GPU: NVENC не поддерживается (нет nvenc в mock)"
@@ -132,6 +136,19 @@ OUT=$(run_script "nvenc" \
 assert_eq "hw disabled: use_hw_accel=no"   "no"       "$(getv "$OUT" use_hw_accel)"
 assert_eq "hw disabled: кодек без замены"  "libx264"  "$(getv "$OUT" set_video_codec)"
 assert_eq "hw disabled: crf_args=-crf 23"  "-crf 23"  "$(getv "$OUT" crf_args)"
+
+# ══════════════════════════════════════════════════════════════
+suite "F6: прямой hw-кодек при выключенном hw_accel → -cq/-global_quality, не -crf"
+# ══════════════════════════════════════════════════════════════
+# nvenc/qsv отвергают -crf; если пользователь указал h264_nvenc напрямую, а hw_accel
+# выключен (или backend недоступен), флаг качества всё равно должен быть -cq/-global_quality.
+
+OUT=$(run_script "" 'hw_accel=":-:nvidia"' 'video_codec=":+:h264_nvenc"' 'video_quality=":+:23"')
+assert_eq "h264_nvenc+hwoff: use_hw_accel=no"  "no"       "$(getv "$OUT" use_hw_accel)"
+assert_eq "h264_nvenc+hwoff: crf_args=-cq 23"  "-cq 23"   "$(getv "$OUT" crf_args)"
+
+OUT=$(run_script "" 'hw_accel=":-:intel"' 'video_codec=":+:h264_qsv"' 'video_quality=":+:23"')
+assert_eq "h264_qsv+hwoff: crf_args=-global_quality 23"  "-global_quality 23"  "$(getv "$OUT" crf_args)"
 
 # ── Cleanup ───────────────────────────────────────────────────
 rm -rf "$EMPTY_DIR"

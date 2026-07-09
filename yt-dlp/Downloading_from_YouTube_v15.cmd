@@ -453,17 +453,25 @@ if not "%translate_lang%"=="" (
                 goto :skip_translate
             )
         )
-        where ffmpeg >nul 2>&1
-        if errorlevel 1 (
-            echo ОШИБКА: ffmpeg не найден
-            echo Установите: https://ffmpeg.org/download.html
-            goto :skip_translate
+        rem ffmpeg: сначала рядом со скриптом (ffmpeg.exe), потом PATH — паритет с yt-dlp/.sh/.ps1.
+        set "ff_cmd=ffmpeg"
+        if exist "%~dp0ffmpeg.exe" (
+            set "ff_cmd=%~dp0ffmpeg.exe"
+        ) else (
+            where ffmpeg >nul 2>&1
+            if errorlevel 1 (
+                echo ОШИБКА: ffmpeg не найден
+                echo Положите ffmpeg.exe рядом со скриптом или установите: https://ffmpeg.org/download.html
+                goto :skip_translate
+            )
         )
 
-        :: Скачать перевод. temp_dir уникален на запуск (!random!) — паритет с
-        :: .sh (mktemp -d) и .ps1 (Get-Random): нет гонки и остатка mp3 от прошлого.
-        set "temp_dir=%TEMP%\yt-dlp-translate-!random!"
-        rmdir /s /q "!temp_dir!" 2>nul
+        :: Скачать перевод. temp_dir уникален на запуск. GUID (не !random!): пространство
+        :: %RANDOM% мало (0..32767), и rmdir /s /q мог снести temp-директорию параллельного
+        :: запуска при коллизии. GUID через .NET убирает гонку — предварительный rmdir не нужен.
+        :: !random!!random! — fallback, если powershell недоступен.
+        set "temp_dir=%TEMP%\yt-dlp-translate-!random!!random!"
+        for /f "delims=" %%g in ('powershell -NoProfile -Command "[guid]::NewGuid().ToString('N')" 2^>nul') do set "temp_dir=%TEMP%\yt-dlp-translate-%%g"
         mkdir "!temp_dir!" 2>nul
         echo [WARN] TLS-проверка отключена для AI-перевода vot-cli-live - риск MITM во враждебной сети.
         set "NODE_TLS_REJECT_UNAUTHORIZED=0"
@@ -491,13 +499,13 @@ if not "%translate_lang%"=="" (
             for %%E in ("!video_file!") do (set "output_file=%%~dpnE_translated%%~xE" & set "a_codec=aac" & if /i "%%~xE"==".webm" set "a_codec=libopus")
 
             if "%translate_mode%"=="dual_track" (
-                ffmpeg -y -i "!video_file!" -i "!trans_file!" -map 0:v -map 0:a -map 1:a -c:v copy -c:a:0 copy -c:a:1 !a_codec! -b:a:1 192k -metadata:s:a:0 language=%translate_orig_lang% -metadata:s:a:0 title="Original" -metadata:s:a:1 language=%translate_lang% -metadata:s:a:1 title="AI Translation" -disposition:a:0 default "!output_file!" 2>nul
+                "!ff_cmd!" -y -i "!video_file!" -i "!trans_file!" -map 0:v -map 0:a -map 1:a -c:v copy -c:a:0 copy -c:a:1 !a_codec! -b:a:1 192k -metadata:s:a:0 language=%translate_orig_lang% -metadata:s:a:0 title="Original" -metadata:s:a:1 language=%translate_lang% -metadata:s:a:1 title="AI Translation" -disposition:a:0 default "!output_file!" 2>nul
             )
             if "%translate_mode%"=="replace" (
-                ffmpeg -y -i "!video_file!" -i "!trans_file!" -map 0:v -map 1:a -c:v copy -c:a !a_codec! -b:a 192k -metadata:s:a:0 language=%translate_lang% -metadata:s:a:0 title="AI Translation" "!output_file!" 2>nul
+                "!ff_cmd!" -y -i "!video_file!" -i "!trans_file!" -map 0:v -map 1:a -c:v copy -c:a !a_codec! -b:a 192k -metadata:s:a:0 language=%translate_lang% -metadata:s:a:0 title="AI Translation" "!output_file!" 2>nul
             )
             if "%translate_mode%"=="mix" (
-                ffmpeg -y -i "!video_file!" -i "!trans_file!" -filter_complex "[0:a]volume=!translate_orig_vol![a0];[1:a]volume=!translate_trans_vol![a1];[a0][a1]amix=inputs=2:duration=longest:normalize=0[aout]" -map 0:v -map "[aout]" -c:v copy -c:a !a_codec! -b:a 192k "!output_file!" 2>nul
+                "!ff_cmd!" -y -i "!video_file!" -i "!trans_file!" -filter_complex "[0:a]volume=!translate_orig_vol![a0];[1:a]volume=!translate_trans_vol![a1];[a0][a1]amix=inputs=2:duration=longest:normalize=0[aout]" -map 0:v -map "[aout]" -c:v copy -c:a !a_codec! -b:a 192k "!output_file!" 2>nul
             )
 
             set "ff_rc=!errorlevel!"

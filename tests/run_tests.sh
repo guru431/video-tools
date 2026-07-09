@@ -68,6 +68,19 @@ run_suite() {
     fi
 }
 
+# ── Запуск, либо провал если зарегистрированный файл исчез ────────────────────
+# Раньше: `[ -f "$f" ] && run_suite "$f"` — удалённый/переименованный тест молча
+# пропадал из результата. Теперь отсутствие зарегистрированного файла = провал.
+run_or_missing() {
+    local test_file="$1"
+    if [ -f "$test_file" ]; then
+        run_suite "$test_file"
+    else
+        TOTAL_FAIL=$((TOTAL_FAIL + 1))
+        SUITE_RESULTS+=("${RED}✗${NC} $(basename "$test_file" .sh) (файл отсутствует)")
+    fi
+}
+
 # ── Определяем какие тесты запускать ─────────────────────────────────────────
 FFMPEG_TESTS=(
     "$TESTS_DIR/ffmpeg/test_01_config_sh.sh"
@@ -96,10 +109,14 @@ YTDLP_TESTS=(
     "$TESTS_DIR/yt-dlp/test_07_new_features.sh"
 )
 
-# Кросс-платформенные инварианты (кодировки, паритет ключей config.ini)
+# Кросс-платформенные инварианты (кодировки, паритет ключей config.ini, guardrail'ы)
 COMMON_TESTS=(
     "$TESTS_DIR/common/test_encoding.sh"
     "$TESTS_DIR/common/test_config_keys.sh"
+    "$TESTS_DIR/common/test_config_contract.sh"
+    "$TESTS_DIR/common/test_guardrails.sh"
+    "$TESTS_DIR/common/test_path_matrix.sh"
+    "$TESTS_DIR/common/test_ytdlp_preset_parity.sh"
 )
 
 # ── Баннер ───────────────────────────────────────────────────────────────────
@@ -115,35 +132,35 @@ case "$FILTER" in
     ffmpeg)
         echo -e "${BOLD}Модуль: FFmpeg Converter${NC}"
         for test_file in "${FFMPEG_TESTS[@]}"; do
-            [ -f "$test_file" ] && run_suite "$test_file"
+            run_or_missing "$test_file"
         done
         ;;
     yt-dlp|ytdlp)
         echo -e "${BOLD}Модуль: YT-DLP Downloader${NC}"
         for test_file in "${YTDLP_TESTS[@]}"; do
-            [ -f "$test_file" ] && run_suite "$test_file"
+            run_or_missing "$test_file"
         done
         ;;
     common)
         echo -e "${BOLD}Модуль: Общие инварианты${NC}"
         for test_file in "${COMMON_TESTS[@]}"; do
-            [ -f "$test_file" ] && run_suite "$test_file"
+            run_or_missing "$test_file"
         done
         ;;
     all|*)
         echo -e "${BOLD}Модуль: FFmpeg Converter${NC}"
         for test_file in "${FFMPEG_TESTS[@]}"; do
-            [ -f "$test_file" ] && run_suite "$test_file"
+            run_or_missing "$test_file"
         done
         echo ""
         echo -e "${BOLD}Модуль: YT-DLP Downloader${NC}"
         for test_file in "${YTDLP_TESTS[@]}"; do
-            [ -f "$test_file" ] && run_suite "$test_file"
+            run_or_missing "$test_file"
         done
         echo ""
         echo -e "${BOLD}Модуль: Общие инварианты${NC}"
         for test_file in "${COMMON_TESTS[@]}"; do
-            [ -f "$test_file" ] && run_suite "$test_file"
+            run_or_missing "$test_file"
         done
         ;;
 esac
@@ -163,6 +180,14 @@ done
 echo -e "${BOLD}${CYAN}╠══════════════════════════════════════════════════╣${NC}"
 echo -e "${BOLD}${CYAN}║${NC}  Всего: $TOTAL  |  ${GREEN}✓ $TOTAL_PASS пройдено${NC}  |  ${RED}✗ $TOTAL_FAIL провалено${NC}  |  ${YELLOW}○ $TOTAL_SKIP пропущено${NC}"
 echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════════════╝${NC}"
+
+# STRICT_SKIP=1 (используется в Windows CI): пропуск платформенного suite'а = ошибка.
+# Для проекта с обязательным SH/CMD/PS1 паритетом зелёный прогон не должен достигаться
+# за счёт пропуска CMD/PowerShell (на Linux CI переменную не выставляют — skip там ожидаем).
+if [ "${STRICT_SKIP:-0}" = "1" ] && [ "$TOTAL_SKIP" -gt 0 ]; then
+    echo -e "\n${RED}${BOLD}STRICT_SKIP: $TOTAL_SKIP пропущено — ошибка (нужен полный SH/CMD/PS1 паритет)${NC}"
+    exit 1
+fi
 
 if [ "$TOTAL_FAIL" -gt 0 ]; then
     echo -e "\n${RED}${BOLD}ПРОВАЛЕНО: $TOTAL_FAIL тест(ов)${NC}"

@@ -13,7 +13,8 @@ $scriptDir = if ($MyInvocation.MyCommand.Path) {
 } else {
     Split-Path -Parent ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
 }
-$configFile = Join-Path $scriptDir "config.ini"
+# $env:YTDLP_CONFIG — override пути config.ini (используют тесты); иначе рядом со скриптом.
+$configFile = if ($env:YTDLP_CONFIG) { $env:YTDLP_CONFIG } else { Join-Path $scriptDir "config.ini" }
 
 # ── Чтение config.ini (один раз в хеш-таблицу) ──────────────────────────
 $script:_configCache = @{}
@@ -100,6 +101,11 @@ $defaultQualityIdx = if ($qualityMap.ContainsKey($cfg_quality)) { $qualityMap[$c
 $dlpLocal = Join-Path $scriptDir "yt-dlp.exe"
 if (Test-Path $dlpLocal) { $dlp = $dlpLocal } else { $dlp = "yt-dlp" }
 
+# ffmpeg для мержа AI-перевода: сначала рядом со скриптом (ffmpeg.exe), затем PATH —
+# паритет с $dlp и с задекларированным binary auto-detection.
+$ffmpegLocal = Join-Path $scriptDir "ffmpeg.exe"
+if (Test-Path $ffmpegLocal) { $ffmpegBin = $ffmpegLocal } else { $ffmpegBin = "ffmpeg" }
+
 # ── Определение платформы по URL ──────────────────────────────────────────
 function Get-Platform {
     param([string]$Url)
@@ -121,6 +127,111 @@ $currentVersion = ""
 
 # ── Глобальная очередь URL ────────────────────────────────────────────────
 $global:urlQueue = [System.Collections.Generic.List[hashtable]]::new()
+
+# ── Windows argv-квотирование (CommandLineToArgvW) ────────────────────────
+# Единый квотер для всех ProcessStartInfo.Arguments: yt-dlp и vot-cli-live.
+# UseShellExecute=$false → строку Arguments разбирает CreateProcess/CommandLineToArgvW
+# (не cmd.exe), поэтому &, <, >, ^, |, % — литералы; кавычить нужно только при пробеле/табе/".
+# Экранирование бэкслешей перед " по алгоритму MS ("Everyone quotes… the wrong way").
+function Quote-WinArg {
+    param([string]$Arg)
+    if ($Arg -eq "") { return '""' }
+    if ($Arg -notmatch '[\s"]') { return $Arg }
+    $sb = [System.Text.StringBuilder]::new()
+    [void]$sb.Append('"')
+    $bs = 0
+    foreach ($ch in $Arg.ToCharArray()) {
+        if ($ch -eq '\') {
+            $bs++
+        } elseif ($ch -eq '"') {
+            [void]$sb.Append('\' * ($bs * 2 + 1)); [void]$sb.Append('"'); $bs = 0
+        } else {
+            if ($bs -gt 0) { [void]$sb.Append('\' * $bs); $bs = 0 }
+            [void]$sb.Append($ch)
+        }
+    }
+    if ($bs -gt 0) { [void]$sb.Append('\' * ($bs * 2)) }
+    [void]$sb.Append('"')
+    return $sb.ToString()
+}
+# Собирает строку Arguments из массива, квотируя каждый элемент.
+function Join-WinArgs {
+    param([string[]]$ArgList)
+    return (($ArgList | ForEach-Object { Quote-WinArg $_ }) -join ' ')
+}
+
+# ── Таблицы форматов (script scope: читаются из Add_Click и из тестов) ─────
+# Значения — сырые format-строки yt-dlp БЕЗ ручных кавычек: пробелов в них нет,
+# поэтому Quote-WinArg их не квотирует, а argv-токен остаётся цельным.
+$formatPresets = @{
+    "avc1_best" = @(
+        "bestaudio[ext!=webm]/bestaudio",
+        "bestaudio[ext!=webm]+bestvideo[height<=360][vcodec^=avc1]/bestaudio+bestvideo[height<=360]",
+        "bestaudio[ext!=webm]+bestvideo[height<=480][vcodec^=avc1]/bestaudio+bestvideo[height<=480]",
+        "bestaudio[ext!=webm]+bestvideo[height<=720][vcodec^=avc1]/bestaudio+bestvideo[height<=720]",
+        "bestaudio[ext!=webm]+bestvideo[height<=1080][vcodec^=avc1]/bestaudio+bestvideo[height<=1080]",
+        "bestaudio[ext!=webm]+bestvideo[height<=1440][vcodec^=avc1]/bestaudio+bestvideo[height<=1440]",
+        "bestaudio[ext!=webm]+bestvideo[height<=2160][vcodec^=avc1]/bestaudio+bestvideo[height<=2160]"
+    )
+    "avc1_https" = @(
+        "140", "140+134", "140+135/134", "140+136/135/134",
+        "140+137/136/135/134",
+        "140+264/bestvideo[height<=1440][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=1440]",
+        "140+266/bestvideo[height<=2160][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=2160]"
+    )
+    "avc1_m3u8" = @(
+        "234", "234+230", "234+231/230", "234+232/231/230",
+        "270+234/bestvideo[protocol*=m3u8][height<=1080]+bestaudio[protocol*=m3u8]/best[height<=1080]",
+        "bestvideo[protocol*=m3u8][height<=1440]+bestaudio[protocol*=m3u8]/best[height<=1440]",
+        "bestvideo[protocol*=m3u8][height<=2160]+bestaudio[protocol*=m3u8]/best[height<=2160]"
+    )
+    "avc1_https_60fps" = @(
+        "140",
+        "140+134/best[height<=360]",
+        "140+135/best[height<=480]",
+        "140+298/best[height<=720]",
+        "140+299/298/best[height<=1080]",
+        "bestvideo[height<=1440][fps>=50]+bestaudio[ext=m4a]/140+299/best[height<=1440]",
+        "bestvideo[height<=2160][fps>=50]+bestaudio[ext=m4a]/140+299/best[height<=2160]"
+    )
+    "avc1_m3u8_60fps" = @(
+        "234",
+        "234+309/bestvideo[height<=360][fps>=50]+bestaudio/best[height<=360]",
+        "234+310/309/bestvideo[height<=480][fps>=50]+bestaudio/best[height<=480]",
+        "234+311/310/309/bestvideo[height<=720][fps>=50]+bestaudio/best[height<=720]",
+        "234+312/311/310/309/bestvideo[height<=1080][fps>=50]+bestaudio/best[height<=1080]",
+        "234+313/312/311/310/309/bestvideo[height<=1440][fps>=50]+bestaudio/best[height<=1440]",
+        "234+314/313/312/311/310/309/bestvideo[height<=2160][fps>=50]+bestaudio/best[height<=2160]"
+    )
+    "avc1_https_60fps_hdr" = @(
+        "234",
+        "234+696/bestvideo[height<=360][fps>=50]+bestaudio/best[height<=360]",
+        "234+697/696/bestvideo[height<=480][fps>=50]+bestaudio/best[height<=480]",
+        "234+698/697/696/bestvideo[height<=720][fps>=50]+bestaudio/best[height<=720]",
+        "234+699/698/697/696/bestvideo[height<=1080][fps>=50]+bestaudio/best[height<=1080]",
+        "234+700/699/698/697/696/bestvideo[height<=1440][fps>=50]+bestaudio/best[height<=1440]",
+        "234+701/700/699/698/697/696/bestvideo[height<=2160][fps>=50]+bestaudio/best[height<=2160]"
+    )
+    "old_combo" = @(
+        "140", "18", "59/22/18", "22/18",
+        "37/22/18", "38/37/22/18", "38/37/22/18"
+    )
+}
+# auto для не-YouTube: простой best[height<=N] (один поток).
+$simpleBest = @(
+    "bestaudio/best",
+    "best[height<=360]/best",
+    "best[height<=480]/best",
+    "best[height<=720]/best",
+    "best[height<=1080]/best",
+    "best[height<=1440]/best",
+    "best[height<=2160]/best"
+)
+
+# Тестовый хук: при дот-сорсинге с $env:YTDLP_TEST=1 выходим до построения GUI —
+# тесты проверяют реальные Read-Config/Get-Platform/$qualityMap/$formatPresets/Quote-WinArg,
+# а не устаревшие inline-копии. В обычном запуске (EXE) переменная не задана → GUI строится.
+if ($env:YTDLP_TEST -eq '1') { return }
 
 # ── Создание формы ────────────────────────────────────────────────────────
 $form = [System.Windows.Forms.Form]::new()
@@ -660,8 +771,9 @@ $comboCookies.Add_SelectedIndexChanged({
 })
 
 # Проверка наличия ffmpeg (нужен для мержа AI-перевода). Зеркалит runtime-проверку
-# в блоке перевода ниже — ищем ffmpeg в PATH через Get-Command.
+# в блоке перевода ниже — сначала локальный ffmpeg.exe рядом со скриптом, потом PATH.
 function Test-FfmpegAvailable {
+    if (Test-Path $ffmpegLocal) { return $true }
     return [bool](Get-Command "ffmpeg" -ErrorAction SilentlyContinue)
 }
 
@@ -863,61 +975,8 @@ $btnStart.Add_Click({
     $progressBar.Value = 0
     $lblStatus.Text    = "Загрузка..."
 
-    # Таблица форматов
-    $formatPresets = @{
-        "avc1_best" = @(
-            "bestaudio[ext!=webm]/bestaudio",
-            "`"bestaudio[ext!=webm]+bestvideo[height<=360][vcodec^=avc1]/bestaudio+bestvideo[height<=360]`"",
-            "`"bestaudio[ext!=webm]+bestvideo[height<=480][vcodec^=avc1]/bestaudio+bestvideo[height<=480]`"",
-            "`"bestaudio[ext!=webm]+bestvideo[height<=720][vcodec^=avc1]/bestaudio+bestvideo[height<=720]`"",
-            "`"bestaudio[ext!=webm]+bestvideo[height<=1080][vcodec^=avc1]/bestaudio+bestvideo[height<=1080]`"",
-            "`"bestaudio[ext!=webm]+bestvideo[height<=1440][vcodec^=avc1]/bestaudio+bestvideo[height<=1440]`"",
-            "`"bestaudio[ext!=webm]+bestvideo[height<=2160][vcodec^=avc1]/bestaudio+bestvideo[height<=2160]`""
-        )
-        "avc1_https" = @(
-            "140", "140+134", "140+135/134", "140+136/135/134",
-            "140+137/136/135/134",
-            "`"140+264/bestvideo[height<=1440][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=1440]`"",
-            "`"140+266/bestvideo[height<=2160][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=2160]`""
-        )
-        "avc1_m3u8" = @(
-            "234", "234+230", "234+231/230", "234+232/231/230",
-            "`"270+234/bestvideo[protocol*=m3u8][height<=1080]+bestaudio[protocol*=m3u8]/best[height<=1080]`"",
-            "`"bestvideo[protocol*=m3u8][height<=1440]+bestaudio[protocol*=m3u8]/best[height<=1440]`"",
-            "`"bestvideo[protocol*=m3u8][height<=2160]+bestaudio[protocol*=m3u8]/best[height<=2160]`""
-        )
-        "avc1_https_60fps" = @(
-            "140",
-            "`"140+134/best[height<=360]`"",
-            "`"140+135/best[height<=480]`"",
-            "`"140+298/best[height<=720]`"",
-            "`"140+299/298/best[height<=1080]`"",
-            "`"bestvideo[height<=1440][fps>=50]+bestaudio[ext=m4a]/140+299/best[height<=1440]`"",
-            "`"bestvideo[height<=2160][fps>=50]+bestaudio[ext=m4a]/140+299/best[height<=2160]`""
-        )
-        "avc1_m3u8_60fps" = @(
-            "234",
-            "`"234+309/bestvideo[height<=360][fps>=50]+bestaudio/best[height<=360]`"",
-            "`"234+310/309/bestvideo[height<=480][fps>=50]+bestaudio/best[height<=480]`"",
-            "`"234+311/310/309/bestvideo[height<=720][fps>=50]+bestaudio/best[height<=720]`"",
-            "`"234+312/311/310/309/bestvideo[height<=1080][fps>=50]+bestaudio/best[height<=1080]`"",
-            "`"234+313/312/311/310/309/bestvideo[height<=1440][fps>=50]+bestaudio/best[height<=1440]`"",
-            "`"234+314/313/312/311/310/309/bestvideo[height<=2160][fps>=50]+bestaudio/best[height<=2160]`""
-        )
-        "avc1_https_60fps_hdr" = @(
-            "234",
-            "`"234+696/bestvideo[height<=360][fps>=50]+bestaudio/best[height<=360]`"",
-            "`"234+697/696/bestvideo[height<=480][fps>=50]+bestaudio/best[height<=480]`"",
-            "`"234+698/697/696/bestvideo[height<=720][fps>=50]+bestaudio/best[height<=720]`"",
-            "`"234+699/698/697/696/bestvideo[height<=1080][fps>=50]+bestaudio/best[height<=1080]`"",
-            "`"234+700/699/698/697/696/bestvideo[height<=1440][fps>=50]+bestaudio/best[height<=1440]`"",
-            "`"234+701/700/699/698/697/696/bestvideo[height<=2160][fps>=50]+bestaudio/best[height<=2160]`""
-        )
-        "old_combo" = @(
-            "140", "18", "59/22/18", "22/18",
-            "37/22/18", "38/37/22/18", "38/37/22/18"
-        )
-    }
+    # Таблицы форматов ($formatPresets/$simpleBest) определены в script scope выше —
+    # один источник истины для GUI и для тестов (Quote-WinArg квотирует при отправке).
 
     # Читаем очередь динамически — новые URL добавленные во время загрузки тоже будут обработаны
     $successCount  = 0
@@ -950,12 +1009,13 @@ $btnStart.Add_Click({
             # --no-mtime при переводе: выбор свежескачанного файла опирается на mtime.
             if ($chkTranslate.Checked) { $command += "--no-mtime" }
             # Архив загруженного (паритет с .sh): не перекачивать уже скачанное.
-            if ($cfg_useArchive -eq "true") { $command += "--download-archive", "`"$(Join-Path $folder $cfg_archiveFile)`"" }
+            # Значения — сырые (без ручных кавычек): Quote-WinArg квотирует при отправке.
+            if ($cfg_useArchive -eq "true") { $command += "--download-archive", (Join-Path $folder $cfg_archiveFile) }
             $denoExe = Join-Path $scriptDir "deno.exe"
-            if (Test-Path $denoExe) { $command += "--js-runtimes", "`"deno:$denoExe`"" }
+            if (Test-Path $denoExe) { $command += "--js-runtimes", "deno:$denoExe" }
             $tpl = if ($currentUrl -match '[?&]list=') { $cfg_plTemplate } else { $cfg_template }
             $tpl = $tpl -replace '/', '\'
-            $command += "-o", "`"$folder\$tpl`""
+            $command += "-o", "$folder\$tpl"
 
             # Прокси: используем переменные окружения вместо --proxy,
             # чтобы пароль не попадал в Get-Process | CommandLine.
@@ -982,7 +1042,7 @@ $btnStart.Add_Click({
                         $cookiePath = $textBoxCookieFile.Text
                         if (-not [System.IO.Path]::IsPathRooted($cookiePath)) { $cookiePath = Join-Path $scriptDir $cookiePath }
                         if (Test-Path $cookiePath) {
-                            $command += "--cookies", "`"$cookiePath`""
+                            $command += "--cookies", $cookiePath
                         } else {
                             Append-Output "WARN: cookie-файл не найден: $cookiePath" ([System.Drawing.Color]::Yellow)
                         }
@@ -999,15 +1059,7 @@ $btnStart.Add_Click({
                 if ($platform -eq "YouTube") {
                     $effectiveFmt = "avc1_best"
                 } else {
-                    $simpleBest = @(
-                        "bestaudio/best",
-                        "`"best[height<=360]/best`"",
-                        "`"best[height<=480]/best`"",
-                        "`"best[height<=720]/best`"",
-                        "`"best[height<=1080]/best`"",
-                        "`"best[height<=1440]/best`"",
-                        "`"best[height<=2160]/best`""
-                    )
+                    # $simpleBest — в script scope выше (один источник истины).
                     if ($qi -ge 0 -and $qi -le 6) {
                         $command += "-f", $simpleBest[$qi]
                     }
@@ -1070,15 +1122,17 @@ $btnStart.Add_Click({
                     $v = $textTrimEnd.Text.Trim()
                     if ($v -match '^[0-9:.]+$') { $tTo = $v } else { Append-Output "Некорректная метка конца фрагмента: '$v' (игнорирую)" ([System.Drawing.Color]::Firebrick) }
                 }
-                $command += "--download-sections", "`"*${tFrom}-${tTo}`""
+                $command += "--download-sections", "*${tFrom}-${tTo}"
                 if ($chkForceKf.Checked) { $command += "--force-keyframes-at-cuts" }
             }
 
-            # URL квотируем — может содержать & ? = и пр.
-            $command += "`"$currentUrl`""
+            # URL — сырой; Quote-WinArg сам решит, нужны ли кавычки (& ? = и пр. — литералы).
+            $command += $currentUrl
 
-            $textCommand.Text = "$dlp $($command -join ' ')"
-            Append-Output "Команда: $dlp $($command -join ' ')" ([System.Drawing.Color]::DimGray)
+            # Строку для показа и для Arguments собираем ЕДИНЫМ квотером (Join-WinArgs).
+            $cmdLine = Join-WinArgs $command
+            $textCommand.Text = "$dlp $cmdLine"
+            Append-Output "Команда: $dlp $cmdLine" ([System.Drawing.Color]::DimGray)
 
             # Метка времени перед загрузкой — для AI-перевода выбираем mp4, появившийся
             # в ходе ИМЕННО этой загрузки, а не самый свежий во всей папке (очередь,
@@ -1088,7 +1142,7 @@ $btnStart.Add_Click({
             # Запуск процесса
             $psi = New-Object System.Diagnostics.ProcessStartInfo
             $psi.FileName               = $dlp
-            $psi.Arguments              = $command -join " "
+            $psi.Arguments              = $cmdLine
             $psi.RedirectStandardOutput = $true
             $psi.RedirectStandardError  = $true
             $psi.UseShellExecute        = $false
@@ -1198,8 +1252,8 @@ $btnStart.Add_Click({
                         Append-Output "vot-cli-live не найден. Положите vot-cli-live.exe рядом со скриптом или: npm install -g vot-cli-live" ([System.Drawing.Color]::Red)
                         $hasDeps = $false
                     }
-                    if (-not (Get-Command "ffmpeg" -ErrorAction SilentlyContinue)) {
-                        Append-Output "ffmpeg не найден. Установите: https://ffmpeg.org" ([System.Drawing.Color]::Red)
+                    if (-not (Test-FfmpegAvailable)) {
+                        Append-Output "ffmpeg не найден. Положите ffmpeg.exe рядом со скриптом или установите: https://ffmpeg.org" ([System.Drawing.Color]::Red)
                         $hasDeps = $false
                     }
 
@@ -1227,12 +1281,10 @@ $btnStart.Add_Click({
                             $votPsi.EnvironmentVariables["HTTPS_PROXY"] = $proxyEnvVal
                             $votPsi.EnvironmentVariables["ALL_PROXY"]   = $proxyEnvVal
                         }
-                        # Quoting: vot-cli-live принимает --key=value, поэтому простое join работает,
-                        # но URL может содержать пробелы/спецсимволы — экранируем как в основном вызове.
+                        # Quoting: тот же единый квотер, что и для yt-dlp (--output/--reslang
+                        # с пробелами в пути, URL со спецсимволами) — CommandLineToArgvW-корректно.
                         $votArgs = @("--output=$tempDir", "--voice-style=$transVoice", "--reslang=$transLang", $currentUrl)
-                        $votPsi.Arguments = ($votArgs | ForEach-Object {
-                            if ($_ -match '[ "\\]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
-                        }) -join " "
+                        $votPsi.Arguments = Join-WinArgs $votArgs
                         $votProc = [System.Diagnostics.Process]::Start($votPsi)
                         # Сливаем stdout/stderr асинхронно: последовательный ReadToEnd по обоим
                         # пайпам приводит к deadlock, если дочерний процесс заполнит stderr-буфер,
@@ -1275,7 +1327,7 @@ $btnStart.Add_Click({
                                                      "-map", "0:v", "-map", "[aout]",
                                                      "-c:v", "copy", "-c:a", $mergeACodec, "-b:a", "192k", $outputFile) }
                                 }
-                                & ffmpeg @ffArgs 2>&1 | Out-Null
+                                & $ffmpegBin @ffArgs 2>&1 | Out-Null
                                 if ($LASTEXITCODE -eq 0 -and (Test-Path $outputFile)) {
                                     Move-Item -Path $outputFile -Destination $latestVideo.FullName -Force
                                     Append-Output "Перевод добавлен!" ([System.Drawing.Color]::LightGreen)

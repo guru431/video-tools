@@ -1,6 +1,6 @@
 # Video Tools
 
-ffmpeg/yt-dlp скрипты для загрузки и конвертации видео. Каждый инструмент реализован на 3 платформах (.sh, .cmd, .ps1), включая GUI (WinForms) и сборку PS1 в EXE через ps2exe. 566 автоматических тестов на чистом Bash.
+ffmpeg/yt-dlp скрипты для загрузки и конвертации видео. Каждый инструмент реализован на 3 платформах (.sh, .cmd, .ps1), включая GUI (WinForms) и сборку PS1 в EXE через ps2exe. 917 автоматических тестов на чистом Bash (на платформах без CMD/PowerShell часть suite'ов пропускается).
 
 ---
 
@@ -30,12 +30,13 @@ video/
 │   ├── vot-cli-live.exe                 # AI-перевод аудио через Яндекс (опционально)
 │   └── _VideoDownloader_v15.exe         # Скомпилированный GUI
 │
-├── tests/                               # Автоматические тесты (566 шт.)
+├── tests/                               # Автоматические тесты (917 шт.)
 │   ├── run_tests.sh                     # Точка входа
 │   ├── lib/framework.sh                 # Assert-функции, форматированный вывод
 │   ├── mocks/{ffmpeg,ffprobe,yt-dlp}    # Mock-бинарники
-│   ├── ffmpeg/test_01..14*.sh           # 14 тест-файлов (320 тестов)
-│   └── yt-dlp/test_01..07*.sh           # 7 тест-файлов (246 тестов)
+│   ├── ffmpeg/test_01..14*.sh           # 14 тест-файлов (332 теста)
+│   ├── yt-dlp/test_01..07*.sh           # 7 тест-файлов (265 тестов)
+│   └── common/test_*.sh                 # 6 файлов (320 тестов): кодировки, паритет, guardrail'ы
 │
 └── README.md
 ```
@@ -110,6 +111,8 @@ video/
 
 Бинарники (ffmpeg, yt-dlp) автоматически определяются рядом со скриптом, затем в PATH. Относительные пути в config.ini разрешаются от директории скрипта.
 
+**Исключение (по дизайну):** `yt-dlp/Downloading_from_YouTube_v15.cmd` — интерактивный CLI (спрашивает параметры в консоли) и **не читает `config.ini`**. Это санкционированное отклонение от config-driven паттерна: config-driven режим для yt-dlp даёт SH (`.sh`) и GUI (`.ps1`). Мета-тест `tests/common/test_config_keys.sh` учитывает это исключение (для yt-dlp ключ обязан читаться в `.sh` ИЛИ `.ps1`, CMD не требуется).
+
 ---
 
 ## Запуск
@@ -134,12 +137,13 @@ yt-dlp/_VideoDownloader_v15.exe
 
 ## Тестирование
 
-566 тестов на чистом Bash, без внешних зависимостей. Mock-бинарники для ffmpeg, ffprobe, yt-dlp.
+917 тестов на чистом Bash, без внешних зависимостей. Mock-бинарники для ffmpeg, ffprobe, yt-dlp. На платформах без CMD/PowerShell соответствующие suite'ы пропускаются (в CI это ошибка на Windows-линии, ожидаемо на Linux).
 
 ```bash
-bash tests/run_tests.sh           # все тесты (566)
-bash tests/run_tests.sh ffmpeg    # ffmpeg (320 тестов, 14 файлов)
-bash tests/run_tests.sh yt-dlp    # yt-dlp (246 тестов, 7 файлов)
+bash tests/run_tests.sh           # все тесты (917)
+bash tests/run_tests.sh ffmpeg    # ffmpeg (332 теста, 14 файлов)
+bash tests/run_tests.sh yt-dlp    # yt-dlp (265 тестов, 7 файлов)
+bash tests/run_tests.sh common    # кросс-платформенные инварианты (320 тестов, 6 файлов)
 ```
 
 ### Тест-модули FFmpeg (14 файлов)
@@ -173,9 +177,35 @@ bash tests/run_tests.sh yt-dlp    # yt-dlp (246 тестов, 7 файлов)
 | `test_06_ps1` | PS1-скрипт |
 | `test_07_new_features` | audio_format / sponsorblock / субтитры с видео |
 
+### Тест-модули Common (6 файлов)
+
+| Файл | Что тестирует |
+|------|---------------|
+| `test_encoding` | Кодировки: `.ps1`=BOM, `.sh`=без BOM, entry `.cmd`=chcp |
+| `test_config_keys` | Паритет ключей config.ini по платформам |
+| `test_config_contract` | Контракт `config-key-contract.yaml` ↔ реальность (CI-safe) |
+| `test_guardrails` | Статические guardrail'ы против регресса опасных паттернов |
+| `test_path_matrix` | Adversarial имена/пути: Quote-WinArg + CMD `!`-детект |
+| `test_ytdlp_preset_parity` | Паритет таблиц форматов yt-dlp SH ↔ PS1 |
+
 Подробное описание: [tests/TESTING.md](tests/TESTING.md)
 
 ---
+
+## Публичный репозиторий: защита от утечек
+
+Репозиторий публичный. Защита от коммита секретов/персональных данных — двухуровневая:
+
+1. **Локальный pre-commit hook** [`.githooks/pre-commit`](.githooks/pre-commit): сканер форматов ключей/токенов, строк из локального denylist [`.sanitize-patterns`](.sanitize-patterns.example) (gitignored) и printable-строк внутри бинарных артефактов (EXE). После клона активировать одной командой:
+
+   ```bash
+   bash scripts/bootstrap-public-repo.sh     # Linux/macOS/Git Bash
+   scripts\bootstrap-public-repo.cmd         # Windows
+   ```
+
+   Скрипт идемпотентен: включает `git config core.hooksPath .githooks` и заводит `.sanitize-patterns` из `.sanitize-patterns.example`.
+
+2. **CI** [`.github/workflows/ci.yml`](.github/workflows/ci.yml): работает для web-commit, PR и форков, где локальный hook не запускается. Линии: Linux (Bash + инварианты), secret-scan всей истории (gitleaks), Windows (полный SH/CMD/PS1 паритет с `STRICT_SKIP=1` — пропуск платформенного suite'а = ошибка; сборка EXE; сверка `.sha256`).
 
 ## Сборка EXE (опционально)
 

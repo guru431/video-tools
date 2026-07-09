@@ -1,0 +1,34 @@
+# config-key-contract.yaml — машиночитаемый контракт покрытия ключей config.ini платформами.
+# Раньше intentional gaps (yt-dlp CMD, SH-only batch) были видны только при чтении grep-логики
+# теста. Здесь они явные. Проверяется tests/common/test_config_contract.sh:
+#   - каждый ключ из ffmpeg/config.ini и yt-dlp/config.ini.example покрыт правилом или исключением;
+#   - каждый ключ из списков sh_only реально читается в .sh;
+#   - yt-dlp CMD не парсит config.ini (санкционированное исключение).
+#
+# Формат намеренно простой (grep-парсится bash-ом): ключи-исключения перечислены в
+# YAML-списках "- key" под своими секциями.
+
+ffmpeg:
+  # Полный трёхплатформенный паритет: каждый ключ читается в run.sh И run.cmd И run.ps1.
+  rule: "read in run.sh AND run.cmd AND run.ps1"
+  platforms: [sh, cmd, ps1]
+  exceptions:
+    # Параллелизм файлов — только Bash (xargs -P); в .cmd/.ps1 игнорируется, но ключ
+    # там всё равно присутствует (читается/логируется), поэтому в общем правиле остаётся.
+    sh_only_behavior:
+      - parallel_files
+
+yt-dlp:
+  # Нет мёртвых ключей: каждый читается хотя бы в .sh ИЛИ .ps1.
+  rule: "read in .sh OR .ps1 (no dead keys)"
+  platforms: [sh, ps1]
+  exceptions:
+    # CMD (Downloading_from_YouTube_v15.cmd) — интерактивный CLI, config.ini НЕ читает.
+    cmd: "interactive-only CLI; does not read config.ini (sanctioned)"
+    # Batch-режим (channels.txt) — только .sh; эти ключи в .ps1/.cmd не читаются.
+    sh_only:
+      - date_range
+      - sleep_requests
+      - sleep_interval
+      - max_sleep_interval
+      - sleep_subtitles

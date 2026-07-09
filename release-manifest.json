@@ -1,0 +1,21 @@
+﻿{
+    "build_version":  "15.0.0.0",
+    "source_commit":  "981072d625c82723cacb95ce1ceeebf4509c8957",
+    "source_tree_dirty":  true,
+    "ps2exe":  {
+                   "commit":  "d32d5ce21c458696e860a7533943b1466d925be9",
+                   "sha256":  "FAEA495151AF69D2AE78783D0071186F98DC568D7B7478F639DA0E74ECF01763"
+               },
+    "artifacts":  [
+                      {
+                          "path":  "ffmpeg/_VideoConverter_v15.exe",
+                          "source":  "ffmpeg/FFmpeg_Converter_run_win_v15.ps1",
+                          "sha256":  "0A628BE5730A49EDE965F4966DBE0762DF17FC8F62B9A8D3954DFA95EE07A84C"
+                      },
+                      {
+                          "path":  "yt-dlp/_VideoDownloader_v15.exe",
+                          "source":  "yt-dlp/Downloading_from_YouTube_v15.ps1",
+                          "sha256":  "E6338BF1500368772A937E7D268C11153B68FB7B982B3FD556CE681E12750313"
+                      }
+                  ]
+}

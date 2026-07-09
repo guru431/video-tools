@@ -40,7 +40,8 @@ fi
 sp="$repo_root/.sanitize-patterns"
 if [ -f "$sp" ]; then
   pat=$(mktemp 2>/dev/null || echo "$repo_root/.sanitize-patterns.tmp")
-  grep -vE '^[[:space:]]*$' "$sp" > "$pat" 2>/dev/null || true
+  # Отбрасываем пустые строки И комментарии (#) — формат из .sanitize-patterns.example.
+  grep -vE '^[[:space:]]*($|#)' "$sp" > "$pat" 2>/dev/null || true
   if [ -s "$pat" ]; then
     # grep -F (fixed-strings): литералы denylist'а не трактуются как regex —
     # иначе метасимвол в значении (или битый ERE) ронял grep -> rc!=0 -> `|| true`
@@ -59,6 +60,41 @@ if [ -f "$sp" ]; then
     fi
   fi
   rm -f "$pat"
+fi
+
+# 4) Binary blobs (tracked EXE etc.): text diff (blocks 2-3) can't see inside them.
+#    Extract printable strings from the STAGED blob and re-run the secret-format +
+#    personal-denylist checks. Best-effort: unreadable blobs are skipped, not blocked.
+bins=$(git diff --cached --numstat --diff-filter=AM | awk -F'\t' '$1=="-" && $2=="-" { print $3 }')
+if [ -n "$bins" ]; then
+  bin_report=$(mktemp 2>/dev/null || echo "$repo_root/.pc_binscan.tmp")
+  printf '%s\n' "$bins" | while IFS= read -r bf; do
+    [ -n "$bf" ] || continue
+    strs=$(git show ":$bf" 2>/dev/null | grep -aoE '[[:print:]]{6,}' || true)
+    [ -n "$strs" ] || continue
+    gh=$(printf '%s\n' "$strs" | grep -nE -e "$generic" | grep -vE '(^|[^A-Za-z0-9])(username:password|user:pass)@' || true)
+    if [ -n "$gh" ]; then
+      { echo "  [$bf] secret/token format:"; printf '%s\n' "$gh" | head -5 | sed 's/^/    /'; } >> "$bin_report"
+    fi
+    if [ -f "$sp" ]; then
+      dl=$(grep -vE '^[[:space:]]*($|#)' "$sp" 2>/dev/null || true)
+      if [ -n "$dl" ]; then
+        dlf=$(mktemp 2>/dev/null || echo "$repo_root/.pc_dl.tmp")
+        printf '%s\n' "$dl" | tr 'A-Z' 'a-z' > "$dlf"
+        ph=$(printf '%s\n' "$strs" | tr 'A-Z' 'a-z' | grep -nFf "$dlf" || true)
+        rm -f "$dlf"
+        if [ -n "$ph" ]; then
+          { echo "  [$bf] personal denylist match:"; printf '%s\n' "$ph" | head -5 | sed 's/^/    /'; } >> "$bin_report"
+        fi
+      fi
+    fi
+  done
+  if [ -s "$bin_report" ]; then
+    echo "BLOCKED: sensitive strings inside staged binary artifact(s):"
+    cat "$bin_report"
+    fail=1
+  fi
+  rm -f "$bin_report"
 fi
 
 if [ "$fail" -ne 0 ]; then

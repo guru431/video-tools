@@ -1,0 +1,70 @@
+name: CI
+
+# Публичный репозиторий: тесты + secret-scan + сборка/провенанс EXE.
+# Locale pre-commit hook защищает только локальные коммиты — эти проверки работают
+# для web-commit, PR и новых форков.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Linux: Bash + common инварианты. CMD/PS1 suite'ы здесь ожидаемо пропускаются. ──
+  linux-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tests (SH + common; CMD/PS1 skip expected on Linux)
+        run: bash tests/run_tests.sh
+
+  # ── Secret scan всей истории (обход неактивного hook / web-commit / чужого автора). ──
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+
+  # ── Windows: полный SH/CMD/PS1 паритет (skip = ошибка), сборка EXE, целостность sidecar. ──
+  windows-tests-build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run full suite (skip of a platform suite = failure)
+        shell: bash
+        env:
+          STRICT_SKIP: "1"
+        run: bash tests/run_tests.sh
+
+      # Целостность закоммиченных артефактов: EXE ↔ его .sha256 sidecar.
+      # (Проверяем закоммиченные файлы, НЕ свежую сборку: ps2exe не байт-воспроизводим.)
+      - name: Verify committed EXE checksums
+        shell: bash
+        run: |
+          rc=0
+          for exe in ffmpeg/_VideoConverter_v15.exe yt-dlp/_VideoDownloader_v15.exe; do
+            sc="$exe.sha256"
+            if [ ! -f "$exe" ] || [ ! -f "$sc" ]; then echo "MISSING: $exe or $sc"; rc=1; continue; fi
+            want=$(awk '{print tolower($1)}' "$sc")
+            got=$(sha256sum "$exe" | awk '{print tolower($1)}')
+            if [ "$want" != "$got" ]; then echo "SHA MISMATCH: $exe (want $want got $got)"; rc=1; else echo "OK: $exe"; fi
+          done
+          exit $rc
+
+      # Smoke-сборка: обе PS1-GUI собираются в EXE без ошибок (в отдельную папку,
+      # чтобы не трогать закоммиченные артефакты).
+      - name: Build EXEs (smoke)
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File ffmpeg/build_exe.ps1
+          powershell -ExecutionPolicy Bypass -File yt-dlp/build_exe.ps1

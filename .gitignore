@@ -9,6 +9,10 @@ yt-dlp/vot-cli-live.exe
 # Template committed as yt-dlp/config.ini.example
 yt-dlp/config.ini
 
+# Local channel list — may reveal real channels/interests/work sources.
+# Template committed as yt-dlp/channels.txt.example
+yt-dlp/channels.txt
+
 # ps2exe build artifacts
 _build_tmp.ps1
 ps2exe_tool.ps1

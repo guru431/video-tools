@@ -23,6 +23,10 @@ TOTAL_PASS=0
 TOTAL_FAIL=0
 TOTAL_SKIP=0
 SUITE_RESULTS=()
+# Suite, пропущенный ЦЕЛИКОМ (0 pass, 0 fail, >0 skip) — платформенный инструмент
+# недоступен (cmd/powershell). Именно это ловит STRICT_SKIP (см. конец файла).
+SUITES_FULLY_SKIPPED=0
+FULLY_SKIPPED_NAMES=()
 
 # ── Запуск одного тест-файла в субоболочке ───────────────────────────────────
 run_suite() {
@@ -60,6 +64,12 @@ run_suite() {
     TOTAL_PASS=$((TOTAL_PASS + pass))
     TOTAL_FAIL=$((TOTAL_FAIL + fail))
     TOTAL_SKIP=$((TOTAL_SKIP + skip))
+
+    # Полностью пропущенный suite (0/0/>0) = платформенный инструмент недоступен.
+    if [ "$skip" -gt 0 ] && [ "$pass" -eq 0 ] && [ "$fail" -eq 0 ]; then
+        SUITES_FULLY_SKIPPED=$((SUITES_FULLY_SKIPPED + 1))
+        FULLY_SKIPPED_NAMES+=("$suite_name")
+    fi
 
     if [ "$fail" -gt 0 ]; then
         SUITE_RESULTS+=("${RED}✗${NC} $suite_name ($fail failures)")
@@ -181,11 +191,12 @@ echo -e "${BOLD}${CYAN}╠══════════════════
 echo -e "${BOLD}${CYAN}║${NC}  Всего: $TOTAL  |  ${GREEN}✓ $TOTAL_PASS пройдено${NC}  |  ${RED}✗ $TOTAL_FAIL провалено${NC}  |  ${YELLOW}○ $TOTAL_SKIP пропущено${NC}"
 echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════════════╝${NC}"
 
-# STRICT_SKIP=1 (используется в Windows CI): пропуск платформенного suite'а = ошибка.
-# Для проекта с обязательным SH/CMD/PS1 паритетом зелёный прогон не должен достигаться
-# за счёт пропуска CMD/PowerShell (на Linux CI переменную не выставляют — skip там ожидаем).
-if [ "${STRICT_SKIP:-0}" = "1" ] && [ "$TOTAL_SKIP" -gt 0 ]; then
-    echo -e "\n${RED}${BOLD}STRICT_SKIP: $TOTAL_SKIP пропущено — ошибка (нужен полный SH/CMD/PS1 паритет)${NC}"
+# STRICT_SKIP=1 (Windows CI): ошибка, только если suite пропущен ЦЕЛИКОМ (cmd/powershell
+# недоступен → теряется SH/CMD/PS1 паритет). Частичные окружения-скипы внутри запущенного
+# suite'а (напр. интеграционный тест без реального ffmpeg) — допустимы. На Linux переменную
+# не выставляют: там CMD/PS1 suite'ы ожидаемо пропускаются целиком.
+if [ "${STRICT_SKIP:-0}" = "1" ] && [ "$SUITES_FULLY_SKIPPED" -gt 0 ]; then
+    echo -e "\n${RED}${BOLD}STRICT_SKIP: $SUITES_FULLY_SKIPPED suite(ов) пропущено целиком (нет cmd/powershell): ${FULLY_SKIPPED_NAMES[*]}${NC}"
     exit 1
 fi
 

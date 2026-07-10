@@ -275,6 +275,30 @@ if ($set_audio_sampling_rate) { $audio_settings_args += $set_audio_sampling_rate
 
 $thread_args = @("-threads", $threads)
 
+# --- F8. Кодек субтитров для режима meta зависит от контейнера ---
+# mov_text живёт только в mp4/mov; mkv → srt, webm → webvtt. Раньше всегда ставился
+# mov_text и ронял mkv/webm-выход. Для прочих контейнеров — mov_text (best-effort).
+$sub_meta_codec = switch ($format_files_out) { "mkv" { "srt" } "webm" { "webvtt" } default { "mov_text" } }
+
+# --- F8. Предпусковая проверка совместимости контейнера и кодеков ---
+# Несовместимую пару (напр. webm + libx264/aac) отклоняем ДО пакета с понятной причиной.
+if ($audio_only -ne "yes" -and $copy_codecs -ne "yes" -and $merge_files -ne "yes" -and $create_frame -ne "yes" -and $extract_audio_copy -ne "yes") {
+	$_incompat = @()
+	if ($format_files_out -eq "webm") {
+		if ($set_video_codec -and $set_video_codec -notmatch '^(libvpx|libvpx-vp9|vp8|vp9|av1|libsvtav1|libaom-av1)') {
+			$_incompat += "  • WebM не поддерживает видеокодек '$set_video_codec' — нужен VP8/VP9/AV1 (смените [video] codec или [video] container)."
+		}
+		if ($audio_codec_value -and $audio_codec_value.ToLower() -notmatch '^(libopus|opus|libvorbis|vorbis)$') {
+			$_incompat += "  • WebM не поддерживает аудиокодек '$audio_codec_value' — нужен Opus/Vorbis (смените [audio] codec или [video] container)."
+		}
+	}
+	if ($_incompat.Count -gt 0) {
+		Write-Host "`n[ОШИБКА] Несовместимая комбинация контейнера и кодеков:`n$($_incompat -join "`n")`n"
+		if (-not $_isGui) { Read-Host "Нажмите [Enter], чтобы выйти..." }
+		exit 1
+	}
+}
+
 # --- Формат входных файлов ---
 $format_files_in_list = Get-ChildItem $folder_sources -Recurse -Include ($format_files_in -split "," | ForEach-Object { "*.$_" })
 
@@ -363,6 +387,13 @@ function Encode-File {
 			Write-GUIProgress -CurrentFile $file.Name
 			return
 		}
+		# D7. Dry-run: спецрежим тоже только печатает команду, не создаёт файл.
+		if ($dry_run -eq "yes") {
+			$_cmdStr = "$ffmpeg -hide_banner -strict -2 -i `"$full_path`" -vn -c:a copy `"$outAudio`" -y"
+			Write-Host "[DRY-RUN] $_cmdStr"
+			Write-GUIProgress -FilePercent 100 -CurrentFile $file.Name -Command $_cmdStr
+			return
+		}
 		Log-Msg "INFO" "Извлечение аудио: $($file.Name)"
 		$_cmdStr = "$ffmpeg -hide_banner -strict -2 -i `"$full_path`" -vn -c:a copy `"$outAudio`" -y"
 		Write-GUIProgress -FilePercent 0 -CurrentFile $file.Name -Command $_cmdStr
@@ -381,11 +412,36 @@ function Encode-File {
 	}
 
 	if ($create_frame -eq "yes") {
-		if (!(Test-Path "$folder_destination$file_path$file_name")) {
-			New-Item -ItemType Directory "$folder_destination$file_path$file_name" | Out-Null
-			Log-Msg "INFO" "Извлечение кадров: $full_path"
-			& $ffmpeg -hide_banner -strict -2 -i $full_path -r 1/1 "$folder_destination$file_path$file_name\${file_name}_%05d.png"
+		$frame_dir = "$folder_destination$file_path$file_name"
+		$frame_done = "$frame_dir\.frames_complete"
+		# Готовность каталога кадров — по маркеру завершения, а не по факту существования:
+		# прерванный прогон оставлял частичный каталог, который молча пропускался.
+		if ((Test-Path $frame_done) -and $overwrite_existing -ne "yes") {
+			$script:countSkip++
+			Write-GUIProgress -CurrentFile $file.Name
+			return
 		}
+		if ($dry_run -eq "yes") {
+			$_cmdStr = "$ffmpeg -hide_banner -strict -2 -i `"$full_path`" -r 1/1 `"$frame_dir\${file_name}_%05d.png`""
+			Write-Host "[DRY-RUN] $_cmdStr"
+			Write-GUIProgress -FilePercent 100 -CurrentFile $file.Name -Command $_cmdStr
+			return
+		}
+		# Частичный каталог с прошлого прогона удаляем, чтобы кадры не смешивались.
+		if (Test-Path $frame_dir) { Remove-Item $frame_dir -Recurse -Force -ErrorAction SilentlyContinue }
+		New-Item -ItemType Directory $frame_dir -Force | Out-Null
+		Log-Msg "INFO" "Извлечение кадров: $full_path"
+		& $ffmpeg -hide_banner -strict -2 -i $full_path -r 1/1 "$frame_dir\${file_name}_%05d.png"
+		if ($LASTEXITCODE -ne 0) {
+			Log-Msg "FAIL" "$($file.Name)"
+			Remove-Item $frame_dir -Recurse -Force -ErrorAction SilentlyContinue
+			$script:countFail++
+		} else {
+			New-Item -ItemType File $frame_done -Force | Out-Null
+			Log-Msg "OK" "Кадры: $($file.Name)"
+			$script:countOk++
+		}
+		Write-GUIProgress -FilePercent 100 -CurrentFile $file.Name
 		return
 	}
 
@@ -399,21 +455,25 @@ function Encode-File {
 	# Судим по exit code (как SH/CMD), а не по тексту stderr: ffmpeg с -v error может
 	# вывести не-фатальную диагностику для полностью декодируемого файла — тогда
 	# непустой stderr ошибочно удалял бы валидный готовый результат.
-	if (Test-Path "$out_base.$current_format_out") {
-		& $ffmpeg -v error -i "$out_base.$current_format_out" -f null - 2>&1 | Out-Null
-		if ($LASTEXITCODE -eq 0) {
+	# F7. overwrite_existing=yes → готовый файл не считаем финальным и перекодируем с
+	# новыми настройками (ffmpeg -y перезапишет). Иначе валидный файл пропускается.
+	if ($overwrite_existing -ne "yes") {
+		if (Test-Path "$out_base.$current_format_out") {
+			& $ffmpeg -v error -i "$out_base.$current_format_out" -f null - 2>&1 | Out-Null
+			if ($LASTEXITCODE -eq 0) {
+				$script:countSkip++
+				Write-GUIProgress -CurrentFile $file.Name
+				return
+			} else {
+				Log-Msg "WARN" "Удаление битого файла: $out_base.$current_format_out"
+				Remove-Item "$out_base.$current_format_out" -Force
+			}
+		}
+		if (Test-Path "$out_base (part.1).$current_format_out") {
 			$script:countSkip++
 			Write-GUIProgress -CurrentFile $file.Name
 			return
-		} else {
-			Log-Msg "WARN" "Удаление битого файла: $out_base.$current_format_out"
-			Remove-Item "$out_base.$current_format_out" -Force
 		}
-	}
-	if (Test-Path "$out_base (part.1).$current_format_out") {
-		$script:countSkip++
-		Write-GUIProgress -CurrentFile $file.Name
-		return
 	}
 
 	# E4 + J1. Один вызов ffmpeg -i для битрейта и длительности (раньше запускались
@@ -556,7 +616,7 @@ function Encode-File {
 							}
 						}
 						if ($video_subtitles_value -eq "meta") {
-							$subtitles_args = @("-i", $sub_file, "-c:s", "mov_text", "-metadata:s:s:0", "language=rus")
+							$subtitles_args = @("-i", $sub_file, "-c:s", $sub_meta_codec, "-metadata:s:s:0", "language=rus")
 							$convert_args += @("-map", "0", "-map", "1")
 						}
 						$sub_found = $true
@@ -712,19 +772,24 @@ if ($merge_files -eq "yes") {
 	} else {
 	$_mergeSorted = $format_files_in_list | Sort-Object FullName  # F10: паритет с .sh sort -z
 		$fname = $_mergeSorted[0].Name
-	if (!(Test-Path "$folder_destination\$fname")) {
+	if ($overwrite_existing -eq "yes" -or !(Test-Path "$folder_destination\$fname")) {
 		$tmpFile = [System.IO.Path]::GetTempFileName()
 		[System.IO.File]::WriteAllLines($tmpFile, ($_mergeSorted.FullName | ForEach-Object { "file '" + ($_ -replace "'", "'\''") + "'" }))
-		Log-Msg "INFO" "Объединение файлов -> $folder_destination\$fname"
-		& $ffmpeg -hide_banner -strict -2 -f concat -safe 0 -i $tmpFile -c copy -map 0 "$folder_destination\$fname"
-		if ($LASTEXITCODE -ne 0) {
-			Log-Msg "FAIL" "Объединение файлов"
-			$script:countFail++
+		if ($dry_run -eq "yes") {
+			Write-Host "[DRY-RUN] $ffmpeg -hide_banner -strict -2 -f concat -safe 0 -i `"$tmpFile`" -c copy -map 0 `"$folder_destination\$fname`""
+			Remove-Item $tmpFile -Force
 		} else {
-			Log-Msg "OK" "Объединение файлов -> $folder_destination\$fname"
-			$script:countOk++
+			Log-Msg "INFO" "Объединение файлов -> $folder_destination\$fname"
+			& $ffmpeg -hide_banner -strict -2 -f concat -safe 0 -i $tmpFile -c copy -map 0 "$folder_destination\$fname"
+			if ($LASTEXITCODE -ne 0) {
+				Log-Msg "FAIL" "Объединение файлов"
+				$script:countFail++
+			} else {
+				Log-Msg "OK" "Объединение файлов -> $folder_destination\$fname"
+				$script:countOk++
+			}
+			Remove-Item $tmpFile -Force
 		}
-		Remove-Item $tmpFile -Force
 	}
 	}
 } else {

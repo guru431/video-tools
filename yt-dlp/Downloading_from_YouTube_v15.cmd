@@ -380,7 +380,9 @@ if "%subsvid_choice%"=="2" set "subsvid_arg=--write-subs --write-auto-subs --sub
 :: ── Шаблон пути ──────────────────────────────────────────────────────────
 set "output_tpl=%%(uploader)s\%%(upload_date)s - %%(title).100U.%%(ext)s"
 set "playlist_tpl=%%(uploader)s\%%(playlist)s\%%(playlist_index)03d - %%(title).100U.%%(ext)s"
+set "is_playlist="
 echo "!url!" | findstr /R /C:"[?&]list=" >nul && (
+    set "is_playlist=1"
     set "file_tpl=%playlist_tpl%"
 ) || (
     set "file_tpl=%output_tpl%"
@@ -393,6 +395,26 @@ if defined proxy (
     set "HTTP_PROXY=!proxy!"
     set "HTTPS_PROXY=!proxy!"
     set "ALL_PROXY=!proxy!"
+)
+
+:: ── F1/F2: AI-перевод несовместим с рядом режимов — отключаем с явным сообщением ──
+:: vot переводит по URL: для плейлиста нет URL на каждое видео; для audio нет видеофайла
+:: для мержа; при обрезке/SponsorBlock remove дорожка перевода рассинхронизируется.
+if not "%translate_lang%"=="" (
+    set "_tr_block="
+    if "%quality%"=="0" set "_tr_block=не поддерживается для загрузки только аудио (качество 0)"
+    if "%quality%"=="91" set "_tr_block=неприменим к режиму «только субтитры»"
+    if "%quality%"=="92" set "_tr_block=неприменим к режиму «только субтитры»"
+    if defined is_playlist set "_tr_block=недоступен для плейлистов (vot переводит по одному URL)"
+    if not "!sections_arg!"=="" set "_tr_block=рассинхронизируется с обрезкой ролика (--download-sections)"
+    if "%sb_choice%"=="2" set "_tr_block=рассинхронизируется со SponsorBlock remove"
+    if defined _tr_block (
+        echo.
+        echo [ПРЕДУПРЕЖДЕНИЕ] AI-перевод отключён: !_tr_block!.
+        echo.
+        set "translate_lang="
+        set "translate_mode="
+    )
 )
 
 :: ── Получение названия видео ─────────────────────────────────────────────
@@ -498,14 +520,16 @@ if not "%translate_lang%"=="" (
             rem VP9/AV1 в mp4-контейнер может упасть; move ниже целит в оригинальное имя.
             for %%E in ("!video_file!") do (set "output_file=%%~dpnE_translated%%~xE" & set "a_codec=aac" & if /i "%%~xE"==".webm" set "a_codec=libopus")
 
+            rem F4: -map 0:s? -map 0:t? + -c:s copy сохраняют субтитры/вложения исходника
+            rem (иначе встроенные субтитры исчезают после мержа перевода). ? — необязательный map.
             if "%translate_mode%"=="dual_track" (
-                "!ff_cmd!" -y -i "!video_file!" -i "!trans_file!" -map 0:v -map 0:a -map 1:a -c:v copy -c:a:0 copy -c:a:1 !a_codec! -b:a:1 192k -metadata:s:a:0 language=%translate_orig_lang% -metadata:s:a:0 title="Original" -metadata:s:a:1 language=%translate_lang% -metadata:s:a:1 title="AI Translation" -disposition:a:0 default "!output_file!" 2>nul
+                "!ff_cmd!" -y -i "!video_file!" -i "!trans_file!" -map 0:v -map 0:a -map 1:a -map 0:s? -map 0:t? -c:v copy -c:a:0 copy -c:a:1 !a_codec! -b:a:1 192k -c:s copy -metadata:s:a:0 language=%translate_orig_lang% -metadata:s:a:0 title="Original" -metadata:s:a:1 language=%translate_lang% -metadata:s:a:1 title="AI Translation" -disposition:a:0 default "!output_file!" 2>nul
             )
             if "%translate_mode%"=="replace" (
-                "!ff_cmd!" -y -i "!video_file!" -i "!trans_file!" -map 0:v -map 1:a -c:v copy -c:a !a_codec! -b:a 192k -metadata:s:a:0 language=%translate_lang% -metadata:s:a:0 title="AI Translation" "!output_file!" 2>nul
+                "!ff_cmd!" -y -i "!video_file!" -i "!trans_file!" -map 0:v -map 1:a -map 0:s? -map 0:t? -c:v copy -c:a !a_codec! -b:a 192k -c:s copy -metadata:s:a:0 language=%translate_lang% -metadata:s:a:0 title="AI Translation" "!output_file!" 2>nul
             )
             if "%translate_mode%"=="mix" (
-                "!ff_cmd!" -y -i "!video_file!" -i "!trans_file!" -filter_complex "[0:a]volume=!translate_orig_vol![a0];[1:a]volume=!translate_trans_vol![a1];[a0][a1]amix=inputs=2:duration=longest:normalize=0[aout]" -map 0:v -map "[aout]" -c:v copy -c:a !a_codec! -b:a 192k "!output_file!" 2>nul
+                "!ff_cmd!" -y -i "!video_file!" -i "!trans_file!" -filter_complex "[0:a]volume=!translate_orig_vol![a0];[1:a]volume=!translate_trans_vol![a1];[a0][a1]amix=inputs=2:duration=longest:normalize=0[aout]" -map 0:v -map "[aout]" -map 0:s? -map 0:t? -c:v copy -c:a !a_codec! -b:a 192k -c:s copy "!output_file!" 2>nul
             )
 
             set "ff_rc=!errorlevel!"

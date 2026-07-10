@@ -52,9 +52,12 @@ WIN_FFMPEG=$(cygpath -w "$TMP_DIR/bin/ffmpeg.exe")
 WIN_SCRIPT=$(cygpath -w "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.cmd")
 
 # ── Обёртка: все переменные окружения, которые ждёт script.cmd ──
-# (список из блока дефолтов FFmpeg_Converter_run_v15.cmd)
+# (список из блока дефолтов FFmpeg_Converter_run_v15.cmd). $1 — доп. set-строки
+# для конкретного режима (создаются ПОСЛЕ дефолтов → переопределяют их).
 TMP_CMD="$TMP_DIR/run_smoke.cmd"
-cat > "$TMP_CMD" << CMDEOF
+build_and_run() {
+    local extra="$1"
+    cat > "$TMP_CMD" << CMDEOF
 @echo off
 chcp 65001 >nul 2>&1
 set "PATH=$WIN_BIN;%PATH%"
@@ -66,6 +69,7 @@ set "merge_files=no"
 set "create_frame=no"
 set "copy_codecs=no"
 set "extract_audio_copy=no"
+set "overwrite_existing=no"
 set "audio_codec=:+:aac"
 set "audio_number_channels=:+:2"
 set "audio_bitrate=:+:128"
@@ -98,17 +102,19 @@ set "subtitles_style=FontName=Arial,FontSize=24,PrimaryColour=&HFFFFFF&"
 set "dry_run=yes"
 set "enable_log=no"
 set "log_file=ffmpeg_convert.log"
+$extra
 call "$WIN_SCRIPT"
 exit /b %ERRORLEVEL%
 CMDEOF
-# CRLF для cmd
-sed -i 's/$/\r/' "$TMP_CMD"
+    sed -i 's/$/\r/' "$TMP_CMD"
+    local wc; wc=$(cygpath -w "$TMP_CMD")
+    SMOKE_OUT=$(cmd //c "$wc" < /dev/null 2>&1)
+    SMOKE_RC=$?
+}
 
-WIN_CMD=$(cygpath -w "$TMP_CMD")
-
-output=$(cmd //c "$WIN_CMD" < /dev/null 2>&1)
-exit_code=$?
-
+# ── Базовый режим (кодирование, dry_run) ──
+build_and_run ""
+output="$SMOKE_OUT"; exit_code="$SMOKE_RC"
 assert_not_contains "нет parse error 'was unexpected at this time'" "was unexpected at this time" "$output"
 assert_eq "exit code 0" "0" "$exit_code"
 assert_contains "вывод содержит DRY-RUN (файл дошёл до обработки)" "DRY-RUN" "$output"
@@ -117,6 +123,40 @@ assert_contains "DRY-RUN сохраняет литеральный % в имен
 assert_not_contains "имя с % не искажено (нет '50 off.mp4')" "50 off.mp4" "$output"
 assert_contains "DRY-RUN команда содержит -c:v libx264" "-c:v libx264" "$output"
 assert_contains "итоговая сводка напечатана" "Обработано:" "$output"
+
+# ══════════════════════════════════════════════════════════════
+suite "CMD: спецрежимы (dry_run) — parse-безопасность F5/F6/F7/F8"
+# ══════════════════════════════════════════════════════════════
+
+# F5+F6: create_frame — dry-run печатает команду, не создаёт кадры
+build_and_run 'set "create_frame=yes"'
+assert_not_contains "create_frame: нет parse error" "was unexpected at this time" "$SMOKE_OUT"
+assert_contains "create_frame dry-run: метка DRY-RUN" "DRY-RUN" "$SMOKE_OUT"
+assert_contains "create_frame dry-run: -r 1/1" "-r 1/1" "$SMOKE_OUT"
+
+# F5: merge_files — dry-run печатает concat-команду.
+# fname-энумерация через PowerShell на 8.3-путях temp (SUPERU~1) может не найти файлы —
+# тогда ветка печатает [WARN]; для smoke важно, что нет краха парсера CMD (реальный
+# merge dry-run полностью проверяется на SH в test_15).
+build_and_run 'set "merge_files=yes"'
+assert_not_contains "merge: нет parse error" "was unexpected at this time" "$SMOKE_OUT"
+if echo "$SMOKE_OUT" | grep -qE 'DRY-RUN|Нет файлов'; then pass "merge dry-run: ветка отработала без краха"; else fail "merge dry-run: ветка отработала" "DRY-RUN или WARN" "ни того ни другого"; fi
+
+# F5: extract_audio_copy — dry-run печатает извлечение
+build_and_run 'set "extract_audio_copy=yes"'
+assert_not_contains "extract: нет parse error" "was unexpected at this time" "$SMOKE_OUT"
+assert_contains "extract dry-run: метка DRY-RUN" "DRY-RUN" "$SMOKE_OUT"
+assert_contains "extract dry-run: -c:a copy" "-c:a copy" "$SMOKE_OUT"
+
+# F7: overwrite_existing=yes — блок удаления парсится, обработка доходит
+build_and_run 'set "overwrite_existing=yes"'
+assert_not_contains "overwrite: нет parse error" "was unexpected at this time" "$SMOKE_OUT"
+assert_contains "overwrite: обработка дошла до DRY-RUN" "DRY-RUN" "$SMOKE_OUT"
+
+# F8: webm + libx264 — предпусковая валидация отклоняет комбинацию
+build_and_run 'set "output_container=:+:webm"'
+assert_not_contains "webm-валидация: нет parse error" "was unexpected at this time" "$SMOKE_OUT"
+assert_contains "webm+libx264: сообщение о несовместимости" "WebM не поддерживает" "$SMOKE_OUT"
 
 rm -rf "$TMP_DIR"
 

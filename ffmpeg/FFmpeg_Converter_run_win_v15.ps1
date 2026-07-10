@@ -91,6 +91,7 @@ $_cfg_merge_files        = Read-Config "merge_files"        "options" "no"
 $_cfg_create_frame       = Read-Config "create_frame"       "options" "no"
 $_cfg_copy_codecs        = Read-Config "copy_codecs"        "options" "no"
 $_cfg_extract_audio_copy = Read-Config "extract_audio_copy" "options" "no"
+$_cfg_overwrite_existing = Read-Config "overwrite_existing" "options" "no"
 
 $_cfg_audio_codec    = Parse-Flag (Read-Config "codec"         "audio" "+aac")
 $_cfg_audio_channels = Parse-Flag (Read-Config "channels"      "audio" "+2")
@@ -1216,6 +1217,8 @@ $buttonRun.Add_Click({
     $script:enable_log          = if ($checkLog.Checked)         { "yes" } else { "no" }
     $script:log_file            = $_cfg_log_file
     $script:extract_audio_copy  = if ($checkExtractAudioCopy.Checked) { "yes" } else { "no" }
+    # overwrite_existing — без отдельного контрола: берём значение из config.ini (F7).
+    $script:overwrite_existing  = $_cfg_overwrite_existing
 
     # Audio settings
     $script:audio_codec          = if ($checkAudioCodec.Checked)      { ":+:$($comboAudioCodec.Text)" }    else { ":-:$($comboAudioCodec.Text)" }
@@ -1325,7 +1328,7 @@ $buttonRun.Add_Click({
     $varsToPass = @{}
     foreach ($varName in @(
         'folder_sources','folder_destination','audio_only','merge_files','create_frame',
-        'copy_codecs','multithreads','parallel_files','extract_audio_copy',
+        'copy_codecs','multithreads','parallel_files','extract_audio_copy','overwrite_existing',
         'audio_codec','audio_number_channels','audio_bitrate','audio_sampling_rate','audio_normalize',
         'video_codec','video_resolution','video_bitrate','video_number_frames','video_rotation',
         'video_subtitles','video_quality','keep_aspect_ratio','output_container',

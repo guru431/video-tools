@@ -64,6 +64,7 @@ $merge_files         = Read-Config "merge_files"         "options" "no"
 $create_frame        = Read-Config "create_frame"        "options" "no"
 $copy_codecs         = Read-Config "copy_codecs"         "options" "no"
 $extract_audio_copy  = Read-Config "extract_audio_copy"  "options" "no"
+$overwrite_existing  = Read-Config "overwrite_existing"  "options" "no"
 
 $audio_codec             = To-Flag (Read-Config "codec"         "audio" "+aac")       ":+:aac"
 $audio_number_channels   = To-Flag (Read-Config "channels"      "audio" "+2")         ":+:2"

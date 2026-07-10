@@ -348,8 +348,10 @@ download_url() {
     # Cookies (массив, заполнен build_cookie_args)
     [ "${#COOKIE_ARGS_ARR[@]}" -gt 0 ] && cmd+=("${COOKIE_ARGS_ARR[@]}")
 
-    # Архив скачанного
-    [ -n "$archive_path" ] && cmd+=(--download-archive "$archive_path")
+    # Архив скачанного. НЕ для режима «только субтитры»: архив хранит ID видео, а не
+    # факт наличия субтитров; иначе субтитры после обычной загрузки молча пропускаются
+    # (F3, паритет с CMD, который уже исключает архив для субтитров).
+    [ -n "$archive_path" ] && [ "$subs_only" != "true" ] && cmd+=(--download-archive "$archive_path")
 
     # Шаблон вывода
     cmd+=(-o "$output_template")
@@ -471,11 +473,14 @@ translate_audio() {
 
     log_info "Мерж аудиодорожек (режим: $mode)..."
 
+    # F4: сохраняем субтитры (0:s?) и вложения/шрифты (0:t?) исходника — иначе
+    # встроенные субтитры (download_with_video=embed) исчезают после мержа перевода.
+    # ? делает map необязательным: если потоков нет, ffmpeg не падает.
     case "$mode" in
         dual_track)
             ffmpeg -y -i "$video_file" -i "$translation_file" \
-                -map 0:v -map 0:a -map 1:a \
-                -c:v copy -c:a:0 copy -c:a:1 "$a_codec" -b:a:1 192k \
+                -map 0:v -map 0:a -map 1:a -map 0:s? -map 0:t? \
+                -c:v copy -c:a:0 copy -c:a:1 "$a_codec" -b:a:1 192k -c:s copy \
                 -metadata:s:a:0 language="$orig_lang" -metadata:s:a:0 title="Original" \
                 -metadata:s:a:1 language="$target_lang" -metadata:s:a:1 title="AI Translation" \
                 -disposition:a:0 default \
@@ -483,29 +488,33 @@ translate_audio() {
             ;;
         replace)
             ffmpeg -y -i "$video_file" -i "$translation_file" \
-                -map 0:v -map 1:a \
-                -c:v copy -c:a "$a_codec" -b:a 192k \
+                -map 0:v -map 1:a -map 0:s? -map 0:t? \
+                -c:v copy -c:a "$a_codec" -b:a 192k -c:s copy \
                 -metadata:s:a:0 language="$target_lang" -metadata:s:a:0 title="AI Translation" \
                 "$output_file" 2>/dev/null
             ;;
         mix)
             ffmpeg -y -i "$video_file" -i "$translation_file" \
                 -filter_complex "[0:a]volume=${orig_vol}[a0];[1:a]volume=${trans_vol}[a1];[a0][a1]amix=inputs=2:duration=longest:normalize=0[aout]" \
-                -map 0:v -map "[aout]" \
-                -c:v copy -c:a "$a_codec" -b:a 192k \
+                -map 0:v -map "[aout]" -map 0:s? -map 0:t? \
+                -c:v copy -c:a "$a_codec" -b:a 192k -c:s copy \
                 "$output_file" 2>/dev/null
             ;;
     esac
+    local ff_rc=$?
 
-    if [ $? -eq 0 ] && [ -f "$output_file" ]; then
+    local ret=1
+    if [ "$ff_rc" -eq 0 ] && [ -f "$output_file" ]; then
         mv "$output_file" "$video_file"
         log_ok "Перевод добавлен: $video_file"
+        ret=0
     else
         log_error "Ошибка мержа аудиодорожек"
         [ -f "$output_file" ] && rm -f "$output_file"
     fi
 
     rm -rf "$temp_dir"
+    return $ret
 }
 
 # ── Batch-загрузка из channels.txt ─────────────────────────────────────────
@@ -552,7 +561,8 @@ download_batch() {
         fi
 
         [ "${#COOKIE_ARGS_ARR[@]}" -gt 0 ] && cmd+=("${COOKIE_ARGS_ARR[@]}")
-        [ "$USE_ARCHIVE" = "true" ] && cmd+=(--download-archive "${BASE_DIR}/${ARCHIVE_FILE}")
+        # F3: архив не для «только субтитры» (хранит ID видео, а не наличие субтитров).
+        [ "$USE_ARCHIVE" = "true" ] && [ "$subs_only" != "true" ] && cmd+=(--download-archive "${BASE_DIR}/${ARCHIVE_FILE}")
         cmd+=(-o "$template")
 
         # Дата
@@ -867,6 +877,29 @@ main() {
 
     check_base_deps
 
+    # F1/F2: перевод несовместим с рядом режимов — отключаем ДО загрузки с ЯВНЫМ
+    # сообщением, а не выполняем молча/неверно. vot переводит по URL, поэтому:
+    #  batch/playlist — нет URL на каждое видео; audio — нет видеофайла для мержа;
+    #  trim/SponsorBlock remove — дорожка перевода полного ролика рассинхронизируется.
+    if [ "$TRANSLATE_ENABLED" = "true" ]; then
+        if [ "$BATCH_MODE" = "true" ]; then
+            log_warn "AI-перевод не применяется в режиме --batch (нужен отдельный URL на видео) — перевод отключён."
+            TRANSLATE_ENABLED="false"
+        elif [ "$SUBS_ONLY" = "true" ]; then
+            log_warn "AI-перевод неприменим к режиму «только субтитры» — перевод отключён."
+            TRANSLATE_ENABLED="false"
+        elif [ "$QUALITY" = "audio" ]; then
+            log_warn "AI-перевод не поддерживается для загрузки только аудио (quality=audio) — перевод отключён."
+            TRANSLATE_ENABLED="false"
+        elif echo "$URL" | grep -qi '[?&]list='; then
+            log_warn "AI-перевод недоступен для плейлистов (vot переводит по одному URL) — скачивайте видео по одному. Перевод отключён."
+            TRANSLATE_ENABLED="false"
+        elif [ "$TRIM_START_ON" = "true" ] || [ "$TRIM_END_ON" = "true" ] || [ "$SPONSORBLOCK" = "remove" ]; then
+            log_warn "AI-перевод несовместим с обрезкой (--trim-*) и SponsorBlock remove: дорожка перевода полного ролика рассинхронизируется с обрезанным видео. Перевод отключён."
+            TRANSLATE_ENABLED="false"
+        fi
+    fi
+
     if [ "$TRANSLATE_ENABLED" = "true" ]; then
         check_translate_deps || exit 1
     fi
@@ -906,18 +939,22 @@ main() {
             "$TRIM_START_ON" "$TRIM_START_VAL" "$TRIM_END_ON" "$TRIM_END_VAL" "$FORCE_KEYFRAMES"
         local dl_rc=$?
 
-        # AI-перевод только при успешной загрузке (паритет с CMD) и не для субтитров
+        # AI-перевод — отдельная задача на КАЖДЫЙ созданный медиафайл, а не только на
+        # самый свежий; исход учитывается в COUNT_FAIL (F2). Плейлисты/batch/audio уже
+        # отсеяны guardrail'ом выше, так что здесь обычно ровно один файл.
         if [ "$dl_rc" -eq 0 ] && [ "$TRANSLATE_ENABLED" = "true" ] && [ "$SUBS_ONLY" != "true" ]; then
-            # Найти последний скачанный файл — самый свежий по mtime среди появившихся
-            # после marker. find -exec ls -1t {} + : пусто-безопасно (при нуле совпадений
-            # ls не запускается; иначе ls без аргументов листил бы CWD и брал чужой mp4)
-            # и портируемо (без GNU-only -printf; ls -1t есть и на macOS/BSD).
-            local latest
-            latest=$(find "$BASE_DIR" \( -name '*.mp4' -o -name '*.mkv' -o -name '*.webm' \) -newer "$dl_marker" -type f -exec ls -1t {} + 2>/dev/null | head -1)
-            if [ -n "$latest" ]; then
-                translate_audio "$latest" "$URL" "$TRANSLATE_LANG" "$TRANSLATE_VOICE" \
-                    "$TRANSLATE_MODE" "$TRANSLATE_ORIG_LANG" \
-                    "$TRANSLATE_ORIG_VOL" "$TRANSLATE_TRANS_VOL" "$PROXY_URL"
+            local _tr_found=0
+            while IFS= read -r media; do
+                [ -z "$media" ] && continue
+                _tr_found=1
+                if ! translate_audio "$media" "$URL" "$TRANSLATE_LANG" "$TRANSLATE_VOICE" \
+                        "$TRANSLATE_MODE" "$TRANSLATE_ORIG_LANG" \
+                        "$TRANSLATE_ORIG_VOL" "$TRANSLATE_TRANS_VOL" "$PROXY_URL"; then
+                    COUNT_FAIL=$((COUNT_FAIL + 1))
+                fi
+            done < <(find "$BASE_DIR" \( -name '*.mp4' -o -name '*.mkv' -o -name '*.webm' \) -newer "$dl_marker" -type f 2>/dev/null | sort)
+            if [ "$_tr_found" -eq 0 ]; then
+                log_warn "AI-перевод: не найден скачанный медиафайл для перевода."
             fi
         fi
         rm -f "$dl_marker" 2>/dev/null

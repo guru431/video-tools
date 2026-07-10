@@ -17,6 +17,7 @@ set "merge_files=no"
 set "create_frame=no"
 set "copy_codecs=no"
 set "extract_audio_copy=no"
+set "overwrite_existing=no"
 set "audio_codec=:+:aac"
 set "audio_number_channels=:+:2"
 set "audio_bitrate=:+:128"
@@ -141,6 +142,7 @@ if /i "!_section!"=="options" (
 	if /i "!_key!"=="create_frame" set "create_frame=!_val!"
 	if /i "!_key!"=="copy_codecs" set "copy_codecs=!_val!"
 	if /i "!_key!"=="extract_audio_copy" set "extract_audio_copy=!_val!"
+	if /i "!_key!"=="overwrite_existing" set "overwrite_existing=!_val!"
 )
 if /i "!_section!"=="audio" (
 	if /i "!_key!"=="codec" call :to_flag "!_val!" "audio_codec"
@@ -223,7 +225,7 @@ if not defined _abs set "folder_destination=%~dp0!folder_destination!"
 
 rem Тестовый хук: --print-config печатает распарсенные переменные и выходит, не запуская script
 if "%~1"=="--print-config" (
-	for %%V in (folder_sources folder_destination audio_only merge_files create_frame copy_codecs extract_audio_copy audio_codec audio_number_channels audio_bitrate audio_sampling_rate audio_normalize video_codec video_resolution video_bitrate video_number_frames video_rotation video_subtitles video_quality keep_aspect_ratio output_container multithreads parallel_files hw_accel gpu_preset gpu_tune gpu_rc playback_speed start_coding length_coding split_by_silence silence_duration silence_threshold save_old_extension format_files_in subtitles_style dry_run enable_log log_file) do echo %%V=!%%V!
+	for %%V in (folder_sources folder_destination audio_only merge_files create_frame copy_codecs extract_audio_copy overwrite_existing audio_codec audio_number_channels audio_bitrate audio_sampling_rate audio_normalize video_codec video_resolution video_bitrate video_number_frames video_rotation video_subtitles video_quality keep_aspect_ratio output_container multithreads parallel_files hw_accel gpu_preset gpu_tune gpu_rc playback_speed start_coding length_coding split_by_silence silence_duration silence_threshold save_old_extension format_files_in subtitles_style dry_run enable_log log_file) do echo %%V=!%%V!
 	exit /b 0
 )
 

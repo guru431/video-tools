@@ -1008,9 +1008,9 @@ $btnStart.Add_Click({
             $command = @("-c", $errFlag, "-w", "--windows-filenames", "--compat-options", "filename-sanitization", "--retries", "10", "--fragment-retries", "10", "--file-access-retries", "5", "--socket-timeout", "30", "--concurrent-fragments", "4")
             # --no-mtime при переводе: выбор свежескачанного файла опирается на mtime.
             if ($chkTranslate.Checked) { $command += "--no-mtime" }
-            # Архив загруженного (паритет с .sh): не перекачивать уже скачанное.
-            # Значения — сырые (без ручных кавычек): Quote-WinArg квотирует при отправке.
-            if ($cfg_useArchive -eq "true") { $command += "--download-archive", (Join-Path $folder $cfg_archiveFile) }
+            # Архив добавляется ниже — только для реальных загрузок (qi 0..6), НЕ для
+            # режима «только субтитры» (qi 7/8): архив хранит ID видео, а не наличие
+            # субтитров, иначе субтитры молча пропускаются (F3, паритет с CMD).
             $denoExe = Join-Path $scriptDir "deno.exe"
             if (Test-Path $denoExe) { $command += "--js-runtimes", "deno:$denoExe" }
             $tpl = if ($currentUrl -match '[?&]list=') { $cfg_plTemplate } else { $cfg_template }
@@ -1083,6 +1083,8 @@ $btnStart.Add_Click({
             # SponsorBlock и субтитры-с-видео: только для реальных загрузок (qi 0..6),
             # НЕ для режима «только субтитры» (qi 7/8).
             if ($qi -ge 0 -and $qi -le 6) {
+                # Архив загруженного (паритет с .sh/CMD): только для реальных загрузок.
+                if ($cfg_useArchive -eq "true") { $command += "--download-archive", (Join-Path $folder $cfg_archiveFile) }
                 # Метаданные и главы источника (архивная ценность; без глав — no-op).
                 $command += "--embed-metadata", "--embed-chapters"
                 switch ($comboSponsorblock.SelectedItem) {
@@ -1232,8 +1234,24 @@ $btnStart.Add_Click({
                 $successCount++
                 Append-Output "Готово: [$platform]  $currentUrl" ([System.Drawing.Color]::LightGreen)
 
-                # AI-перевод если включён и не субтитры
-                if ($chkTranslate.Checked -and $qi -ge 1 -and $qi -le 6) {
+                # F1/F2: явное сообщение, если перевод включён, но неприменим к режиму.
+                # vot переводит по URL: audio нет видео для мержа; плейлист нет URL на
+                # каждое видео; trim/SponsorBlock remove рассинхронизируют дорожку.
+                if ($chkTranslate.Checked) {
+                    $translateSkip = $null
+                    if ($qi -eq 0) { $translateSkip = "не поддерживается для загрузки только аудио" }
+                    elseif ($qi -ge 7) { $translateSkip = "неприменим к режиму «только субтитры»" }
+                    elseif ($currentUrl -match '[?&]list=') { $translateSkip = "недоступен для плейлистов (vot переводит по одному URL)" }
+                    elseif ($chkTrimStart.Checked -or $chkTrimEnd.Checked) { $translateSkip = "рассинхронизируется с обрезкой ролика (--download-sections)" }
+                    elseif ($comboSponsorblock.SelectedItem -eq "remove") { $translateSkip = "рассинхронизируется со SponsorBlock remove" }
+                    if ($translateSkip) { Append-Output "AI-перевод отключён: $translateSkip." ([System.Drawing.Color]::Yellow) }
+                }
+
+                # AI-перевод: только видео-качество (qi 1..6) и совместимый режим (см. выше).
+                if ($chkTranslate.Checked -and $qi -ge 1 -and $qi -le 6 `
+                        -and -not ($currentUrl -match '[?&]list=') `
+                        -and -not $chkTrimStart.Checked -and -not $chkTrimEnd.Checked `
+                        -and $comboSponsorblock.SelectedItem -ne "remove") {
                     $lblStatus.Text = "AI-перевод $itemNum/$totalItems..."
                     Append-Output "Получение AI-перевода..." ([System.Drawing.Color]::Cyan)
 
@@ -1308,24 +1326,26 @@ $btnStart.Add_Click({
                                 Append-Output "Мерж аудиодорожек ($transMode)..." ([System.Drawing.Color]::Cyan)
                                 # WebM-контейнер не принимает AAC → для .webm кодируем перевод в libopus.
                                 $mergeACodec = if ($latestVideo.Extension -eq ".webm") { "libopus" } else { "aac" }
+                                # F4: -map 0:s? -map 0:t? + -c:s copy сохраняют субтитры/вложения
+                                # исходника — иначе встроенные субтитры исчезают после мержа перевода.
                                 $ffArgs = switch ($transMode) {
                                     "dual_track" { @("-y", "-i", $latestVideo.FullName, "-i", $transFile.FullName,
-                                                     "-map", "0:v", "-map", "0:a", "-map", "1:a",
-                                                     "-c:v", "copy", "-c:a:0", "copy", "-c:a:1", $mergeACodec, "-b:a:1", "192k",
+                                                     "-map", "0:v", "-map", "0:a", "-map", "1:a", "-map", "0:s?", "-map", "0:t?",
+                                                     "-c:v", "copy", "-c:a:0", "copy", "-c:a:1", $mergeACodec, "-b:a:1", "192k", "-c:s", "copy",
                                                      "-metadata:s:a:0", "language=$cfg_transOrigLang",
                                                      "-metadata:s:a:0", "title=Original",
                                                      "-metadata:s:a:1", "language=$transLang",
                                                      "-metadata:s:a:1", "title=AI Translation",
                                                      "-disposition:a:0", "default", $outputFile) }
                                     "replace"    { @("-y", "-i", $latestVideo.FullName, "-i", $transFile.FullName,
-                                                     "-map", "0:v", "-map", "1:a",
-                                                     "-c:v", "copy", "-c:a", $mergeACodec, "-b:a", "192k",
+                                                     "-map", "0:v", "-map", "1:a", "-map", "0:s?", "-map", "0:t?",
+                                                     "-c:v", "copy", "-c:a", $mergeACodec, "-b:a", "192k", "-c:s", "copy",
                                                      "-metadata:s:a:0", "language=$transLang",
                                                      "-metadata:s:a:0", "title=AI Translation", $outputFile) }
                                     "mix"        { @("-y", "-i", $latestVideo.FullName, "-i", $transFile.FullName,
                                                      "-filter_complex", "[0:a]volume=$cfg_transOrigVol[a0];[1:a]volume=$cfg_transTransVol[a1];[a0][a1]amix=inputs=2:duration=longest:normalize=0[aout]",
-                                                     "-map", "0:v", "-map", "[aout]",
-                                                     "-c:v", "copy", "-c:a", $mergeACodec, "-b:a", "192k", $outputFile) }
+                                                     "-map", "0:v", "-map", "[aout]", "-map", "0:s?", "-map", "0:t?",
+                                                     "-c:v", "copy", "-c:a", $mergeACodec, "-b:a", "192k", "-c:s", "copy", $outputFile) }
                                 }
                                 & $ffmpegBin @ffArgs 2>&1 | Out-Null
                                 if ($LASTEXITCODE -eq 0 -and (Test-Path $outputFile)) {

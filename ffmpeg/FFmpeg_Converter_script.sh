@@ -278,6 +278,40 @@ fi
 
 audio_settings="$set_audio_codec $set_audio_number_channels $set_audio_bitrate $set_audio_sampling_rate"
 
+# --- F8. Кодек субтитров для режима meta зависит от контейнера ---
+# mov_text живёт только в mp4/mov; mkv → srt, webm → webvtt. Раньше всегда ставился
+# mov_text и ронял mkv/webm-выход. Для прочих контейнеров оставляем mov_text (best-effort).
+case "$format_files_out" in
+	mkv)  sub_meta_codec="srt" ;;
+	webm) sub_meta_codec="webvtt" ;;
+	*)    sub_meta_codec="mov_text" ;;
+esac
+
+# --- F8. Предпусковая проверка совместимости контейнера и кодеков ---
+# Несовместимую пару (напр. webm + libx264/aac) отклоняем ДО пакета с понятной
+# причиной, а не роняем каждый файл в процессе. Проверяем только при реальном
+# транскодировании в выбранный контейнер (не copy/merge/frame/extract/audio_only).
+if [ "$audio_only" != "yes" ] && [ "$copy_codecs" != "yes" ] && [ "$merge_files" != "yes" ] && [ "$create_frame" != "yes" ] && [ "$extract_audio_copy" != "yes" ]; then
+	_incompat=""
+	case "$format_files_out" in
+		webm)
+			case "$set_video_codec" in
+				""|libvpx|libvpx-vp9|vp8|vp9|av1*|libsvtav1|libaom-av1) ;;
+				*) _incompat="  • WebM не поддерживает видеокодек '$set_video_codec' — нужен VP8/VP9/AV1 (смените [video] codec или [video] container)." ;;
+			esac
+			case "$(printf '%s' "$audio_codec_value" | tr '[:upper:]' '[:lower:]')" in
+				""|libopus|opus|libvorbis|vorbis) ;;
+				*) _incompat="${_incompat:+$_incompat$'\n'}  • WebM не поддерживает аудиокодек '$audio_codec_value' — нужен Opus/Vorbis (смените [audio] codec или [video] container)." ;;
+			esac
+			;;
+	esac
+	if [ -n "$_incompat" ]; then
+		echo -e "\n[ОШИБКА] Несовместимая комбинация контейнера и кодеков:\n$_incompat\n"
+		read -p "Нажмите [Enter], чтобы выйти..."
+		exit 1
+	fi
+fi
+
 # --- Потоки ---
 thread_args="-threads $threads"
 
@@ -365,6 +399,11 @@ encode_file() {
 			echo "skip" > "$(mktemp "$results_dir/r_XXXXXXXX")"
 			return
 		fi
+		# D7. Dry-run: спецрежим тоже только печатает команду, не создаёт файл.
+		if [ "$dry_run" = "yes" ]; then
+			echo "[DRY-RUN] $ffmpeg -nostdin -hide_banner -strict -2 -i \"$full_path\" -vn -c:a copy \"$out_audio\" -y"
+			return
+		fi
 		log_msg "INFO" "Извлечение аудио: $(basename "$full_path")"
 		"$ffmpeg" -nostdin -hide_banner -strict -2 -i "$full_path" -vn -c:a copy "$out_audio" -y
 		if [ $? -ne 0 ]; then
@@ -382,10 +421,32 @@ encode_file() {
 	fi
 
 	if [ "$create_frame" = "yes" ]; then
-		if [ ! -d "${folder_destination}${file_path}${file_name}" ]; then
-			mkdir -p "$folder_destination$file_path$file_name"
-			log_msg "INFO" "Извлечение кадров: $full_path"
-			"$ffmpeg" -nostdin -hide_banner -strict -2 -i "$full_path" -r 1/1 "$folder_destination$file_path$file_name/${file_name}_%05d.png"
+		local frame_dir="${folder_destination}${file_path}${file_name}"
+		local frame_done="${frame_dir}/.frames_complete"
+		# Готовность каталога кадров определяем по маркеру завершения, а не по факту его
+		# существования: прерванный прогон оставлял частичный каталог, который молча
+		# пропускался при повторном запуске (кадры так и не догружались).
+		if [ -f "$frame_done" ] && [ "$overwrite_existing" != "yes" ]; then
+			echo "skip" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+			return
+		fi
+		if [ "$dry_run" = "yes" ]; then
+			echo "[DRY-RUN] $ffmpeg -nostdin -hide_banner -strict -2 -i \"$full_path\" -r 1/1 \"$frame_dir/${file_name}_%05d.png\""
+			return
+		fi
+		# Частичный каталог с прошлого прогона удаляем, чтобы кадры не смешивались.
+		[ -d "$frame_dir" ] && rm -rf "$frame_dir"
+		mkdir -p "$frame_dir"
+		log_msg "INFO" "Извлечение кадров: $full_path"
+		"$ffmpeg" -nostdin -hide_banner -strict -2 -i "$full_path" -r 1/1 "$frame_dir/${file_name}_%05d.png"
+		if [ $? -ne 0 ]; then
+			log_msg "FAIL" "$(basename "$full_path")"
+			rm -rf "$frame_dir"
+			echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+		else
+			: > "$frame_done"
+			log_msg "OK" "Кадры: $(basename "$full_path")"
+			echo "ok:0:0" > "$(mktemp "$results_dir/r_XXXXXXXX")"
 		fi
 		return
 	fi
@@ -394,19 +455,23 @@ encode_file() {
 	# copy_codecs сохраняет исходный контейнер — расширение выхода берём из источника
 	# ДО проверки существования, иначе ищем .mp4 вместо, например, .avi и не находим готовый файл.
 	if [ "$copy_codecs" = "yes" ]; then current_format_out="${full_path##*.}"; fi
-	if [ -f "${folder_destination}${file_path}${file_name}.${current_format_out}" ]; then
-		# E3. Проверка валидности существующего файла
-		if "$ffmpeg" -nostdin -v error -i "${folder_destination}${file_path}${file_name}.${current_format_out}" -f null - 2>/dev/null; then
+	# F7. overwrite_existing=yes → готовый файл не считаем финальным и перекодируем с
+	# новыми настройками (ffmpeg -y перезапишет). Иначе валидный файл пропускается.
+	if [ "$overwrite_existing" != "yes" ]; then
+		if [ -f "${folder_destination}${file_path}${file_name}.${current_format_out}" ]; then
+			# E3. Проверка валидности существующего файла
+			if "$ffmpeg" -nostdin -v error -i "${folder_destination}${file_path}${file_name}.${current_format_out}" -f null - 2>/dev/null; then
+				echo "skip" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+				return
+			else
+				log_msg "WARN" "Удаление битого файла: ${folder_destination}${file_path}${file_name}.${current_format_out}"
+				rm -f "${folder_destination}${file_path}${file_name}.${current_format_out}"
+			fi
+		fi
+		if [ -f "${folder_destination}${file_path}${file_name} (part.1).${current_format_out}" ]; then
 			echo "skip" > "$(mktemp "$results_dir/r_XXXXXXXX")"
 			return
-		else
-			log_msg "WARN" "Удаление битого файла: ${folder_destination}${file_path}${file_name}.${current_format_out}"
-			rm -f "${folder_destination}${file_path}${file_name}.${current_format_out}"
 		fi
-	fi
-	if [ -f "${folder_destination}${file_path}${file_name} (part.1).${current_format_out}" ]; then
-		echo "skip" > "$(mktemp "$results_dir/r_XXXXXXXX")"
-		return
 	fi
 
 	# E4 + J1. Один вызов ffmpeg -i для получения битрейта и длительности (раньше
@@ -573,7 +638,7 @@ encode_file() {
 							fi
 						fi
 						if [ "$video_subtitles_value" = "meta" ]; then
-							subtitles_params=(-i "$sub_file" -c:s mov_text -metadata:s:s:0 language=rus)
+							subtitles_params=(-i "$sub_file" -c:s "$sub_meta_codec" -metadata:s:s:0 language=rus)
 							convert_settings="$convert_settings -map 0 -map 1"
 						fi
 						sub_found=1
@@ -697,23 +762,28 @@ if [ "$merge_files" = "yes" ]; then
 	done < <(find "$folder_sources" \( "${format_find_pred[@]}" \) -print0 | sort -z)
 	if [ -z "$fname" ]; then
 		log_msg "WARN" "Нет файлов для объединения в $folder_sources"
-	elif [ ! -f "${folder_destination}/${fname}" ]; then
+	elif [ "$overwrite_existing" = "yes" ] || [ ! -f "${folder_destination}/${fname}" ]; then
 		concat_list=$(mktemp "${TMPDIR:-/tmp}/ffconv.XXXXXXXX")
 		# -printf — GNU-расширение (нет на macOS/BSD). Портативно: -print0 + read.
 		# Имена с ' экранируем для concat-формата ffmpeg: ' -> '\''
 		while IFS= read -r -d '' mf; do
 			printf "file '%s'\n" "${mf//\'/\'\\\'\'}" >> "$concat_list"
 		done < <(find "$folder_sources" \( "${format_find_pred[@]}" \) -print0 | sort -z)
-		log_msg "INFO" "Объединение файлов -> ${folder_destination}/${fname}"
-		"$ffmpeg" -hide_banner -strict -2 -f concat -safe 0 -i "$concat_list" -c copy -map 0 "$folder_destination/$fname"
-		if [ $? -ne 0 ]; then
-			log_msg "FAIL" "Объединение файлов"
-			echo "fail" > "$results_dir/r_merge"
+		if [ "$dry_run" = "yes" ]; then
+			echo "[DRY-RUN] $ffmpeg -hide_banner -strict -2 -f concat -safe 0 -i \"$concat_list\" -c copy -map 0 \"$folder_destination/$fname\""
+			rm -f "$concat_list"
 		else
-			log_msg "OK" "Объединение файлов -> ${folder_destination}/${fname}"
-			echo "ok:0:0" > "$results_dir/r_merge"
+			log_msg "INFO" "Объединение файлов -> ${folder_destination}/${fname}"
+			"$ffmpeg" -hide_banner -strict -2 -f concat -safe 0 -i "$concat_list" -c copy -map 0 "$folder_destination/$fname"
+			if [ $? -ne 0 ]; then
+				log_msg "FAIL" "Объединение файлов"
+				echo "fail" > "$results_dir/r_merge"
+			else
+				log_msg "OK" "Объединение файлов -> ${folder_destination}/${fname}"
+				echo "ok:0:0" > "$results_dir/r_merge"
+			fi
+			rm -f "$concat_list"
 		fi
-		rm -f "$concat_list"
 	fi
 else
 	# B1b. Параллельная обработка файлов
@@ -726,6 +796,7 @@ else
 		export video_subtitles_status video_subtitles_value subtitles_style
 		export vf_chain af_chain hw_decode_args thread_args use_hw_accel
 		export silence_threshold silence_duration dry_run enable_log log_file
+		export overwrite_existing sub_meta_codec
 		export keep_aspect_ratio_status keep_aspect_ratio_value playback_speed_status playback_speed_value
 		export results_dir
 		find "$folder_sources" \( "${format_find_pred[@]}" \) -print0 | xargs -0 -P "$parallel_count" -I {} bash -c 'encode_file "$@"' _ {}

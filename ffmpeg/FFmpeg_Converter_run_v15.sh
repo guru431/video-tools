@@ -105,6 +105,7 @@ merge_files="$(read_config "merge_files" "options" "no")"
 create_frame="$(read_config "create_frame" "options" "no")"
 copy_codecs="$(read_config "copy_codecs" "options" "no")"
 extract_audio_copy="$(read_config "extract_audio_copy" "options" "no")"
+overwrite_existing="$(read_config "overwrite_existing" "options" "no")"
 
 audio_codec="$(to_flag "$(read_config "codec" "audio" "+aac")" ":+:aac")"
 audio_number_channels="$(to_flag "$(read_config "channels" "audio" "+2")" ":+:2")"

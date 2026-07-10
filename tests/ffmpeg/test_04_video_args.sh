@@ -78,7 +78,8 @@ suite "Видео: контейнер"
 OUT=$(run_script 'output_container=":+:mkv"')
 assert_eq "container +mkv"  "mkv"  "$(getv "$OUT" format_files_out)"
 
-OUT=$(run_script 'output_container=":+:webm"')
+# webm требует VP8/VP9/AV1 + Opus/Vorbis (F8-валидация иначе отклонит libx264/aac).
+OUT=$(run_script 'output_container=":+:webm"' 'video_codec=":+:libvpx-vp9"' 'audio_codec=":+:libopus"')
 assert_eq "container +webm" "webm" "$(getv "$OUT" format_files_out)"
 
 OUT=$(run_script 'output_container=":+:avi"')

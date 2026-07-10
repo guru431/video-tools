@@ -40,6 +40,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Реальный ffmpeg нужен интеграционным тестам (создание тестового MP4). Без него
+      # они бы пропустились, а STRICT_SKIP=1 (ниже) считает любой пропуск ошибкой.
+      # Шим choco (C:\ProgramData\chocolatey\bin) уже в PATH → ffmpeg виден следующему шагу.
+      - name: Install ffmpeg
+        shell: pwsh
+        run: choco install ffmpeg -y --no-progress
+
       - name: Run full suite (skip of a platform suite = failure)
         shell: bash
         env:

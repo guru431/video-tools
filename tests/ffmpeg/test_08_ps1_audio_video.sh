@@ -11,8 +11,9 @@ PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
 
 source "$TESTS_DIR/lib/framework.sh"
 
-# Проверяем доступность PowerShell
-if ! command -v powershell &>/dev/null && ! command -v pwsh &>/dev/null; then
+# PS1 тесты — только Windows (Windows PowerShell semantics, cygpath-пути). На Linux/CI пропускаем.
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*|*NT*) : ;; *) _ps_skip=1 ;; esac
+if [ -n "${_ps_skip:-}" ] || { ! command -v powershell &>/dev/null && ! command -v pwsh &>/dev/null; }; then
     suite "PS1 audio/video аргументы"
     skip "Все PS1 тесты" "PowerShell не найден"
     summary

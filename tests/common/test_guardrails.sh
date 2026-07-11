@@ -48,4 +48,16 @@ assert_not_contains "SH: нет --no-check-certificate"      "--no-check-certifi
 # TLS отключается только для vot-cli-live и ОБЯЗАТЕЛЬНО сбрасывается назад.
 assert_contains "CMD: NODE_TLS сбрасывается"              'set "NODE_TLS_REJECT_UNAUTHORIZED="'  "$ycmd"
 
+# ── yt-dlp PS1: подписки событий чистятся и на пути исключения (finally) ───
+# Register-ObjectEvent создаётся на каждый URL. Штатная очистка живёт в цикле,
+# но при исключении между Register и очисткой (напр. Start() без yt-dlp.exe)
+# управление ушло бы в catch/finally — поэтому те же Unregister-Event должны
+# присутствовать ВТОРОЙ раз в finally (belt-and-suspenders), иначе подписки и
+# PSEventJob текут до закрытия GUI.
+suite "guardrails: yt-dlp PS1 event-leak (cleanup в finally)"
+n_out=$(printf '%s\n' "$ps1" | grep -cF -- 'Unregister-Event -SourceIdentifier $evtOut.Name')
+n_err=$(printf '%s\n' "$ps1" | grep -cF -- 'Unregister-Event -SourceIdentifier $evtErr.Name')
+assert_eq "evtOut: очистка и в цикле, и в finally"  "2"  "$n_out"
+assert_eq "evtErr: очистка и в цикле, и в finally"  "2"  "$n_err"
+
 summary

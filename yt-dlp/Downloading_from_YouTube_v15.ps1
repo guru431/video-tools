@@ -1223,10 +1223,13 @@ $btnStart.Add_Click({
             }
 
             # Снимаем подписки OutputDataReceived/ErrorDataReceived (2 на URL) и Dispose,
-            # иначе они накапливаются между загрузками (утечка).
-            if ($evtOut) { Unregister-Event -SourceIdentifier $evtOut.Name -ErrorAction SilentlyContinue; $evtOut | Remove-Job -Force -ErrorAction SilentlyContinue }
-            if ($evtErr) { Unregister-Event -SourceIdentifier $evtErr.Name -ErrorAction SilentlyContinue; $evtErr | Remove-Job -Force -ErrorAction SilentlyContinue }
-            # Process освобождаем — иначе Win32-хендлы текут по всей очереди.
+            # иначе они накапливаются между загрузками (утечка). Зануляем ссылки: чтобы
+            # finally не трогал уже снятые подписки, а уцелевшие (при исключении на след.
+            # итерации до Register-ObjectEvent) не осиротели (F: event/handle-leak).
+            if ($evtOut) { Unregister-Event -SourceIdentifier $evtOut.Name -ErrorAction SilentlyContinue; $evtOut | Remove-Job -Force -ErrorAction SilentlyContinue; $evtOut = $null }
+            if ($evtErr) { Unregister-Event -SourceIdentifier $evtErr.Name -ErrorAction SilentlyContinue; $evtErr | Remove-Job -Force -ErrorAction SilentlyContinue; $evtErr = $null }
+            # Process освобождаем — иначе Win32-хендлы текут по всей очереди. Ссылку НЕ
+            # обнуляем (Stop-Download полагается на неё для WaitForExit без NullRef — F5).
             if ($global:downloadProcess) { $global:downloadProcess.Dispose() }
 
             if ($exitCode -eq 0) {
@@ -1390,6 +1393,12 @@ $btnStart.Add_Click({
             [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
     }
     finally {
+        # Если исключение прервало итерацию между Register-ObjectEvent и штатной очисткой
+        # (напр. Start() не нашёл yt-dlp.exe) — снимаем ещё живые подписки/PSEventJob
+        # текущего URL, иначе они текут до закрытия GUI. Штатный путь уже занулил эти
+        # ссылки, поэтому здесь очистка сработает только на пути исключения.
+        if ($evtOut) { Unregister-Event -SourceIdentifier $evtOut.Name -ErrorAction SilentlyContinue; $evtOut | Remove-Job -Force -ErrorAction SilentlyContinue }
+        if ($evtErr) { Unregister-Event -SourceIdentifier $evtErr.Name -ErrorAction SilentlyContinue; $evtErr | Remove-Job -Force -ErrorAction SilentlyContinue }
         $btnStart.Enabled      = $true
         $btnStop.Enabled       = $false
         $btnRemoveUrl.Enabled  = $true

@@ -801,6 +801,20 @@ encode_file() {
 	done
 }
 
+# `sort -z` — GNU-расширение, в штатном macOS/BSD sort его нет, а macOS заявлена
+# в поддержке. Проверяем поддержку один раз. Fallback сортирует по \n: имена с
+# переводом строки в нём не поддерживаются, и об этом честнее предупредить, чем
+# молча выдать другой порядок склейки.
+if printf 'a\0' | sort -z >/dev/null 2>&1; then
+	sort_null() { sort -z; }
+else
+	sort_null() {
+		[ -n "${_sort_z_warned:-}" ] || log_msg "WARN" "sort без -z (не GNU): порядок объединения не гарантирован для имён с переводом строки"
+		_sort_z_warned=1
+		tr '\0' '\n' | LC_ALL=C sort | tr '\n' '\0'
+	}
+fi
+
 # --- Основная логика ---
 if [ "$merge_files" = "yes" ]; then
 	# fname сбрасывается явно: переменная не локальна (merge — top-level, не функция),
@@ -808,7 +822,7 @@ if [ "$merge_files" = "yes" ]; then
 	fname=""
 	while IFS= read -r -d '' full_path; do
 		if [ -z "$fname" ]; then fname=$(basename "$full_path"); break; fi
-	done < <(find "$folder_sources" \( "${format_find_pred[@]}" \) -print0 | sort -z)
+	done < <(find "$folder_sources" \( "${format_find_pred[@]}" \) -print0 | sort_null)
 	if [ -z "$fname" ]; then
 		log_msg "WARN" "Нет файлов для объединения в $folder_sources"
 	elif [ "$overwrite_existing" = "yes" ] || [ ! -f "${folder_destination}/${fname}" ]; then
@@ -817,19 +831,31 @@ if [ "$merge_files" = "yes" ]; then
 		# Имена с ' экранируем для concat-формата ffmpeg: ' -> '\''
 		while IFS= read -r -d '' mf; do
 			printf "file '%s'\n" "${mf//\'/\'\\\'\'}" >> "$concat_list"
-		done < <(find "$folder_sources" \( "${format_find_pred[@]}" \) -print0 | sort -z)
+		done < <(find "$folder_sources" \( "${format_find_pred[@]}" \) -print0 | sort_null)
+		# Мержим в соседний temp, а не сразу поверх цели. Прежний вызов шёл без -y на
+		# существующий файл: ffmpeg спрашивал «File exists. Overwrite? [y/N]» и висел,
+		# ожидая stdin, которого в batch/GUI нет. А упавший мерж оставлял partial под
+		# именем цели, и следующий запуск принимал его за готовый результат.
+		merge_tmp="${folder_destination}/.${fname}.partial"
 		if [ "$dry_run" = "yes" ]; then
-			echo "[DRY-RUN] $ffmpeg -hide_banner -strict -2 -f concat -safe 0 -i \"$concat_list\" -c copy -map 0 \"$folder_destination/$fname\""
+			echo "[DRY-RUN] $ffmpeg -hide_banner -nostdin -strict -2 -f concat -safe 0 -i \"$concat_list\" -c copy -map 0 -y \"$merge_tmp\""
 			rm -f "$concat_list"
 		else
 			log_msg "INFO" "Объединение файлов -> ${folder_destination}/${fname}"
-			"$ffmpeg" -hide_banner -strict -2 -f concat -safe 0 -i "$concat_list" -c copy -map 0 "$folder_destination/$fname"
-			if [ $? -ne 0 ]; then
-				log_msg "FAIL" "Объединение файлов"
-				echo "fail" > "$results_dir/r_merge"
-			else
+			rm -f "$merge_tmp"
+			"$ffmpeg" -hide_banner -nostdin -strict -2 -f concat -safe 0 -i "$concat_list" -c copy -map 0 -y "$merge_tmp"
+			merge_rc=$?
+			# rc=0 сам по себе не гарантирует читаемый контейнер — валидируем тем же
+			# `-f null -`, что и обычные выходные файлы, и только потом подменяем цель.
+			if [ "$merge_rc" -eq 0 ] && [ -s "$merge_tmp" ] && \
+			   "$ffmpeg" -nostdin -v error -i "$merge_tmp" -f null - 2>/dev/null; then
+				mv -f "$merge_tmp" "${folder_destination}/${fname}"
 				log_msg "OK" "Объединение файлов -> ${folder_destination}/${fname}"
 				echo "ok:0:0" > "$results_dir/r_merge"
+			else
+				log_msg "FAIL" "Объединение файлов"
+				rm -f "$merge_tmp"
+				echo "fail" > "$results_dir/r_merge"
 			fi
 			rm -f "$concat_list"
 		fi

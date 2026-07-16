@@ -80,6 +80,68 @@ if [ ! -f "$DST/m1.mp4" ]; then pass "merge dry-run: объединённый ф
 rm -f "$IN/m1.mp4" "$IN/m2.mp4" "$DST/m1.mp4"
 
 # ══════════════════════════════════════════════════════════════
+suite "F23: merge не зависает на существующем выходе и не оставляет partial"
+# ══════════════════════════════════════════════════════════════
+# Суть находки: concat шёл БЕЗ -y прямо поверх цели. Существующий выход → ffmpeg
+# спрашивает «File exists. Overwrite? [y/N]» и ждёт stdin, которого в batch/GUI нет.
+# Упавший мерж оставлял partial под именем цели, и следующий запуск считал его готовым.
+MW=$(mktemp -d /tmp/test_ff_merge_XXXXXX)
+mkdir -p "$MW/bin"
+HANG_LOG="$MW/hang.log"
+
+# Мок воспроизводит поведение настоящего ffmpeg: пишем в существующий файл без -y —
+# значит, повисли бы на запросе. Вместо реального зависания фиксируем факт в лог,
+# чтобы тест оставался быстрым и детерминированным.
+cat > "$MW/bin/ffmpeg" <<'MEOF'
+#!/bin/bash
+case "$*" in *"-f null"*) exit 0 ;; esac   # валидация выхода — всегда успех
+has_y=no; has_nostdin=no
+for a in "$@"; do
+    [ "$a" = "-y" ] && has_y=yes
+    [ "$a" = "-nostdin" ] && has_nostdin=yes
+done
+for out in "$@"; do :; done               # выход — последний аргумент
+if [ -e "$out" ] && [ "$has_y" = "no" ]; then
+    echo "WOULD_HANG:$out (нет -y, nostdin=$has_nostdin)" >> "$MOCK_HANG_LOG"
+    exit 1
+fi
+if [ "${MOCK_MERGE_FAIL:-0}" = "1" ]; then printf 'partial' > "$out"; exit 1; fi
+printf 'merged' > "$out"
+exit 0
+MEOF
+chmod +x "$MW/bin/ffmpeg"
+export MOCK_HANG_LOG="$HANG_LOG"
+
+merge_run() {
+    rm -f "$HANG_LOG"
+    run_capture 'merge_files="yes"' 'overwrite_existing="yes"' "ffmpeg=\"$MW/bin/ffmpeg\"" "$@"
+}
+
+touch "$IN/z1.mp4" "$IN/z2.mp4"
+# Цель уже существует — ровно тот случай, где старый код вставал намертво.
+printf 'старое содержимое' > "$DST/z1.mp4"
+export MOCK_MERGE_FAIL=0
+merge_run
+if [ -s "$HANG_LOG" ]; then
+    fail "merge поверх существующего файла не зависает" "нет запроса Overwrite" "$(cat "$HANG_LOG")"
+else
+    pass "merge поверх существующего файла не зависает"
+fi
+assert_eq "merge: цель заменена результатом" "merged" "$(cat "$DST/z1.mp4" 2>/dev/null)"
+if ls "$DST"/.*.partial >/dev/null 2>&1; then fail "merge успех: partial убран" "нет .partial" "остался"; else pass "merge успех: partial убран"; fi
+
+# Провал мержа: цель обязана остаться прежней, partial — исчезнуть.
+printf 'старое содержимое' > "$DST/z1.mp4"
+export MOCK_MERGE_FAIL=1
+merge_run
+assert_eq "merge провал: цель НЕ затёрта partial'ом" "старое содержимое" "$(cat "$DST/z1.mp4" 2>/dev/null)"
+if ls "$DST"/.*.partial >/dev/null 2>&1; then fail "merge провал: partial удалён" "нет .partial" "остался: $(ls "$DST"/.*.partial)"; else pass "merge провал: partial удалён"; fi
+assert_contains "merge провал: залогирован FAIL" "FAIL" "$OUT_TEXT"
+export MOCK_MERGE_FAIL=0
+unset MOCK_HANG_LOG
+rm -f "$IN/z1.mp4" "$IN/z2.mp4" "$DST/z1.mp4"; rm -rf "$MW"
+
+# ══════════════════════════════════════════════════════════════
 suite "F6: извлечение кадров — маркер завершения и retry-безопасность"
 # ══════════════════════════════════════════════════════════════
 

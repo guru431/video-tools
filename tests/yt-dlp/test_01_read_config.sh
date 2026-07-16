@@ -187,10 +187,14 @@ assert_contains "SH: deno.exe детект"  'deno:$script_dir/deno.exe'  "$sh_s
 assert_contains "SH: env_prefix bash<4.4"  '${env_prefix[@]+"${env_prefix[@]}"}'  "$sh_src"
 # translate только при rc=0
 assert_contains "SH: translate при dl_rc=0"  '[ "$dl_rc" -eq 0 ]'  "$sh_src"
-# --no-mtime при переводе (все 3)
-assert_contains "SH: --no-mtime при переводе"  '--no-mtime'  "$sh_src"
-assert_contains "CMD: --no-mtime при переводе"  "mtime_arg=--no-mtime"  "$cmd_src"
-assert_contains "PS1: --no-mtime при переводе"  '$command += "--no-mtime"'  "$ps1_src"
+# F13. Точный handshake вместо поиска по mtime (все 3). --no-mtime и marker'ы удалены
+# вместе с самим mtime-механизмом: путь сообщает yt-dlp через --print-to-file.
+assert_contains "SH: --print-to-file after_move:filepath"   'after_move:filepath'  "$sh_src"
+assert_contains "CMD: --print-to-file after_move:filepath"  'after_move:filepath'  "$cmd_src"
+assert_contains "PS1: --print-to-file after_move:filepath"  'after_move:filepath'  "$ps1_src"
+assert_not_contains "SH: mtime-поиск удалён"   '--no-mtime'  "$sh_src"
+assert_not_contains "CMD: mtime-поиск удалён"  '--no-mtime'  "$cmd_src"
+assert_not_contains "PS1: mtime-поиск удалён"  '--no-mtime'  "$ps1_src"
 # continue_on_error (SH + PS1)
 assert_contains "SH: continue_on_error → --abort-on-error"  "--abort-on-error"  "$sh_src"
 assert_contains "PS1: continue_on_error → --abort-on-error"  "--abort-on-error"  "$ps1_src"

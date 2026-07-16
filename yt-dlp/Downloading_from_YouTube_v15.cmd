@@ -432,19 +432,19 @@ echo.
 set "deno_arg="
 if exist "%~dp0deno.exe" set "deno_arg=--js-runtimes "deno:%~dp0deno.exe""
 
-rem --no-mtime при переводе: выбор свежескачанного mp4 опирается на mtime.
-set "mtime_arg="
-if not "%translate_lang%"=="" set "mtime_arg=--no-mtime"
-
-:: Marker перед загрузкой — для AI-перевода выбираем mp4, появившийся в ходе
-:: ИМЕННО этой загрузки (LastWriteTime >= marker), а не самый свежий во всей папке.
-set "_dl_marker="
+rem F13. Точный handshake вместо поиска по mtime: yt-dlp сам сообщает финальный путь
+rem каждого готового файла (after_move — уже после post-processor'ов и move).
+rem --print-to-file пишет в наш per-process файл, не смешиваясь с прогрессом в консоли.
+rem Без этого перевод искал «самый свежий файл в дереве» и мог утащить чужую загрузку.
+set "_dl_manifest="
+set "manifest_arg="
 if not "%translate_lang%"=="" (
-    set "_dl_marker=%TEMP%\ytdlp_marker_%random%.tmp"
-    echo.>"!_dl_marker!"
+    set "_dl_manifest=%TEMP%\ytdlp_manifest_%random%.txt"
+    break>"!_dl_manifest!"
+    set "manifest_arg=--print-to-file "after_move:filepath" "!_dl_manifest!""
 )
 
-"!dlp!" !cookie_arg! !deno_arg! !mtime_arg! !audiofmt_arg! !sb_arg! !subsvid_arg! !archive_arg! !embed_arg! --retries 10 --fragment-retries 10 --file-access-retries 5 --socket-timeout 30 --concurrent-fragments 4 -c -i -w --windows-filenames --compat-options filename-sanitization -o "!folder!\%file_tpl%" %save_settings%%sections_arg% "!url!"
+"!dlp!" !cookie_arg! !deno_arg! !manifest_arg! !audiofmt_arg! !sb_arg! !subsvid_arg! !archive_arg! !embed_arg! --retries 10 --fragment-retries 10 --file-access-retries 5 --socket-timeout 30 --concurrent-fragments 4 -c -i -w --windows-filenames --compat-options filename-sanitization -o "!folder!\%file_tpl%" %save_settings%%sections_arg% "!url!"
 
 set "dl_errorlevel=%errorlevel%"
 if %dl_errorlevel%==0 (
@@ -507,12 +507,19 @@ if not "%translate_lang%"=="" (
             goto :skip_translate
         )
 
-        :: Найти скачанный mp3 и самый свежий mp4.
-        :: `for /r ... do set` брал последний по обходу каталога, а не свежескачанный;
-        :: выбираем по дате через PowerShell (паритет с .ps1, глобальная сортировка).
+        :: F13. Источник пути — манифест самого yt-dlp (--print-to-file after_move:filepath),
+        :: а не «самый свежий файл в дереве»: тот мог принадлежать параллельному процессу.
+        :: Берём первую строку-медиаконтейнер; манифест может содержать и sidecar-субтитры.
         for %%f in ("!temp_dir!\*.mp3") do set "trans_file=%%f"
         set "video_file="
-        for /f "delims=" %%f in ('powershell -NoProfile -Command "$m=(Get-Item -LiteralPath '!_dl_marker!' -ErrorAction SilentlyContinue).LastWriteTime; Get-ChildItem -LiteralPath '!folder!' -Recurse -File ^| Where-Object {$_.Extension -in '.mp4','.mkv','.webm' -and (-not $m -or $_.LastWriteTime -ge $m)} ^| Sort-Object LastWriteTime -Descending ^| Select-Object -First 1 -ExpandProperty FullName" 2^>nul') do set "video_file=%%f"
+        if defined _dl_manifest for /f "usebackq delims=" %%f in ("!_dl_manifest!") do (
+            if not defined video_file for %%E in ("%%f") do (
+                if /i "%%~xE"==".mp4" set "video_file=%%f"
+                if /i "%%~xE"==".mkv" set "video_file=%%f"
+                if /i "%%~xE"==".webm" set "video_file=%%f"
+            )
+        )
+        if defined video_file if not exist "!video_file!" set "video_file="
 
         if defined trans_file if defined video_file (
             echo Объединение аудиодорожек ^(режим: %translate_mode%^)...
@@ -551,7 +558,7 @@ if not "%translate_lang%"=="" (
     )
 )
 :skip_translate
-if defined _dl_marker del "!_dl_marker!" 2>nul
+if defined _dl_manifest del "!_dl_manifest!" 2>nul
 
 :: ── Результат ────────────────────────────────────────────────────────────
 echo.

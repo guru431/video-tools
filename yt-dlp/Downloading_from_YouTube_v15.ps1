@@ -1006,8 +1006,16 @@ $btnStart.Add_Click({
             # continue_on_error: true → -i (пропускать ошибки), false → --abort-on-error.
             $errFlag = if ($cfg_continueOnErr -eq "false") { "--abort-on-error" } else { "-i" }
             $command = @("-c", $errFlag, "-w", "--windows-filenames", "--compat-options", "filename-sanitization", "--retries", "10", "--fragment-retries", "10", "--file-access-retries", "5", "--socket-timeout", "30", "--concurrent-fragments", "4")
-            # --no-mtime при переводе: выбор свежескачанного файла опирается на mtime.
-            if ($chkTranslate.Checked) { $command += "--no-mtime" }
+            # F13. Точный handshake вместо поиска по mtime: yt-dlp сам сообщает финальный
+            # путь каждого готового файла (after_move — уже после post-processor'ов и move).
+            # --print-to-file пишет в наш per-process файл, не смешиваясь с прогрессом.
+            # Без этого перевод искал «самый свежий файл в дереве» и мог утащить чужую загрузку.
+            $dlManifest = $null
+            if ($chkTranslate.Checked) {
+                $dlManifest = Join-Path ([System.IO.Path]::GetTempPath()) ("ytdlp_manifest_{0}.txt" -f [System.Guid]::NewGuid().ToString('N'))
+                Set-Content -LiteralPath $dlManifest -Value $null -Encoding UTF8
+                $command += "--print-to-file", "after_move:filepath", $dlManifest
+            }
             # Архив добавляется ниже — только для реальных загрузок (qi 0..6), НЕ для
             # режима «только субтитры» (qi 7/8): архив хранит ID видео, а не наличие
             # субтитров, иначе субтитры молча пропускаются (F3, паритет с CMD).
@@ -1135,11 +1143,6 @@ $btnStart.Add_Click({
             $cmdLine = Join-WinArgs $command
             $textCommand.Text = "$dlp $cmdLine"
             Append-Output "Команда: $dlp $cmdLine" ([System.Drawing.Color]::DimGray)
-
-            # Метка времени перед загрузкой — для AI-перевода выбираем mp4, появившийся
-            # в ходе ИМЕННО этой загрузки, а не самый свежий во всей папке (очередь,
-            # параллельные внешние загрузки могли бы подсунуть чужой файл).
-            $dlStartTime = Get-Date
 
             # Запуск процесса
             $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -1319,10 +1322,18 @@ $btnStart.Add_Click({
                         $transFile = Get-ChildItem -Path $tempDir -Filter "*.mp3" -File | Select-Object -First 1
 
                         if ($transFile) {
-                            # Ищем mp4/mkv/webm (yt-dlp для не-YouTube/fallback-пресетов отдаёт не только mp4).
-                            $latestVideo = Get-ChildItem -Path $folder -Recurse -File |
-                                Where-Object { $_.Extension -in @('.mp4','.mkv','.webm') -and $_.LastWriteTime -ge $dlStartTime } |
-                                Sort-Object LastWriteTime -Descending | Select-Object -First 1
+                            # F13. Источник пути — манифест самого yt-dlp, а не «самый свежий
+                            # файл в дереве»: тот мог принадлежать параллельному процессу.
+                            # Манифест может содержать и не-медиа результаты (sidecar-субтитры).
+                            $latestVideo = $null
+                            if ($dlManifest -and (Test-Path -LiteralPath $dlManifest)) {
+                                $reported = @(Get-Content -LiteralPath $dlManifest -ErrorAction SilentlyContinue |
+                                    Where-Object { $_ -and ([System.IO.Path]::GetExtension($_) -in @('.mp4','.mkv','.webm')) } |
+                                    Select-Object -Unique)
+                                foreach ($p in $reported) {
+                                    if (Test-Path -LiteralPath $p) { $latestVideo = Get-Item -LiteralPath $p; break }
+                                }
+                            }
                             if ($latestVideo) {
                                 # Сохраняем исходное расширение: -c:v copy VP9/AV1 в mp4 может упасть.
                                 $outputFile = $latestVideo.FullName -replace ([regex]::Escape($latestVideo.Extension) + '$'), ('_translated' + $latestVideo.Extension)
@@ -1359,7 +1370,9 @@ $btnStart.Add_Click({
                                     Append-Output "Ошибка мержа аудиодорожек — оригинал сохранён" ([System.Drawing.Color]::Red)
                                 }
                             } else {
-                                Append-Output "Видео для мержа не найдено — перевод пропущен" ([System.Drawing.Color]::Yellow)
+                                # F14. Запрошенный перевод без результата — ошибка, а не заметка:
+                                # иначе GUI отрапортует общий успех, ничего не переведя.
+                                Append-Output "Ошибка: yt-dlp не сообщил ни одного медиафайла — переводить нечего" ([System.Drawing.Color]::Red)
                             }
                         } else {
                             Append-Output "Не удалось получить перевод" ([System.Drawing.Color]::Yellow)
@@ -1367,6 +1380,7 @@ $btnStart.Add_Click({
                         Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
                     }
                 }
+                if ($dlManifest) { Remove-Item -LiteralPath $dlManifest -Force -ErrorAction SilentlyContinue }
             } elseif ($global:processRunning) {
                 $failCount++
                 Append-Output "Ошибка: [$platform]  $currentUrl" ([System.Drawing.Color]::Red)

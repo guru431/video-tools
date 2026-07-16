@@ -132,10 +132,13 @@ check_base_deps() {
 check_translate_deps() {
     local missing=0
     check_dependency "ffmpeg" "Установите: https://ffmpeg.org/download.html" || missing=1
-    # Ищем vot-cli-live рядом со скриптом, потом в PATH
+    # Бинарь vot: env-override (для тестов) → рядом со скриптом → из PATH.
+    # Паритет с резолвером YTDLP_BIN; без override тесты уходили в реальную сеть.
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    if [ -x "$script_dir/vot-cli-live" ] || [ -f "$script_dir/vot-cli-live.exe" ]; then
+    if [ -n "${VOT_BIN:-}" ]; then
+        :
+    elif [ -x "$script_dir/vot-cli-live" ] || [ -f "$script_dir/vot-cli-live.exe" ]; then
         VOT_BIN="$script_dir/vot-cli-live"
         [ -f "$script_dir/vot-cli-live.exe" ] && VOT_BIN="$script_dir/vot-cli-live.exe"
     elif command -v vot-cli-live &>/dev/null; then
@@ -335,9 +338,11 @@ download_url() {
         cmd+=(--js-runtimes "deno:$script_dir/deno.exe")
     fi
 
-    # --no-mtime при переводе: выбор свежескачанного файла опирается на mtime, а
-    # старые yt-dlp ставили mtime в прошлое (дату публикации) → -newer не находил файл.
-    [ "${TRANSLATE_ENABLED:-false}" = "true" ] && cmd+=(--no-mtime)
+    # F13. Точный handshake вместо поиска по mtime: yt-dlp сам сообщает финальный путь
+    # каждого готового файла (after_move — уже после всех post-processor'ов и move).
+    # --print-to-file пишет в наш per-process файл, не смешиваясь с прогрессом в stdout.
+    # Без этого перевод искал «самый свежий файл в дереве» и мог утащить чужую загрузку.
+    [ -n "${DL_MANIFEST:-}" ] && cmd+=(--print-to-file "after_move:filepath" "$DL_MANIFEST")
 
     # Прокси через переменную окружения — пароль не виден в ps aux
     local -a env_prefix=()
@@ -924,40 +929,52 @@ main() {
             archive_path="${BASE_DIR}/${ARCHIVE_FILE}"
         fi
 
-        # Marker для надёжного поиска свежескачанных файлов через -newer:
-        # сравнение с $0 (mtime скрипта) ломалось при недавней модификации скрипта.
-        local dl_marker
-        dl_marker=$(mktemp 2>/dev/null) || dl_marker="/tmp/ytdlp_marker_$$"
-        : > "$dl_marker"
-        # Backdate 1s: -newer is strict '>' on mtime; on 1-second-granularity
-        # filesystems a file written in the marker's whole second would be missed.
-        # touch -d '1 second ago' — GNU coreutils; на macOS/BSD тихо no-op (edge с
-        # точностью mtime 1 сек там не покрывается, но загрузка/перевод работают).
-        touch -d '1 second ago' "$dl_marker" 2>/dev/null || true
+        # F13. Манифест точных путей от самого yt-dlp (--print-to-file after_move:filepath).
+        # Заполняется только при переводе — единственном потребителе; per-process файл,
+        # поэтому параллельный запуск не может подсунуть сюда свой результат.
+        local dl_manifest=""
+        if [ "$TRANSLATE_ENABLED" = "true" ] && [ "$SUBS_ONLY" != "true" ]; then
+            dl_manifest=$(mktemp 2>/dev/null) || dl_manifest="/tmp/ytdlp_manifest_$$"
+            : > "$dl_manifest"
+        fi
 
-        download_url "$URL" "$template" "$QUALITY" "$SUBS_ONLY" "$archive_path" \
+        DL_MANIFEST="$dl_manifest" download_url "$URL" "$template" "$QUALITY" "$SUBS_ONLY" "$archive_path" \
             "$TRIM_START_ON" "$TRIM_START_VAL" "$TRIM_END_ON" "$TRIM_END_VAL" "$FORCE_KEYFRAMES"
         local dl_rc=$?
 
         # AI-перевод — отдельная задача на КАЖДЫЙ созданный медиафайл, а не только на
         # самый свежий; исход учитывается в COUNT_FAIL (F2). Плейлисты/batch/audio уже
         # отсеяны guardrail'ом выше, так что здесь обычно ровно один файл.
+        # F13. Источник путей — манифест самого yt-dlp, а не «свежие файлы в дереве».
         if [ "$dl_rc" -eq 0 ] && [ "$TRANSLATE_ENABLED" = "true" ] && [ "$SUBS_ONLY" != "true" ]; then
             local _tr_found=0
             while IFS= read -r media; do
                 [ -z "$media" ] && continue
+                # Манифест может содержать промежуточные не-медиа результаты (например
+                # sidecar-субтитры) — переводим только видеоконтейнеры.
+                case "${media##*.}" in
+                    mp4|mkv|webm) ;;
+                    *) continue ;;
+                esac
+                if [ ! -f "$media" ]; then
+                    log_warn "AI-перевод: yt-dlp сообщил путь, которого нет: $media"
+                    continue
+                fi
                 _tr_found=1
                 if ! translate_audio "$media" "$URL" "$TRANSLATE_LANG" "$TRANSLATE_VOICE" \
                         "$TRANSLATE_MODE" "$TRANSLATE_ORIG_LANG" \
                         "$TRANSLATE_ORIG_VOL" "$TRANSLATE_TRANS_VOL" "$PROXY_URL"; then
                     COUNT_FAIL=$((COUNT_FAIL + 1))
                 fi
-            done < <(find "$BASE_DIR" \( -name '*.mp4' -o -name '*.mkv' -o -name '*.webm' \) -newer "$dl_marker" -type f 2>/dev/null | sort)
+            done < <(sort -u "$dl_manifest" 2>/dev/null)
             if [ "$_tr_found" -eq 0 ]; then
-                log_warn "AI-перевод: не найден скачанный медиафайл для перевода."
+                # F14. Запрошенный перевод без результата — это провал, а не предупреждение:
+                # иначе скрипт рапортует общий успех, не переведя ничего.
+                log_error "AI-перевод: yt-dlp не сообщил ни одного медиафайла — переводить нечего."
+                COUNT_FAIL=$((COUNT_FAIL + 1))
             fi
         fi
-        rm -f "$dl_marker" 2>/dev/null
+        [ -n "$dl_manifest" ] && rm -f "$dl_manifest" 2>/dev/null
     else
         log_error "Укажите URL или используйте --batch"
         echo ""

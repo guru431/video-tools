@@ -5,6 +5,8 @@
 # Переменные окружения:
 #   MOCK_YTDLP_LOG=  — путь к файлу лога (по умолчанию /tmp/mock_ytdlp_calls.txt)
 #   MOCK_YTDLP_FAIL=1 — вернуть exit code 1
+#   MOCK_YTDLP_OUTFILE= — путь(и) «скачанных» файлов через '|'. Мок создаёт их и
+#                         сообщает через --print-to-file (эмуляция after_move:filepath).
 # ============================================================
 
 LOG_FILE="${MOCK_YTDLP_LOG:-/tmp/mock_ytdlp_calls.txt}"
@@ -18,8 +20,31 @@ if [[ "$*" == *"--version"* ]]; then
     exit 0
 fi
 
+# --print-to-file TEMPLATE FILE — реальный yt-dlp пишет сюда путь каждого готового
+# файла. Мок повторяет контракт: создаёт MOCK_YTDLP_OUTFILE и рапортует их пути.
+print_to_file=""
+args=("$@")
+for ((i=0; i<${#args[@]}; i++)); do
+    if [ "${args[$i]}" = "--print-to-file" ]; then
+        # Опция принимает два значения: TEMPLATE и FILE — нужен второй.
+        print_to_file="${args[$((i+2))]:-}"
+        break
+    fi
+done
+
 # Имитация успешного скачивания
 echo "[download] Simulated download complete (mock yt-dlp)"
 
 [ "$FAIL" = "1" ] && exit 1
+
+if [ -n "${MOCK_YTDLP_OUTFILE:-}" ]; then
+    IFS='|' read -ra _outs <<< "$MOCK_YTDLP_OUTFILE"
+    for _o in "${_outs[@]}"; do
+        [ -z "$_o" ] && continue
+        mkdir -p "$(dirname "$_o")" 2>/dev/null
+        : > "$_o"
+        [ -n "$print_to_file" ] && echo "$_o" >> "$print_to_file"
+    done
+fi
+
 exit 0

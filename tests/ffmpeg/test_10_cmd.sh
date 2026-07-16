@@ -271,36 +271,26 @@ assert_contains "config: video quality = +28 → :+:28"                ":+:28"  
 suite "CMD: atempo каскад (milli-арифметика, без float)"
 # ══════════════════════════════════════════════════════════════
 
-# Воспроизводит логику :build_atempo из FFmpeg_Converter_script.cmd
+# Вызывает НАСТОЯЩУЮ подпрограмму :build_atempo, вырезанную из production-файла.
+# Раньше здесь лежала инлайн-копия: продакшн мог сломаться, а копия — продолжать
+# проходить. Отсутствие подпрограммы в исходнике теперь тоже провал, а не тихий скип.
+CMD_SCRIPT="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.cmd"
+BUILD_ATEMPO_SRC=$(sed -n '/^:build_atempo/,/^exit \/b 0/p' "$CMD_SCRIPT" | tr -d '\r')
+if [ -z "$BUILD_ATEMPO_SRC" ]; then
+    fail "CMD: подпрограмма :build_atempo найдена в production-файле" "найдена" "не найдена"
+fi
+
+# CRLF обязателен: с LF-переносами CMD десинхронизирует парсер на кириллических
+# rem-комментариях подпрограммы и `goto :_bt_hi` перестаёт быть меткой.
 atempo_cmd() {
-    run_cmd "
-set \"_spd=$1\"
-for /f \"tokens=1,2 delims=.\" %%a in (\"%_spd%\") do (set \"_bi=%%a\" & set \"_bf=%%b\")
-if not defined _bf set \"_bf=0\"
-set \"_bf3=!_bf!000\"
-set \"_bf3=!_bf3:~0,3!\"
-set /a \"_bmilli=_bi*1000 + (1!_bf3! - 1000)\"
-set \"af_chain=\"
-set /a \"_brem=_bmilli\"
-:_bt_hi
-if !_brem! gtr 2000 (
-	if defined af_chain (set \"af_chain=!af_chain!,atempo=2.0\") else (set \"af_chain=atempo=2.0\")
-	set /a \"_brem=_brem/2\"
-	goto :_bt_hi
-)
-:_bt_lo
-if !_brem! lss 500 (
-	if defined af_chain (set \"af_chain=!af_chain!,atempo=0.5\") else (set \"af_chain=atempo=0.5\")
-	set /a \"_brem=_brem*2\"
-	goto :_bt_lo
-)
-set /a \"_bri=_brem/1000\"
-set /a \"_brf=_brem %% 1000\"
-set \"_brf3=000!_brf!\"
-set \"_brf3=!_brf3:~-3!\"
-if defined af_chain (set \"af_chain=!af_chain!,atempo=!_bri!.!_brf3!\") else (set \"af_chain=atempo=!_bri!.!_brf3!\")
-echo af=!af_chain!
-"
+    local body
+    body=$(printf '%s\n' \
+        "call :build_atempo \"$1\"" \
+        "if errorlevel 1 (echo af=REJECTED) else (echo af=!af_chain!)" \
+        "goto :done_atempo" \
+        "$BUILD_ATEMPO_SRC" \
+        ":done_atempo" | sed 's/$/\r/')
+    run_cmd "$body"
 }
 
 result=$(atempo_cmd "3.0")
@@ -315,6 +305,13 @@ assert_contains "atempo 0.25 → каскад 0.5x0.5"  "atempo=0.5,atempo=0.5" 
 
 result=$(atempo_cmd "1.5")
 assert_contains "atempo 1.5 (in-range) → atempo=1.5"  "af=atempo=1.5"  "$result"
+
+# F15: невалидная скорость отвергается (errorlevel 1), а не вешает :_bt_hi/:_bt_lo.
+# Без валидации 0 делится в 0, а отрицательное расходится — цикл не сходится никогда.
+for bad in 0 -1 abc 150; do
+    result=$(atempo_cmd "$bad")
+    assert_contains "atempo '$bad' → REJECTED (F15)" "af=REJECTED" "$result"
+done
 
 # ══════════════════════════════════════════════════════════════
 suite "CMD: keep_aspect_ratio else-binding (Task 5)"

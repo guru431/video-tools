@@ -1370,26 +1370,45 @@ $buttonRun.Add_Click({
             $this.Stop()
             $this.Dispose()
 
-            # Проверяем ошибки Runspace
-            try { $global:_guiPS.EndInvoke($global:_guiHandle) | Out-Null } catch {}
+            # F17. Исход собираем из ТРЁХ независимых источников: исключение из
+            # EndInvoke, Error stream и финальный state воркера. Раньше исключение
+            # глушилось пустым catch, а `exit 1` из воркера не создаёт ErrorRecord —
+            # поэтому провальный батч показывался как «Готово».
+            $errParts = @()
+            try { $global:_guiPS.EndInvoke($global:_guiHandle) | Out-Null }
+            catch { $errParts += "Сбой выполнения: $($_.Exception.Message)" }
+
             $rsErrors = $global:_guiPS.Streams.Error
             if ($rsErrors -and $rsErrors.Count -gt 0) {
-                $errMsg = ($rsErrors | ForEach-Object { $_.ToString() }) -join "`n"
-                [System.Windows.Forms.MessageBox]::Show($errMsg, "Ошибка скрипта", "OK", "Error") | Out-Null
-                $labelProgressFile.Text = "Ошибка"
+                $errParts += ($rsErrors | ForEach-Object { $_.ToString() })
             }
 
             # Читаем финальное состояние
+            $state = $null
             try {
                 $json = Get-Content $global:_guiProgress -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
                 if ($json) {
+                    $state = $json.state
                     $progressBarFile.Value  = 100
                     $progressBarTotal.Value = 100
-                    if (-not $labelProgressFile.Text.StartsWith("Ошибка")) { $labelProgressFile.Text = "Готово" }
                     $labelProgressTotal.Text = "Файлов: $($json.fileNum) / $($json.totalFiles)"
                     $labelProgressSummary.Text = "OK: $($json.ok)   Ошибки: $($json.fail)   Пропущено: $($json.skip)"
+                    if ($json.message) { $errParts += [string]$json.message }
                 }
             } catch {}
+
+            # Fail-closed: успех показываем ТОЛЬКО при явном state=success без ошибок.
+            # Воркер, упавший на preflight (`exit 1` до первой записи прогресса),
+            # не оставляет state — молчание не имеет права читаться как «Готово».
+            if ($state -eq "cancelled") {
+                $labelProgressFile.Text = "Отменено"
+            } elseif ($state -eq "success" -and $errParts.Count -eq 0) {
+                $labelProgressFile.Text = "Готово"
+            } else {
+                $labelProgressFile.Text = "Ошибка"
+                if ($errParts.Count -eq 0) { $errParts += "Скрипт завершился без отчёта о результате (state='$state')" }
+                [System.Windows.Forms.MessageBox]::Show(($errParts -join "`n"), "Ошибка скрипта", "OK", "Error") | Out-Null
+            }
 
             # Очистка
             try { Remove-Item $global:_guiProgress -Force -ErrorAction SilentlyContinue } catch {}

@@ -242,6 +242,15 @@ fi
 af_chain=""
 if [ "$playback_speed_status" = "+" ] && [ "$playback_speed_value" != "1.0" ]; then
 	speed="$playback_speed_value"
+	# F15. Предпусковая валидация: каскад ниже делит remaining на 2.0 (или 0.5), поэтому
+	# 0 остаётся нулём, а отрицательное уходит в минус — цикл не сходится и скрипт
+	# зависает молча, ещё до первого файла. Допустим только конечный 0 < speed <= 100
+	# (верхняя граница — предел одного звена atempo).
+	if ! awk "BEGIN {v=($speed)+0; exit !(v > 0 && v <= 100)}" </dev/null 2>/dev/null; then
+		echo -e "\n[ОШИБКА] playback_speed должен быть числом в диапазоне 0 < speed <= 100 (получено: '$speed')\n"
+		read -p "Нажмите [Enter], чтобы выйти..."
+		exit 1
+	fi
 	# atempo поддерживает 0.5-100.0, для значений >2.0 или <0.5 — каскад
 	speed_float=$(awk "BEGIN {print $speed}")
 	if awk "BEGIN {exit !($speed_float > 2.0)}"; then
@@ -363,6 +372,19 @@ human_size() {
 	fi
 }
 
+# --- Канонизация пути для сравнения input/output ---
+# Файл назначения может ещё не существовать, поэтому канонизируем только каталог
+# (он гарантированно создан выше через mkdir -p) и приклеиваем basename.
+canon_path() {
+	local p="$1" d b
+	d="$(dirname "$p")"
+	b="$(basename "$p")"
+	if [ -d "$d" ]; then
+		d="$(cd "$d" 2>/dev/null && pwd -P)" || d="$(dirname "$p")"
+	fi
+	printf '%s/%s' "${d%/}" "$b"
+}
+
 # --- J1. Прогресс-бар в CLI ---
 show_progress_bar() {
 	local pct=$1 label="$2"
@@ -455,6 +477,17 @@ encode_file() {
 	# copy_codecs сохраняет исходный контейнер — расширение выхода берём из источника
 	# ДО проверки существования, иначе ищем .mp4 вместо, например, .avi и не находим готовый файл.
 	if [ "$copy_codecs" = "yes" ]; then current_format_out="${full_path##*.}"; fi
+
+	# F12. Выход не имеет права совпасть со входом. Проверка стоит ДО всего остального:
+	# ниже готовый выход при провале ffprobe-валидации удаляется как «битый», а при
+	# in==out этим «битым файлом» оказался бы сам оригинал — ещё до кодирования.
+	# Разделения на части (pref) коллизию снимают, поэтому сверяем базовое имя.
+	if [ "$(canon_path "${folder_destination}${file_path}${file_name}.${current_format_out}")" = "$(canon_path "$full_path")" ]; then
+		log_msg "FAIL" "$(basename "$full_path"): выход совпадает с входом — файл пропущен (задайте другой destination, префикс или формат)"
+		echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+		return
+	fi
+
 	# F7. overwrite_existing=yes → готовый файл не считаем финальным и перекодируем с
 	# новыми настройками (ffmpeg -y перезапишет). Иначе валидный файл пропускается.
 	if [ "$overwrite_existing" != "yes" ]; then
@@ -539,43 +572,56 @@ encode_file() {
 			done <<< "$search_silence"
 		fi
 
-		# length_silent[i] хранит длительность i-го куска (для split_by_silence).
+		# F16. Сначала строим МОНОТОННЫЙ массив границ, и только потом считаем длительности
+		# как разность соседних границ. Раньше длина i-й части бралась как
+		# length_coding_value-(part_start-new_part_start) — то есть в предположении, что
+		# СЛЕДУЮЩАЯ граница осталась на номинальном месте. Но она тоже сдвигалась к своей
+		# тишине → между частями появлялись зазоры и перекрытия.
+		# length_silent[i] хранит длительность i-го куска; "END" = «до конца файла».
 		# Локальный массив вместо eval-генерированных глобалов length_coding_value_silent${i} —
 		# при экспорте функции для xargs они не дублируются и не пересекаются между файлами.
 		local -a num=()
 		local -a length_silent=()
-		for ((i=0; i<=999; i++)); do
-			local lcv=$((length_coding_value + length_coding_value * (i - 1)))
-			if (( i == 0 )); then lcv=0; fi
-			if ((duration > lcv)); then
-				local part_start=$lcv
-				if [ "$split_by_silence" = "yes" ] && [ ${#split_points[@]} -gt 0 ]; then
-					local best_point=$part_start
-					local best_diff=999999
-					for p in "${split_points[@]}"; do
-						local d=$((p - part_start))
-						if (( d < 0 )); then d=$(( -d )); fi
-						if (( d < best_diff )); then
-							best_diff=$d
-							best_point=$p
-						fi
-					done
-					local half_length=$((length_coding_value/2))
-					local new_part_start
-					if (( best_diff <= half_length )); then
-						new_part_start=$best_point
-					else
-						new_part_start=$part_start
+		local max_parts=1000
+		local i
+		for ((i=0; i<max_parts; i++)); do
+			local nominal=$((length_coding_value * i))
+			if ((duration <= nominal)); then break; fi
+			local bnd=$nominal
+			# i==0 — начало файла: притягивать его к тишине нельзя, иначе начало срезается.
+			if (( i > 0 )) && [ "$split_by_silence" = "yes" ] && [ ${#split_points[@]} -gt 0 ]; then
+				local best_point=$nominal
+				local best_diff=999999
+				for p in "${split_points[@]}"; do
+					local d=$((p - nominal))
+					if (( d < 0 )); then d=$(( -d )); fi
+					if (( d < best_diff )); then
+						best_diff=$d
+						best_point=$p
 					fi
-					num+=("$new_part_start")
-					length_silent[$i]=$((length_coding_value-(part_start-new_part_start)))
-				else
-					num+=("$part_start")
-				fi
-			else
-				break
+				done
+				if (( best_diff <= length_coding_value/2 )); then bnd=$best_point; fi
 			fi
+			# Монотонность: граница обязана строго расти, иначе получим part нулевой или
+			# отрицательной длины (две номинальные точки могли притянуться к одной тишине).
+			if (( i > 0 )) && (( bnd <= num[i-1] )); then bnd=$nominal; fi
+			if (( i > 0 )) && (( bnd <= num[i-1] )); then break; fi
+			num+=("$bnd")
 		done
+		if (( i >= max_parts )); then
+			log_msg "WARN" "Достигнут предел $max_parts частей — хвост файла не обработан: $(basename "$full_path")"
+		fi
+		# Длительности = разности соседних границ. Последняя часть идёт ДО КОНЦА файла:
+		# фиксированный -t обрезал бы хвост, если граница сдвинулась к тишине назад.
+		if [ "$split_by_silence" = "yes" ] && [ ${#num[@]} -gt 0 ]; then
+			for ((i=0; i<${#num[@]}; i++)); do
+				if (( i+1 < ${#num[@]} )); then
+					length_silent[$i]=$(( num[i+1] - num[i] ))
+				else
+					length_silent[$i]="END"
+				fi
+			done
+		fi
 	else
 		local -a num=(0)
 	fi
@@ -603,7 +649,10 @@ encode_file() {
 		local current_set_length="$set_length_coding"
 		if [ "$split_by_silence" = "yes" ] && [ "$length_coding_status" = "+" ]; then
 			local silent_idx=$((c-1))
-			if [ -n "${length_silent[$silent_idx]:-}" ]; then
+			# F16. "END" — последняя часть: -t не ставим вообще, иначе хвост обрезается.
+			if [ "${length_silent[$silent_idx]:-}" = "END" ]; then
+				current_set_length=""
+			elif [ -n "${length_silent[$silent_idx]:-}" ]; then
 				current_set_length="-t ${length_silent[$silent_idx]}"
 			fi
 		fi

@@ -136,6 +136,112 @@ run_capture 'video_subtitles=":+:meta"' 'output_container=":+:webm"' 'video_code
 if log_has "-c:s webvtt"; then pass "meta webm → -c:s webvtt"; else fail "meta webm → -c:s webvtt" "-c:s webvtt" "нет"; fi
 rm -f "$IN/g.mp4" "$IN/g.srt" "$DST/g.mkv" "$DST/g.mp4" "$DST/g.webm"
 
+# ══════════════════════════════════════════════════════════════
+suite "F12: выход не может совпасть со входом (оригинал не удаляется)"
+# ══════════════════════════════════════════════════════════════
+
+# source == destination, тот же контейнер, без префикса → out_file == full_path.
+# MOCK_FFMPEG_INVALID заставляет валидацию существующего выхода провалиться: без F12
+# ветка «удаление битого файла» стёрла бы оригинал ещё до кодирования.
+printf 'ORIGINAL-BYTES' > "$IN/same.mp4"
+run_capture 'folder_destination="$IN"' 'output_container=":+:mp4"' 'overwrite_existing="yes"'
+if [ -f "$IN/same.mp4" ]; then pass "in==out + overwrite=yes: оригинал не удалён"; else fail "in==out + overwrite=yes: оригинал не удалён" "файл на месте" "удалён"; fi
+assert_contains "in==out + overwrite=yes: помечен как FAIL" "выход совпадает с входом" "$OUT_TEXT"
+
+run_capture 'folder_destination="$IN"' 'output_container=":+:mp4"'
+assert_contains "in==out: файл помечен как FAIL" "выход совпадает с входом" "$OUT_TEXT"
+if log_has "-c:v libx264"; then fail "in==out: ffmpeg не запускается" "нет encode" "запущено"; else pass "in==out: ffmpeg не запускается"; fi
+if [ -f "$IN/same.mp4" ]; then pass "in==out: оригинал не удалён"; else fail "in==out: оригинал не удалён" "файл на месте" "удалён"; fi
+assert_eq "in==out: содержимое оригинала не тронуто" "ORIGINAL-BYTES" "$(cat "$IN/same.mp4" 2>/dev/null)"
+
+# Смена контейнера снимает коллизию — та же папка, но другое расширение.
+run_capture 'folder_destination="$IN"' 'output_container=":+:mkv"'
+if log_has "-c:v libx264"; then pass "in!=out (другой контейнер): кодирование идёт"; else fail "in!=out (другой контейнер): кодирование идёт" "encode" "нет"; fi
+rm -f "$IN/same.mp4" "$IN/same.mkv"
+
+# ══════════════════════════════════════════════════════════════
+suite "F15: невалидная playback_speed отвергается, а не вешает каскад"
+# ══════════════════════════════════════════════════════════════
+touch "$IN/spd.mp4"
+
+# Каждый прогон под timeout: суть бага — бесконечный цикл, поэтому «не завис» это
+# часть проверки. Без фикса run_capture здесь не возвращался бы никогда.
+run_speed() {
+    local val="$1"
+    OUT_TEXT=$(
+        export PATH="$MOCKS_DIR:$PATH"; export MOCK_FFMPEG_ENCODERS=""; export MOCK_FFMPEG_LOG="$FFMPEG_LOG"
+        # set -a: скрипт запускается подпроцессом (иначе timeout не поймает зависание),
+        # поэтому конфиг должен уехать в окружение.
+        set -a; default_vars; playback_speed=":+:$val"; set +a
+        timeout 15 bash "$SCRIPT" 2>&1
+    ) < /dev/null
+    RC=$?
+}
+
+for bad in 0 -1 -2.5 abc 0.0 150; do
+    run_speed "$bad"
+    if [ "$RC" -eq 124 ]; then
+        fail "speed='$bad': не зависает" "завершение" "таймаут 15с (бесконечный цикл)"
+    else
+        pass "speed='$bad': не зависает"
+    fi
+    assert_contains "speed='$bad': явная ошибка диапазона" "playback_speed должен быть числом" "$OUT_TEXT"
+done
+
+# Валидные значения по-прежнему строят каскад.
+run_speed "3.0"
+assert_not_contains "speed='3.0': принято" "playback_speed должен быть числом" "$OUT_TEXT"
+run_speed "0.25"
+assert_not_contains "speed='0.25': принято" "playback_speed должен быть числом" "$OUT_TEXT"
+rm -f "$IN/spd.mp4" "$DST/spd.mp4"
+
+# ══════════════════════════════════════════════════════════════
+suite "F16: split по тишине — границы монотонны, без зазоров и потери хвоста"
+# ══════════════════════════════════════════════════════════════
+# Файл 120с, шаг 30с → номинальные границы 0/30/60/90.
+# Тишины: 28-32 (центр 30, сдвига нет), 55-59 (центр 57 → 60 уезжает назад),
+# 94-98 (центр 96 → 90 уезжает вперёд). Итоговые границы: 0/30/57/96.
+# Длительности как разности: 30, 27, 39, и последняя — до конца файла.
+# Старый код считал длину от НОМИНАЛЬНОЙ следующей границы: part2 получал -t 30
+# (перекрытие 3с с part3), part3 получал -t 27 и обрывался на 84с — 12 секунд
+# исходника между 84 и 96 не попадали НИ В ОДНУ часть.
+touch "$IN/split.mp4"
+OUT_TEXT=$(
+    export PATH="$MOCKS_DIR:$PATH"; export MOCK_FFMPEG_ENCODERS=""; export MOCK_FFMPEG_LOG="$FFMPEG_LOG"
+    export MOCK_FFMPEG_DURATION="00:02:00.00"
+    export MOCK_FFMPEG_SILENCE="28:32 55:59 94:98"
+    rm -f "$FFMPEG_LOG"
+    default_vars
+    length_coding=":+:00-00-30"; split_by_silence="yes"
+    source "$SCRIPT" 2>&1
+) < /dev/null
+
+# Берём только строки кодирования (в логе есть и вызовы -i для probe/silencedetect).
+ENC_LINES=$(grep -F -- "-c:v libx264" "$FFMPEG_LOG" 2>/dev/null)
+
+assert_contains "part.1: стартует с 0 (начало не срезано)"  "(part.1)"      "$ENC_LINES"
+assert_contains "part.2: -ss 30"                            "-ss 30"        "$ENC_LINES"
+assert_contains "part.3: -ss 57 (граница сдвинута к тишине)" "-ss 57"       "$ENC_LINES"
+assert_contains "part.4: -ss 96 (граница сдвинута к тишине)" "-ss 96"       "$ENC_LINES"
+
+# Длительности — разности соседних границ, а не номинальные 30.
+assert_contains "part.2: -t 27 = 57-30 (нет перекрытия)"    "-t 27"         "$ENC_LINES"
+assert_contains "part.3: -t 39 = 96-57 (нет 12с зазора)"     "-t 39"        "$ENC_LINES"
+if [ "$(grep -cF -- "-t 30" <<< "$ENC_LINES")" -le 1 ]; then
+    pass "номинальные -t 30 не применяются к сдвинутым частям"
+else
+    fail "номинальные -t 30 не применяются к сдвинутым частям" "не более одной части с -t 30" "$(grep -cF -- "-t 30" <<< "$ENC_LINES")"
+fi
+
+# Последняя часть идёт до конца файла: -t обрезал бы хвост.
+LAST_LINE=$(grep -F -- "(part.4)" <<< "$ENC_LINES" | head -1)
+if grep -qE -- "-t [0-9]" <<< "$LAST_LINE"; then
+    fail "последняя часть без -t (хвост не обрезан)" "нет -t" "$LAST_LINE"
+else
+    pass "последняя часть без -t (хвост не обрезан)"
+fi
+rm -f "$IN/split.mp4" "$DST"/split*.mp4
+
 # ── Cleanup ───────────────────────────────────────────────────
 rm -rf "$WORK"
 

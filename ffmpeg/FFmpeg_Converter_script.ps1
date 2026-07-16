@@ -238,7 +238,22 @@ if ($audio_only -eq "yes") {
 # D6. Скорость воспроизведения (аудио)
 $af_parts = @()
 if ($playback_speed_status -eq "+" -and $playback_speed_value -ne "1.0") {
-	$speed = [double]$playback_speed_value
+	# F15. Предпусковая валидация: каскад ниже делит remaining на 2.0 (или 0.5), поэтому
+	# 0 остаётся нулём, а отрицательное уходит в минус — цикл не сходится и скрипт
+	# зависает молча, ещё до первого файла. Допустим только конечный 0 < speed <= 100
+	# (верхняя граница — предел одного звена atempo).
+	$speed = 0.0
+	$_speedOk = [double]::TryParse(
+		$playback_speed_value,
+		[System.Globalization.NumberStyles]::Float,
+		[System.Globalization.CultureInfo]::InvariantCulture,
+		[ref]$speed)
+	if (-not $_speedOk -or [double]::IsNaN($speed) -or [double]::IsInfinity($speed) -or $speed -le 0 -or $speed -gt 100) {
+		Write-Host ""
+		Write-Host "[ОШИБКА] playback_speed должен быть числом в диапазоне 0 < speed <= 100 (получено: '$playback_speed_value')"
+		Write-Host ""
+		exit 1
+	}
 	if ($speed -gt 2.0) {
 		$remaining = $speed
 		while ($remaining -gt 2.0) {
@@ -316,6 +331,13 @@ $script:totalInBytes  = 0
 $script:totalOutBytes = 0
 $script:startTimeAll  = Get-Date
 
+# --- Канонизация пути для сравнения input/output ---
+# GetFullPath разворачивает '..' и приводит разделители; файл существовать не обязан.
+function Get-CanonPath {
+	param([string]$Path)
+	try { return [System.IO.Path]::GetFullPath($Path) } catch { return $Path }
+}
+
 # --- D8. Логирование ---
 function Log-Msg {
 	param([string]$Level, [string]$Msg)
@@ -329,11 +351,19 @@ function Log-Msg {
 
 # --- Запись GUI-прогресса ---
 function Write-GUIProgress {
-	param([int]$FilePercent = 0, [string]$CurrentFile = "", [string]$Command = "")
+	# F17. state/exitCode/message — контракт с GUI. Раньше воркер писал финальное
+	# «Готово» независимо от countFail, а `exit 1` не создаёт ErrorRecord, поэтому GUI
+	# не мог отличить успешный батч от провального и показывал «Готово» после ошибок.
+	param([int]$FilePercent = 0, [string]$CurrentFile = "", [string]$Command = "",
+	      [ValidateSet("running","success","failed","cancelled")][string]$State = "running",
+	      [int]$ExitCode = -1, [string]$Message = "")
 	if (-not $guiProgressFile) { return }
 	if ($Command) { $script:_lastCommand = $Command }
 	$totalPct = if ($script:totalFiles -gt 0) { [int](($script:fileNum - 1 + $FilePercent / 100) * 100 / $script:totalFiles) } else { 0 }
 	$data = [ordered]@{
+		state        = $State
+		exitCode     = $ExitCode
+		message      = $Message
 		filePercent  = $FilePercent
 		totalPercent = $totalPct
 		fileNum      = $script:fileNum
@@ -451,6 +481,17 @@ function Encode-File {
 	if ($copy_codecs -eq "yes") { $current_format_out = $file.Extension.TrimStart('.') }
 	$out_base = "$folder_destination$file_path$file_name"
 
+	# F12. Выход не имеет права совпасть со входом. Проверка стоит ДО всего остального:
+	# ниже готовый выход при провале валидации удаляется как «битый», а при in==out
+	# этим «битым файлом» оказался бы сам оригинал — ещё до кодирования.
+	# Разделения на части (part.N) коллизию снимают, поэтому сверяем базовое имя.
+	if ((Get-CanonPath "$out_base.$current_format_out") -ieq (Get-CanonPath $full_path)) {
+		Log-Msg "FAIL" "$($file.Name): выход совпадает с входом — файл пропущен (задайте другой destination, префикс или формат)"
+		$script:countFail++
+		Write-GUIProgress -CurrentFile $file.Name
+		return
+	}
+
 	# E3. Проверка валидности существующего файла
 	# Судим по exit code (как SH/CMD), а не по тексту stderr: ffmpeg с -v error может
 	# вывести не-фатальную диагностику для полностью декодируемого файла — тогда
@@ -537,30 +578,47 @@ function Encode-File {
 			}
 		}
 
+		# F16. Сначала строим МОНОТОННЫЙ массив границ, и только потом считаем длительности
+		# как разность соседних границ. Раньше длина i-й части бралась как
+		# length_coding_value-(part_start-new_part_start) — то есть в предположении, что
+		# СЛЕДУЮЩАЯ граница осталась на номинальном месте. Но она тоже сдвигалась к своей
+		# тишине → между частями появлялись зазоры и перекрытия.
 		$num = @()
-		$length_values = @{}
 		$length_silent_values = @{}
-		for ($i = 0; $i -le 999; $i++) {
-			$lcv = if ($i -eq 0) { 0 } else { $length_coding_value * $i }
-			$length_values[$i] = $lcv
-			if ($duration -gt $lcv) {
-				$part_start = $lcv
-				if ($split_by_silence -eq "yes" -and $split_points.Count -gt 0) {
-					$best_point = $part_start
-					$best_diff = 999999
-					foreach ($p in $split_points) {
-						$d = [Math]::Abs($p - $part_start)
-						if ($d -lt $best_diff) { $best_diff = $d; $best_point = $p }
-					}
-					$half_length = [int]($length_coding_value / 2)
-					if ($best_diff -le $half_length) { $new_part_start = $best_point } else { $new_part_start = $part_start }
-					$num += $new_part_start
-					$length_silent_values[$i] = $length_coding_value - ($part_start - $new_part_start)
-					$length_values[$i] = $new_part_start
-				} else {
-					$num += $part_start
+		$maxParts = 1000
+		for ($i = 0; $i -lt $maxParts; $i++) {
+			$nominal = $length_coding_value * $i
+			if ($duration -le $nominal) { break }
+			$bnd = $nominal
+			# i=0 — начало файла: притягивать его к тишине нельзя, иначе начало срезается.
+			if ($i -gt 0 -and $split_by_silence -eq "yes" -and $split_points.Count -gt 0) {
+				$best_point = $nominal
+				$best_diff = 999999
+				foreach ($p in $split_points) {
+					$d = [Math]::Abs($p - $nominal)
+					if ($d -lt $best_diff) { $best_diff = $d; $best_point = $p }
 				}
-			} else { break }
+				if ($best_diff -le [int]($length_coding_value / 2)) { $bnd = $best_point }
+			}
+			# Монотонность: граница обязана строго расти, иначе получим часть нулевой или
+			# отрицательной длины (две номинальные точки могли притянуться к одной тишине).
+			if ($i -gt 0 -and $bnd -le $num[$i-1]) { $bnd = $nominal }
+			if ($i -gt 0 -and $bnd -le $num[$i-1]) { break }
+			$num += $bnd
+		}
+		if ($i -ge $maxParts) {
+			Log-Msg "WARN" "Достигнут предел $maxParts частей — хвост файла не обработан: $($file.Name)"
+		}
+		# Длительности = разности соседних границ. Последняя часть идёт ДО КОНЦА файла:
+		# фиксированный -t обрезал бы хвост, если граница сдвинулась к тишине назад.
+		if ($split_by_silence -eq "yes" -and $num.Count -gt 0) {
+			for ($i = 0; $i -lt $num.Count; $i++) {
+				if ($i + 1 -lt $num.Count) {
+					$length_silent_values[$i] = $num[$i+1] - $num[$i]
+				} else {
+					$length_silent_values[$i] = "END"
+				}
+			}
 		}
 	} else {
 		$num = @(0)
@@ -588,7 +646,12 @@ function Encode-File {
 		if ($split_by_silence -eq "yes" -and $length_coding_status -eq "+") {
 			$silent_idx = $c - 1
 			if ($length_silent_values.ContainsKey($silent_idx)) {
-				$current_set_length = "-t $($length_silent_values[$silent_idx])"
+				# F16. "END" — последняя часть: -t не ставим вообще, иначе хвост обрезается.
+				if ($length_silent_values[$silent_idx] -eq "END") {
+					$current_set_length = ""
+				} else {
+					$current_set_length = "-t $($length_silent_values[$silent_idx])"
+				}
 			}
 		}
 
@@ -829,8 +892,15 @@ if (-not $guiProgressFile) {
 	Write-Host ""
 	Read-Host "Нажмите [Enter], чтобы продолжить..."
 } else {
-	# GUI: записываем финальное состояние
-	Write-GUIProgress -FilePercent 100 -CurrentFile "Готово"
+	# GUI: записываем финальное состояние. F17. Финал обязан назвать исход явно —
+	# GUI не видит наш exit code и по одному «Готово» не отличит провал от успеха.
+	if ($guiCancelFile -and (Test-Path $guiCancelFile)) {
+		Write-GUIProgress -FilePercent 100 -CurrentFile "Отменено" -State "cancelled" -ExitCode 1 -Message "Отменено пользователем"
+	} elseif ($script:countFail -gt 0) {
+		Write-GUIProgress -FilePercent 100 -CurrentFile "Ошибки" -State "failed" -ExitCode 1 -Message "Файлов с ошибками: $($script:countFail)"
+	} else {
+		Write-GUIProgress -FilePercent 100 -CurrentFile "Готово" -State "success" -ExitCode 0
+	}
 }
 
 # Exit code отражает наличие ошибок — cron/CI могут детектировать провал батча.

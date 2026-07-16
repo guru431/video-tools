@@ -25,16 +25,37 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="${SCRIPT_DIR}/config.ini"
 CHANNELS_FILE="${SCRIPT_DIR}/channels.txt"
 
-# Бинарь yt-dlp: env-override (для тестов) → рядом со скриптом → из PATH
-if [ -n "${YTDLP_BIN:-}" ]; then
-    YTDLP="$YTDLP_BIN"
-elif [ -x "$SCRIPT_DIR/yt-dlp" ]; then
-    YTDLP="$SCRIPT_DIR/yt-dlp"
-elif [ -f "$SCRIPT_DIR/yt-dlp.exe" ]; then
-    YTDLP="$SCRIPT_DIR/yt-dlp.exe"
-else
-    YTDLP="yt-dlp"
-fi
+# Бинари: env-override (для тестов) → рядом со скриптом → из PATH.
+# Раньше резолвер был только у yt-dlp, а перевод звал bare `ffmpeg` — portable
+# ffmpeg.exe рядом со скриптом не находился вовсе.
+# .exe проверяем ПЕРВЫМ: в Git Bash `test -x dir/ffmpeg` истинно и тогда, когда
+# рядом лежит только ffmpeg.exe — иначе вернули бы путь без расширения, который
+# понимает лишь сам Git Bash.
+resolve_bin() {
+    local override="$1" name="$2"
+    if [ -n "$override" ]; then
+        printf '%s' "$override"
+    elif [ -f "$SCRIPT_DIR/$name.exe" ]; then
+        printf '%s' "$SCRIPT_DIR/$name.exe"
+    elif [ -x "$SCRIPT_DIR/$name" ] && [ ! -d "$SCRIPT_DIR/$name" ]; then
+        printf '%s' "$SCRIPT_DIR/$name"
+    else
+        printf '%s' "$name"
+    fi
+}
+YTDLP="$(resolve_bin "${YTDLP_BIN:-}" yt-dlp)"
+FFMPEG="$(resolve_bin "${FFMPEG_BIN:-}" ffmpeg)"
+FFPROBE="$(resolve_bin "${FFPROBE_BIN:-}" ffprobe)"
+
+# Абсолютный путь: POSIX (/x), Windows-диск (C:/x, C:\x) или UNC (\\host\share).
+# Без распознавания drive/UNC `C:/Downloads` считался относительным и превращался
+# в $SCRIPT_DIR/C:/Downloads.
+is_abs_path() {
+    case "$1" in
+        /*|//*|\\\\*|[A-Za-z]:/*|[A-Za-z]:\\*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
 
 # ── Цвета ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -131,7 +152,7 @@ check_base_deps() {
 
 check_translate_deps() {
     local missing=0
-    check_dependency "ffmpeg" "Установите: https://ffmpeg.org/download.html" || missing=1
+    check_dependency "$FFMPEG" "Установите: https://ffmpeg.org/download.html" || missing=1
     # Бинарь vot: env-override (для тестов) → рядом со скриптом → из PATH.
     # Паритет с резолвером YTDLP_BIN; без override тесты уходили в реальную сеть.
     local script_dir
@@ -182,14 +203,20 @@ build_cookie_args() {
 # ── Определение платформы по URL ───────────────────────────────────────────
 detect_platform() {
     local url="$1"
-    # Домен якорим по границе (начало строки, '/', '.', '@'), иначе notyoutube.com
+    # Регистр хоста не значим (RFC 3986), поэтому HTTPS://YOUTUBE.COM/... — тот же
+    # youtube. Приводим к нижнему регистру только host: путь/query регистрозависимы,
+    # а `tr` вместо ${url,,} — Bash 3.2 на macOS не знает ,,-раскрытия.
+    local host="${url#*://}"
+    host="${host%%/*}"; host="${host%%\?*}"; host="${host%%#*}"
+    host="$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')"
+    # Домен якорим по границе (начало строки, '.', '@'), иначе notyoutube.com
     # ошибочно распознаётся как youtube (подстрочный матч).
-    if   [[ "$url" =~ (^|[./@])youtube\.com([/:?#]|$) ]] || [[ "$url" =~ (^|[./@])youtu\.be([/:?#]|$) ]]; then echo "youtube"
-    elif [[ "$url" =~ (^|[./@])vk\.com([/:?#]|$) ]];         then echo "vk"
-    elif [[ "$url" =~ (^|[./@])rutube\.ru([/:?#]|$) ]];      then echo "rutube"
-    elif [[ "$url" =~ (^|[./@])twitch\.tv([/:?#]|$) ]];      then echo "twitch"
-    elif [[ "$url" =~ (^|[./@])vimeo\.com([/:?#]|$) ]];      then echo "vimeo"
-    elif [[ "$url" =~ (^|[./@])dailymotion\.com([/:?#]|$) ]];then echo "dailymotion"
+    if   [[ "$host" =~ (^|[.@])youtube\.com(:|$) ]] || [[ "$host" =~ (^|[.@])youtu\.be(:|$) ]]; then echo "youtube"
+    elif [[ "$host" =~ (^|[.@])vk\.com(:|$) ]];         then echo "vk"
+    elif [[ "$host" =~ (^|[.@])rutube\.ru(:|$) ]];      then echo "rutube"
+    elif [[ "$host" =~ (^|[.@])twitch\.tv(:|$) ]];      then echo "twitch"
+    elif [[ "$host" =~ (^|[.@])vimeo\.com(:|$) ]];      then echo "vimeo"
+    elif [[ "$host" =~ (^|[.@])dailymotion\.com(:|$) ]];then echo "dailymotion"
     else echo "other"
     fi
 }
@@ -440,7 +467,15 @@ translate_audio() {
 
     local temp_dir
     temp_dir=$(mktemp -d)
-    local -a vot_cmd=("$VOT_BIN" "--output=$temp_dir" "--voice-style=$voice_style" "--reslang=$target_lang" "$url")
+    # vot-cli-live на Windows — native-бинарь: POSIX-путь `/tmp/tmp.X` он понимает как
+    # свой и пишет в C:\Users\...\Temp\tmp.X, после чего find в $temp_dir не находит
+    # ничего и перевод в Git Bash не работает вовсе. Отдаём ему windows-представление
+    # того же каталога — читаем результат по-прежнему по POSIX-пути.
+    local vot_out="$temp_dir"
+    if command -v cygpath &>/dev/null; then
+        vot_out="$(cygpath -w "$temp_dir")" || vot_out="$temp_dir"
+    fi
+    local -a vot_cmd=("$VOT_BIN" "--output=$vot_out" "--voice-style=$voice_style" "--reslang=$target_lang" "$url")
 
     # Перевод тоже должен ходить через proxy (как и сама загрузка), иначе
     # vot-cli-live стучится напрямую и падает в сетях, где доступ только через прокси.
@@ -473,8 +508,17 @@ translate_audio() {
     local ext="${video_file##*.}"
     local output_file="${video_file%.*}_translated.${ext}"
     # WebM-контейнер не принимает AAC → для .webm-источника кодируем перевод в libopus.
+    # `tr` вместо ${ext,,}: Bash 3.2 на macOS падает на ,,-раскрытии (bad substitution).
     local a_codec="aac"
-    [ "${ext,,}" = "webm" ] && a_codec="libopus"
+    [ "$(printf '%s' "$ext" | tr '[:upper:]' '[:lower:]')" = "webm" ] && a_codec="libopus"
+
+    # `-map 0:a` переносит ВСЕ оригинальные дорожки, поэтому индекс перевода равен их
+    # числу, а не единице: при двух оригиналах metadata для a:1 села бы на второй
+    # оригинал, а перевод (a:2) остался бы безымянным.
+    local orig_a_count
+    orig_a_count=$("$FFPROBE" -v error -select_streams a -show_entries stream=index \
+        -of csv=p=0 "$video_file" 2>/dev/null | grep -c .)
+    [ "${orig_a_count:-0}" -ge 1 ] 2>/dev/null || orig_a_count=1
 
     log_info "Мерж аудиодорожек (режим: $mode)..."
 
@@ -483,23 +527,24 @@ translate_audio() {
     # ? делает map необязательным: если потоков нет, ffmpeg не падает.
     case "$mode" in
         dual_track)
-            ffmpeg -y -i "$video_file" -i "$translation_file" \
+            "$FFMPEG" -y -i "$video_file" -i "$translation_file" \
                 -map 0:v -map 0:a -map 1:a -map 0:s? -map 0:t? \
-                -c:v copy -c:a:0 copy -c:a:1 "$a_codec" -b:a:1 192k -c:s copy \
+                -c:v copy -c:a copy -c:a:$orig_a_count "$a_codec" -b:a:$orig_a_count 192k -c:s copy \
                 -metadata:s:a:0 language="$orig_lang" -metadata:s:a:0 title="Original" \
-                -metadata:s:a:1 language="$target_lang" -metadata:s:a:1 title="AI Translation" \
+                -metadata:s:a:$orig_a_count language="$target_lang" \
+                -metadata:s:a:$orig_a_count title="AI Translation" \
                 -disposition:a:0 default \
                 "$output_file" 2>/dev/null
             ;;
         replace)
-            ffmpeg -y -i "$video_file" -i "$translation_file" \
+            "$FFMPEG" -y -i "$video_file" -i "$translation_file" \
                 -map 0:v -map 1:a -map 0:s? -map 0:t? \
                 -c:v copy -c:a "$a_codec" -b:a 192k -c:s copy \
                 -metadata:s:a:0 language="$target_lang" -metadata:s:a:0 title="AI Translation" \
                 "$output_file" 2>/dev/null
             ;;
         mix)
-            ffmpeg -y -i "$video_file" -i "$translation_file" \
+            "$FFMPEG" -y -i "$video_file" -i "$translation_file" \
                 -filter_complex "[0:a]volume=${orig_vol}[a0];[1:a]volume=${trans_vol}[a1];[a0][a1]amix=inputs=2:duration=longest:normalize=0[aout]" \
                 -map 0:v -map "[aout]" -map 0:s? -map 0:t? \
                 -c:v copy -c:a "$a_codec" -b:a 192k -c:s copy \
@@ -753,15 +798,41 @@ load_config() {
     TRANSLATE_TRANS_VOL=$(read_config "translation_volume" "translation" "1.0")
     TRANSLATE_ORIG_LANG=$(read_config "original_lang" "translation" "en")
 
-    # Относительный путь cookies к скрипту
-    if [[ "$COOKIE_FILE_PATH" != /* ]]; then
-        COOKIE_FILE_PATH="${SCRIPT_DIR}/${COOKIE_FILE_PATH}"
-    fi
+    # Относительные пути резолвятся от каталога скрипта; drive/UNC — уже абсолютные.
+    is_abs_path "$COOKIE_FILE_PATH" || COOKIE_FILE_PATH="${SCRIPT_DIR}/${COOKIE_FILE_PATH}"
+    is_abs_path "$BASE_DIR"         || BASE_DIR="${SCRIPT_DIR}/${BASE_DIR}"
+}
 
-    # Относительный путь base_dir
-    if [[ "$BASE_DIR" != /* ]]; then
-        BASE_DIR="${SCRIPT_DIR}/${BASE_DIR}"
+# ── Валидация значений опций ───────────────────────────────────────────────
+# Без этого `--quality --dry-run URL` съедал safety-флаг и начинал РЕАЛЬНУЮ загрузку,
+# а `--quality` последним аргументом ронял скрипт raw-ошибкой set -u.
+require_value() {
+    local opt="$1" argc="$2" val="${3:-}"
+    if [ "$argc" -lt 2 ]; then
+        log_error "Опция $opt требует значения"
+        exit 1
     fi
+    case "$val" in
+        -*) log_error "Опция $opt требует значения, а получен флаг: $val"; exit 1 ;;
+    esac
+}
+
+validate_enum() {
+    local opt="$1" val="$2"; shift 2
+    local allowed
+    for allowed in "$@"; do
+        [ "$val" = "$allowed" ] && return 0
+    done
+    log_error "Недопустимое значение $opt: '$val'. Допустимо: $*"
+    exit 1
+}
+
+# ЧЧ:ММ:СС, М:СС или секунды (в т.ч. дробные) — тот же контракт, что в справке.
+validate_time() {
+    local opt="$1" val="$2"
+    case "$val" in
+        ""|*[!0-9:.]*) log_error "Опция $opt: ожидается ЧЧ:ММ:СС, М:СС или секунды, получено: '$val'"; exit 1 ;;
+    esac
 }
 
 # ── Парсинг аргументов ─────────────────────────────────────────────────────
@@ -781,6 +852,7 @@ parse_args() {
                 exit 0
                 ;;
             --config)
+                require_value "$1" "$#" "${2:-}"
                 CONFIG_FILE="$2"; shift 2
                 ;;
             --batch)
@@ -790,27 +862,40 @@ parse_args() {
                 SUBS_ONLY=true; shift
                 ;;
             --quality)
+                require_value "$1" "$#" "${2:-}"
+                validate_enum "$1" "$2" 360 480 720 1080 1440 2160 audio
                 QUALITY="$2"; shift 2
                 ;;
             --format)
+                require_value "$1" "$#" "${2:-}"
+                validate_enum "$1" "$2" auto avc1_best avc1_https avc1_m3u8 \
+                    avc1_https_60fps avc1_m3u8_60fps avc1_https_60fps_hdr old_combo
                 FORMAT_PRESET="$2"; shift 2
                 ;;
             --proxy)
+                require_value "$1" "$#" "${2:-}"
                 PROXY_URL="$2"; shift 2
                 ;;
             --cookies)
+                require_value "$1" "$#" "${2:-}"
+                validate_enum "$1" "$2" browser file none
                 COOKIE_METHOD="$2"; shift 2
                 ;;
             --cookie-browser)
+                require_value "$1" "$#" "${2:-}"
                 COOKIE_BROWSER="$2"; shift 2
                 ;;
             --cookie-file)
+                require_value "$1" "$#" "${2:-}"
                 COOKIE_FILE_PATH="$2"; shift 2
                 ;;
             --translate)
+                require_value "$1" "$#" "${2:-}"
                 TRANSLATE_CLI="$2"; shift 2
                 ;;
             --voice)
+                require_value "$1" "$#" "${2:-}"
+                validate_enum "$1" "$2" live tts
                 TRANSLATE_VOICE_CLI="$2"; shift 2
                 ;;
             --mix)
@@ -823,9 +908,13 @@ parse_args() {
                 TRANSLATE_MODE_CLI="dual_track"; shift
                 ;;
             --trim-start)
+                require_value "$1" "$#" "${2:-}"
+                validate_time "$1" "$2"
                 TRIM_START_ON="true"; TRIM_START_VAL="$2"; shift 2
                 ;;
             --trim-end)
+                require_value "$1" "$#" "${2:-}"
+                validate_time "$1" "$2"
                 TRIM_END_ON="true"; TRIM_END_VAL="$2"; shift 2
                 ;;
             --force-keyframes)

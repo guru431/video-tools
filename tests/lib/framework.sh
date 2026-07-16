@@ -8,6 +8,18 @@ TESTS_FAIL=0
 TESTS_SKIP=0
 CURRENT_SUITE=""
 
+# Счётчики держим в файле, а не в переменных. Тесты, которым нужна изоляция,
+# зовут pass/fail внутри `( ... )` — это subshell, и инкремент переменной там
+# умирает вместе с ним: файл печатал ✗, а summary честно рапортовал 0 провалов
+# и exit 0. Обычный subshell наследует переменную, поэтому дописывает в тот же
+# файл; export не нужен и вреден — иначе разные test-файлы слили бы счётчики.
+TESTS_RESULT_FILE="$(mktemp "${TMPDIR:-/tmp}/tests_counter_XXXXXX")"
+TESTS_RESULT_OWNER=$$
+trap '[ "${TESTS_RESULT_OWNER:-}" = "$$" ] && rm -f "$TESTS_RESULT_FILE"' EXIT
+
+_tally() { printf '%s\n' "$1" >> "$TESTS_RESULT_FILE"; }
+_tally_count() { grep -c "^$1\$" "$TESTS_RESULT_FILE" 2>/dev/null || true; }
+
 # ── Цвета ──────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -22,19 +34,20 @@ suite() {
 }
 
 pass() {
-    TESTS_PASS=$((TESTS_PASS + 1))
+    _tally P
     echo -e "  ${GREEN}✓${NC} $1"
 }
 
 fail() {
-    TESTS_FAIL=$((TESTS_FAIL + 1))
+    _tally F
     echo -e "  ${RED}✗${NC} $1"
     [ -n "${2:-}" ] && echo -e "    ${YELLOW}Ожидалось:${NC} $2"
     [ -n "${3:-}" ] && echo -e "    ${YELLOW}Получено: ${NC} $3"
+    return 0
 }
 
 skip() {
-    TESTS_SKIP=$((TESTS_SKIP + 1))
+    _tally S
     echo -e "  ${YELLOW}○${NC} $1 (пропущен: ${2:-})"
 }
 
@@ -102,6 +115,9 @@ assert_file_exists() {
 }
 
 summary() {
+    TESTS_PASS=$(_tally_count P); TESTS_PASS=${TESTS_PASS:-0}
+    TESTS_FAIL=$(_tally_count F); TESTS_FAIL=${TESTS_FAIL:-0}
+    TESTS_SKIP=$(_tally_count S); TESTS_SKIP=${TESTS_SKIP:-0}
     local total=$((TESTS_PASS + TESTS_FAIL + TESTS_SKIP))
     echo -e "\n${BOLD}${CYAN}═══════════════════════════════════════${NC}"
     echo -e "  Всего: $total  |  ${GREEN}✓ $TESTS_PASS${NC}  |  ${RED}✗ $TESTS_FAIL${NC}  |  ${YELLOW}○ $TESTS_SKIP${NC}"

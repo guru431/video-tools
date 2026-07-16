@@ -192,6 +192,180 @@ assert_contains "F14: пустой манифест → явная ошибка"
 rm -f "$CFG"; rm -rf "$W2"
 
 # ══════════════════════════════════════════════════════════════
+suite "F18 (SH): value-опции требуют значение и валидируют его"
+# ══════════════════════════════════════════════════════════════
+# Суть: `--quality --dry-run URL` съедал safety-флаг как значение и начинал
+# РЕАЛЬНУЮ загрузку; `--quality` последним аргументом ронял скрипт set -u.
+write_cfg "[download]
+use_archive = false"
+
+OUT=$(run_full "$CFG" --quality --dry-run "https://youtube.com/watch?v=abc"); RC=$?
+assert_contains     "--quality --dry-run: явная ошибка"        "требует значения" "$OUT"
+assert_not_contains "--quality --dry-run: НЕ ушёл в загрузку"  "[DRY-RUN]"        "$OUT"
+assert_eq           "--quality --dry-run: exit 1" "1" "$RC"
+
+OUT=$(run_full "$CFG" --dry-run "https://youtube.com/watch?v=abc" --quality); RC=$?
+assert_contains "--quality в конце argv: явная ошибка, не set -u" "требует значения" "$OUT"
+assert_eq       "--quality в конце argv: exit 1" "1" "$RC"
+
+OUT=$(run_full "$CFG" --dry-run --quality 999 "https://youtube.com/watch?v=abc"); RC=$?
+assert_contains "--quality 999: отвергнут enum'ом" "Недопустимое значение" "$OUT"
+assert_eq       "--quality 999: exit 1" "1" "$RC"
+
+OUT=$(run_full "$CFG" --dry-run --format bogus_preset "https://youtube.com/watch?v=abc"); RC=$?
+assert_contains "--format bogus: отвергнут enum'ом" "Недопустимое значение" "$OUT"
+
+OUT=$(run_full "$CFG" --dry-run --trim-start "abc" "https://youtube.com/watch?v=abc"); RC=$?
+assert_contains "--trim-start abc: отвергнут валидатором времени" "ожидается ЧЧ:ММ:СС" "$OUT"
+
+# Валидные значения по-прежнему проходят.
+OUT=$(run_full "$CFG" --dry-run --quality 1080 --format avc1_best "https://youtube.com/watch?v=abc")
+assert_contains "валидные --quality/--format проходят" "[DRY-RUN]" "$OUT"
+rm -f "$CFG"
+
+# ══════════════════════════════════════════════════════════════
+suite "F19 (SH): Windows-пути (drive/UNC) считаются абсолютными"
+# ══════════════════════════════════════════════════════════════
+# Суть: `C:/Downloads` признавался относительным → $SCRIPT_DIR/C:/Downloads.
+(
+    set +u
+    source "$SH_SCRIPT"
+    for p in "/posix/abs" "C:/Downloads" "D:\\cookies.txt" "\\\\srv\\share\\x" "//srv/share/x"; do
+        if is_abs_path "$p"; then pass "абсолютный: $p"; else fail "абсолютный: $p" "abs" "relative"; fi
+    done
+    for p in "cookies.txt" "sub/dir/x" "./x"; do
+        if is_abs_path "$p"; then fail "относительный: $p" "relative" "abs"; else pass "относительный: $p"; fi
+    done
+) 2>/dev/null
+
+write_cfg "[output]
+base_dir = C:/Downloads
+[download]
+use_archive = false"
+OUT=$(dry_line "$(run_full "$CFG" --dry-run --quality 720 "https://youtube.com/watch?v=abc")")
+assert_contains     "base_dir=C:/Downloads используется как есть" "C:/Downloads/" "$OUT"
+assert_not_contains "base_dir=C:/Downloads не склеен со SCRIPT_DIR" "yt-dlp/C:/Downloads" "$OUT"
+rm -f "$CFG"
+
+# ══════════════════════════════════════════════════════════════
+suite "F20 (SH): регистр хоста не меняет platform detection"
+# ══════════════════════════════════════════════════════════════
+(
+    set +u
+    source "$SH_SCRIPT"
+    assert_eq "HTTPS://YOUTUBE.COM → youtube"      "youtube" "$(detect_platform 'HTTPS://YOUTUBE.COM/watch?v=a')"
+    assert_eq "https://YouTu.Be → youtube"         "youtube" "$(detect_platform 'https://YouTu.Be/abc')"
+    assert_eq "HTTPS://WWW.VK.COM → vk"            "vk"      "$(detect_platform 'HTTPS://WWW.VK.COM/video1')"
+    assert_eq "RuTube.Ru → rutube"                 "rutube"  "$(detect_platform 'https://RuTube.Ru/video/x/')"
+    # Якорь домена не должен ослабнуть от нормализации регистра.
+    assert_eq "notyoutube.com → other"             "other"   "$(detect_platform 'https://notyoutube.com/watch?v=a')"
+    assert_eq "YOUTUBE.COM.evil.tld → other"       "other"   "$(detect_platform 'https://YOUTUBE.COM.evil.tld/x')"
+    # Регистр пути/query не трогаем — нормализуется только host.
+    assert_eq "путь в верхнем регистре → youtube"  "youtube" "$(detect_platform 'https://youtube.com/WATCH?V=AbC')"
+) 2>/dev/null
+
+# ══════════════════════════════════════════════════════════════
+suite "F21 (SH): local-first резолвер ffmpeg/ffprobe"
+# ══════════════════════════════════════════════════════════════
+W3=$(mktemp -d /tmp/test_ytf21_XXXXXX)
+# Результаты собираем в файл и проверяем в основном шелле: pass/fail внутри ( ... )
+# исполняются в subshell — печатались бы, но в итог не попадали.
+: > "$W3/ffmpeg.exe"
+(
+    set +u
+    source "$SH_SCRIPT"
+    echo "override=$(resolve_bin "/custom/ff" ffmpeg)"
+    echo "path=$(resolve_bin "" ffmpeg)"
+    SCRIPT_DIR="$W3"
+    echo "local=$(resolve_bin "" ffmpeg)"
+) > "$W3/out.txt" 2>/dev/null
+R3="$(cat "$W3/out.txt")"
+assert_contains "FFMPEG_BIN override выигрывает"   "override=/custom/ff"    "$R3"
+assert_contains "без override и локального → PATH" "path=ffmpeg"            "$R3"
+assert_contains "локальный ffmpeg.exe побеждает PATH (с .exe, не голый путь)" \
+                "local=$W3/ffmpeg.exe" "$R3"
+rm -rf "$W3"
+# Перевод обязан звать резолвнутый бинарь, а не bare `ffmpeg`.
+SH_SRC="$(cat "$SH_SCRIPT")"
+assert_contains     "check_translate_deps проверяет \$FFMPEG"  'check_dependency "$FFMPEG"' "$SH_SRC"
+assert_not_contains "мерж не зовёт bare ffmpeg"                '            ffmpeg -y -i'   "$SH_SRC"
+
+# ══════════════════════════════════════════════════════════════
+suite "F22 (SH): vot получает windows-путь, dual_track считает индекс дорожки"
+# ══════════════════════════════════════════════════════════════
+W4=$(mktemp -d /tmp/test_ytf22_XXXXXX)
+mkdir -p "$W4/bin" "$W4/vid"
+FF4_LOG="$W4/ff.log"; VOT4_LOG="$W4/vot.log"
+cat > "$W4/bin/vot" <<VOTEOF
+#!/bin/bash
+echo "\$@" >> "$VOT4_LOG"
+od=""
+for a in "\$@"; do case "\$a" in --output=*) od="\${a#--output=}";; esac; done
+# Эмулируем native-бинарь: понимаем ТОЛЬКО windows-путь; POSIX-каталог игнорируем.
+case "\$od" in
+    [A-Za-z]:[/\\\\]*) command -v cygpath >/dev/null && od="\$(cygpath -u "\$od")" ;;
+    *) exit 0 ;;
+esac
+[ -d "\$od" ] && touch "\$od/translation.mp3"
+exit 0
+VOTEOF
+cat > "$W4/bin/ffmpeg" <<FFEOF
+#!/bin/bash
+echo "\$@" >> "$FF4_LOG"
+for last in "\$@"; do :; done
+touch "\$last" 2>/dev/null
+exit 0
+FFEOF
+# ffprobe сообщает ДВЕ оригинальные аудиодорожки.
+cat > "$W4/bin/ffprobe" <<'FPEOF'
+#!/bin/bash
+echo "1"
+echo "2"
+exit 0
+FPEOF
+chmod +x "$W4/bin/vot" "$W4/bin/ffmpeg" "$W4/bin/ffprobe"
+
+: > "$W4/vid/clip.mp4"
+(
+    set +u
+    source "$SH_SCRIPT"
+    export PATH="$W4/bin:$PATH"
+    VOT_BIN="$W4/bin/vot"
+    translate_audio "$W4/vid/clip.mp4" "http://u" ru live dual_track en 0.3 1.0 "" >/dev/null 2>&1
+)
+
+if command -v cygpath >/dev/null 2>&1; then
+    if grep -qE -- '--output=[A-Za-z]:\\' "$VOT4_LOG" 2>/dev/null; then
+        pass "vot получил windows-путь (--output=C:\\...)"
+    else
+        fail "vot получил windows-путь" "--output=<drive>:\\..." "$(cat "$VOT4_LOG" 2>/dev/null)"
+    fi
+    # Главное следствие: файл перевода найден и мерж состоялся.
+    if grep -qF -- "translation.mp3" "$FF4_LOG" 2>/dev/null; then
+        pass "перевод найден → мерж запущен (Git Bash)"
+    else
+        fail "перевод найден → мерж запущен" "translation.mp3 в argv ffmpeg" "мерж не запускался"
+    fi
+    # При 2 оригинальных дорожках перевод — это a:2, а не a:1.
+    if grep -qF -- "-c:a:2" "$FF4_LOG" 2>/dev/null; then
+        pass "dual_track: перевод кодируется как a:2 (2 оригинала)"
+    else
+        fail "dual_track: индекс дорожки перевода" "-c:a:2" "$(cat "$FF4_LOG" 2>/dev/null)"
+    fi
+    if grep -qF -- '-metadata:s:a:2' "$FF4_LOG" 2>/dev/null; then
+        pass "dual_track: metadata перевода на a:2, не на втором оригинале"
+    else
+        fail "dual_track: metadata перевода" "-metadata:s:a:2" "$(cat "$FF4_LOG" 2>/dev/null)"
+    fi
+else
+    skip "vot windows-путь: cygpath недоступен (не Git Bash)"
+    skip "перевод найден → мерж запущен: cygpath недоступен"
+    skip "dual_track a:2: cygpath недоступен"
+    skip "dual_track metadata a:2: cygpath недоступен"
+fi
+rm -rf "$W4"
+
+# ══════════════════════════════════════════════════════════════
 suite "CMD source-scan: F1/F2 guardrail + F4 мерж-мэпы"
 # ══════════════════════════════════════════════════════════════
 CMD_SRC="$(cat "$CMD_SCRIPT")"

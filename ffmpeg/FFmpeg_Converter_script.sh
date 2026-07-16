@@ -516,13 +516,29 @@ encode_file() {
 	local ffmpeg_info
 	ffmpeg_info=$("$ffmpeg" -i "$full_path" 2>&1)
 
-	local src_bitrate=""
-	src_bitrate=$(echo "$ffmpeg_info" | grep -i 'bitrate:' | head -1 | grep -o 'bitrate: [0-9]*' | sed 's/bitrate: //')
+	# Битрейт ИМЕННО видеопотока: строка `Stream #0:0: Video: ..., 1808 kb/s`.
+	# Раньше брали `Duration: ..., bitrate: 2000 kb/s` — это битрейт КОНТЕЙНЕРА
+	# (видео + аудио + overhead). Настройка обещает не повышать исходный видеобитрейт,
+	# а сравнивала с завышенным числом и потому всё равно его повышала.
+	local src_video_bitrate=""
+	src_video_bitrate=$(echo "$ffmpeg_info" | grep -i 'Stream #.*Video:' | head -1 \
+		| grep -o '[0-9]\+ kb/s' | head -1 | grep -o '[0-9]\+')
+
+	# Часть контейнеров (MKV/WebM) per-stream битрейт не сообщает. Тогда откатываемся
+	# на битрейт контейнера — это верхняя оценка, а не битрейт видео, поэтому говорим
+	# об этом в лог, а не выдаём молча за исходный видеобитрейт.
+	local src_cap="$src_video_bitrate"
+	if [ -z "$src_cap" ]; then
+		src_cap=$(echo "$ffmpeg_info" | grep -i 'bitrate:' | head -1 | grep -o 'bitrate: [0-9]*' | sed 's/bitrate: //')
+		if [ -n "$src_cap" ] && [ "$video_bitrate_status" = "+" ] && [ "$audio_only" != "yes" ]; then
+			log_msg "WARN" "$(basename "$full_path"): битрейт видеопотока не сообщён, используется битрейт контейнера (${src_cap}k) — верхняя оценка"
+		fi
+	fi
 
 	local set_video_bitrate_final=""
 	if [ "$audio_only" != "yes" ] && [ "$video_bitrate_status" = "+" ] && [ "$video_quality_status" != "+" ]; then
-		if [ -n "$src_bitrate" ] && [ "$src_bitrate" -lt "$set_video_bitrate_orig" ] 2>/dev/null; then
-			set_video_bitrate_final="-b:v ${src_bitrate}k"
+		if [ -n "$src_cap" ] && [ "$src_cap" -lt "$set_video_bitrate_orig" ] 2>/dev/null; then
+			set_video_bitrate_final="-b:v ${src_cap}k"
 		else
 			set_video_bitrate_final="-b:v ${set_video_bitrate_orig}k"
 		fi

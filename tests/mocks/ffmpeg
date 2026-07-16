@@ -16,6 +16,10 @@ LOG_FILE="${MOCK_FFMPEG_LOG:-/tmp/mock_ffmpeg_calls.txt}"
 ENCODERS="${MOCK_FFMPEG_ENCODERS:-}"
 FAIL="${MOCK_FFMPEG_FAIL:-0}"
 BITRATE="${MOCK_FFMPEG_BITRATE:-2000}"
+# Битрейт видеопотока отдельно от контейнерного: они РАЗНЫЕ (контейнер = видео +
+# аудио + overhead). MOCK_FFMPEG_VIDEO_BITRATE="" убирает `kb/s` из строки Video —
+# так ведут себя MKV/WebM, не сообщающие per-stream битрейт.
+VIDEO_BITRATE="${MOCK_FFMPEG_VIDEO_BITRATE-1808}"
 DURATION="${MOCK_FFMPEG_DURATION:-00:01:00.00}"
 AUDIO_CODEC="${MOCK_FFMPEG_AUDIO_CODEC:-aac}"
 
@@ -43,13 +47,18 @@ fi
 # При наличии -i — всегда выводить медиа-информацию в stderr
 # (как реальный ffmpeg при любом вызове с -i)
 if [[ "$*" == *" -i "* ]] || [[ "$*" == "-i "* ]]; then
+    if [ -n "$VIDEO_BITRATE" ]; then
+        VSTREAM="    Stream #0:0(und): Video: h264 (High), yuv420p, 1920x1080, ${VIDEO_BITRATE} kb/s, 30 fps, 30 tbr, 15360 tbn"
+    else
+        VSTREAM="    Stream #0:0(und): Video: h264 (High), yuv420p, 1920x1080, 30 fps, 30 tbr, 15360 tbn"
+    fi
     cat << MEDIAEOF >&2
 ffmpeg version 6.0 (mock)
 Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'input.mp4':
   Metadata:
     encoder         : Lavf58.76.100
   Duration: ${DURATION}, start: 0.000000, bitrate: ${BITRATE} kb/s
-    Stream #0:0(und): Video: h264 (High), yuv420p, 1920x1080, 1808 kb/s, 30 fps, 30 tbr, 15360 tbn
+${VSTREAM}
     Stream #0:1(und): Audio: ${AUDIO_CODEC}, 48000 Hz, stereo, fltp, 192 kb/s
 MEDIAEOF
 fi

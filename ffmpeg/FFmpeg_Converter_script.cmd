@@ -269,9 +269,17 @@ if not "%audio_only%"=="yes" if not "%copy_codecs%"=="yes" if not "%merge_files%
 	set "_vc_ok="
 	if not defined set_video_codec set "_vc_ok=1"
 	for %%c in (libvpx libvpx-vp9 vp8 vp9 av1_nvenc av1_qsv libsvtav1 libaom-av1) do if /i "!set_video_codec!"=="%%c" set "_vc_ok=1"
+	rem Смотрим на РЕАЛЬНО сформированный аргумент, а не на значение из конфига: при
+	rem `codec = -aac` статус '-', set_audio_codec пуст и -c:a в ffmpeg не передаётся
+	rem вовсе — контейнер выберет дефолт сам, отклонять такую конфигурацию не за что.
+	rem Подстановку делаем ТОЛЬКО для непустой переменной: `!undefined:-c:a =!` в CMD
+	rem раскрывается в литерал `-c:a =`, а не в пустую строку — и отключённый кодек
+	rem снова отклонялся бы, теперь ещё и с мусорным именем в сообщении.
+	set "_eff_ac="
+	if defined set_audio_codec set "_eff_ac=!set_audio_codec:-c:a =!"
 	set "_ac_ok="
-	if not defined audio_codec_value set "_ac_ok=1"
-	for %%c in (libopus opus libvorbis vorbis) do if /i "!audio_codec_value!"=="%%c" set "_ac_ok=1"
+	if not defined _eff_ac set "_ac_ok=1"
+	for %%c in (libopus opus libvorbis vorbis) do if /i "!_eff_ac!"=="%%c" set "_ac_ok=1"
 	if not defined _vc_ok (
 		echo.
 		echo [ОШИБКА] WebM не поддерживает видеокодек '!set_video_codec!' — нужен VP8/VP9/AV1.
@@ -282,7 +290,7 @@ if not "%audio_only%"=="yes" if not "%copy_codecs%"=="yes" if not "%merge_files%
 	)
 	if not defined _ac_ok (
 		echo.
-		echo [ОШИБКА] WebM не поддерживает аудиокодек '!audio_codec_value!' — нужен Opus/Vorbis.
+		echo [ОШИБКА] WebM не поддерживает аудиокодек '!_eff_ac!' — нужен Opus/Vorbis.
 		echo          Смените [audio] codec или [video] container.
 		echo.
 		pause

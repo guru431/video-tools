@@ -199,6 +199,18 @@ run_capture 'output_container=":+:webm"' 'video_codec=":+:libvpx-vp9"' 'audio_co
 assert_contains "webm + включённый aac: отклонён" "WebM не поддерживает аудиокодек" "$OUT_TEXT"
 rm -f "$IN/f.mp4" "$DST/f.webm"
 
+# F24 (паритет PS1/CMD): source-scan — проверка обязана смотреть на сформированный
+# аргумент, а не на *_codec_value. В CMD дополнительно нужен guard `if defined`:
+# `!undefined:-c:a =!` раскрывается в литерал `-c:a =`, а не в пустую строку.
+PS1_SRC="$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1")"
+CMD_SRC="$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.cmd")"
+assert_contains     "PS1: webm-проверка использует set_audio_codec"  '$_effAudioCodec = $set_audio_codec' "$PS1_SRC"
+assert_not_contains "PS1: не проверяет audio_codec_value напрямую"   'if ($audio_codec_value -and $audio_codec_value.ToLower() -notmatch' "$PS1_SRC"
+assert_contains     "PS1: video-набор заякорен с конца"              'libaom-av1)$'      "$PS1_SRC"
+assert_contains     "CMD: webm-проверка использует set_audio_codec"  'set "_eff_ac=!set_audio_codec:-c:a =!"' "$CMD_SRC"
+assert_contains     "CMD: guard 'if defined' перед подстановкой"     'if defined set_audio_codec set "_eff_ac='  "$CMD_SRC"
+assert_not_contains "CMD: не сверяет audio_codec_value со списком"   'if /i "!audio_codec_value!"=="%%c" set "_ac_ok=1"' "$CMD_SRC"
+
 # --- кодек субтитров meta по контейнеру ---
 touch "$IN/g.mp4"; printf '1\n00:00:00,000 --> 00:00:01,000\nX\n' > "$IN/g.srt"
 run_capture 'video_subtitles=":+:meta"' 'output_container=":+:mkv"'

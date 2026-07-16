@@ -384,4 +384,22 @@ assert_contains "PS1 F3: архив внутри qi-гейта (коммента
 assert_contains "PS1 F4: map 0:s?"                           '"0:s?"'            "$PS1_SRC"
 assert_contains "PS1 F4: -c:s copy"                          '"-c:s", "copy"'    "$PS1_SRC"
 
+# ══════════════════════════════════════════════════════════════
+suite "F22 (паритет): индекс дорожки перевода считается на всех платформах"
+# ══════════════════════════════════════════════════════════════
+# Захардкоженный a:1 — это и есть баг: при 2+ оригинальных дорожках metadata
+# перевода садится на второй оригинал. Ни одна платформа не должна к нему вернуться.
+assert_contains     "PS1: ffprobe считает оригинальные дорожки" '-select_streams a'    "$PS1_SRC"
+assert_contains     "PS1: индекс перевода — переменная"         '"-c:a:$origACount"'   "$PS1_SRC"
+assert_not_contains "PS1: нет захардкоженного -c:a:1"           '"-c:a:1"'             "$PS1_SRC"
+assert_not_contains "PS1: нет захардкоженного -metadata:s:a:1"  '"-metadata:s:a:1"'    "$PS1_SRC"
+
+assert_contains     "CMD: ffprobe считает оригинальные дорожки" '-select_streams a'    "$CMD_SRC"
+assert_contains     "CMD: индекс перевода — переменная"         '-c:a:!orig_a_count!'  "$CMD_SRC"
+assert_not_contains "CMD: нет захардкоженного -c:a:1 "          '-c:a:1 '              "$CMD_SRC"
+assert_not_contains "CMD: нет захардкоженного -metadata:s:a:1 " '-metadata:s:a:1 '     "$CMD_SRC"
+
+assert_contains     "SH: индекс перевода — переменная"          '-c:a:$orig_a_count'   "$SH_SRC"
+assert_not_contains "SH: нет захардкоженного -c:a:1 "           '-c:a:1 '              "$SH_SRC"
+
 summary

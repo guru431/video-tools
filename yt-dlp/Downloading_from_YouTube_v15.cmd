@@ -475,6 +475,10 @@ if not "%translate_lang%"=="" (
                 goto :skip_translate
             )
         )
+        rem ffprobe: тот же local-first порядок, что и у ffmpeg. Нужен для подсчёта
+        rem оригинальных аудиодорожек в dual_track; отсутствие не фатально (fallback=1).
+        set "probe_cmd=ffprobe"
+        if exist "%~dp0ffprobe.exe" set "probe_cmd=%~dp0ffprobe.exe"
         rem ffmpeg: сначала рядом со скриптом (ffmpeg.exe), потом PATH — паритет с yt-dlp/.sh/.ps1.
         set "ff_cmd=ffmpeg"
         if exist "%~dp0ffmpeg.exe" (
@@ -527,10 +531,18 @@ if not "%translate_lang%"=="" (
             rem VP9/AV1 в mp4-контейнер может упасть; move ниже целит в оригинальное имя.
             for %%E in ("!video_file!") do (set "output_file=%%~dpnE_translated%%~xE" & set "a_codec=aac" & if /i "%%~xE"==".webm" set "a_codec=libopus")
 
+            rem `-map 0:a` переносит ВСЕ оригинальные дорожки, поэтому индекс перевода равен
+            rem их числу, а не единице: при двух оригиналах metadata для a:1 села бы на второй
+            rem оригинал, а сам перевод (a:2) остался бы без языка и названия. Счётчик целый —
+            rem set /a справляется (в отличие от float-арифметики, которой в CMD нет).
+            set /a orig_a_count=0
+            for /f "usebackq delims=" %%A in (`""!probe_cmd!" -v error -select_streams a -show_entries stream^=index -of csv^=p^=0 "!video_file!" 2^>nul"`) do set /a orig_a_count+=1
+            if !orig_a_count! LSS 1 set /a orig_a_count=1
+
             rem F4: -map 0:s? -map 0:t? + -c:s copy сохраняют субтитры/вложения исходника
             rem (иначе встроенные субтитры исчезают после мержа перевода). ? — необязательный map.
             if "%translate_mode%"=="dual_track" (
-                "!ff_cmd!" -y -i "!video_file!" -i "!trans_file!" -map 0:v -map 0:a -map 1:a -map 0:s? -map 0:t? -c:v copy -c:a:0 copy -c:a:1 !a_codec! -b:a:1 192k -c:s copy -metadata:s:a:0 language=%translate_orig_lang% -metadata:s:a:0 title="Original" -metadata:s:a:1 language=%translate_lang% -metadata:s:a:1 title="AI Translation" -disposition:a:0 default "!output_file!" 2>nul
+                "!ff_cmd!" -y -i "!video_file!" -i "!trans_file!" -map 0:v -map 0:a -map 1:a -map 0:s? -map 0:t? -c:v copy -c:a copy -c:a:!orig_a_count! !a_codec! -b:a:!orig_a_count! 192k -c:s copy -metadata:s:a:0 language=%translate_orig_lang% -metadata:s:a:0 title="Original" -metadata:s:a:!orig_a_count! language=%translate_lang% -metadata:s:a:!orig_a_count! title="AI Translation" -disposition:a:0 default "!output_file!" 2>nul
             )
             if "%translate_mode%"=="replace" (
                 "!ff_cmd!" -y -i "!video_file!" -i "!trans_file!" -map 0:v -map 1:a -map 0:s? -map 0:t? -c:v copy -c:a !a_codec! -b:a 192k -c:s copy -metadata:s:a:0 language=%translate_lang% -metadata:s:a:0 title="AI Translation" "!output_file!" 2>nul

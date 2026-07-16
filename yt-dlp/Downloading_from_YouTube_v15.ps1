@@ -105,6 +105,8 @@ if (Test-Path $dlpLocal) { $dlp = $dlpLocal } else { $dlp = "yt-dlp" }
 # паритет с $dlp и с задекларированным binary auto-detection.
 $ffmpegLocal = Join-Path $scriptDir "ffmpeg.exe"
 if (Test-Path $ffmpegLocal) { $ffmpegBin = $ffmpegLocal } else { $ffmpegBin = "ffmpeg" }
+$ffprobeLocal = Join-Path $scriptDir "ffprobe.exe"
+if (Test-Path $ffprobeLocal) { $ffprobeBin = $ffprobeLocal } else { $ffprobeBin = "ffprobe" }
 
 # ── Определение платформы по URL ──────────────────────────────────────────
 function Get-Platform {
@@ -1340,16 +1342,28 @@ $btnStart.Add_Click({
                                 Append-Output "Мерж аудиодорожек ($transMode)..." ([System.Drawing.Color]::Cyan)
                                 # WebM-контейнер не принимает AAC → для .webm кодируем перевод в libopus.
                                 $mergeACodec = if ($latestVideo.Extension -eq ".webm") { "libopus" } else { "aac" }
+                                # `-map 0:a` переносит ВСЕ оригинальные дорожки, поэтому индекс
+                                # перевода равен их числу, а не единице: при двух оригиналах
+                                # metadata для a:1 села бы на второй оригинал, а сам перевод
+                                # (a:2) остался бы без языка и названия.
+                                $origACount = 1
+                                try {
+                                    $probe = @(& $ffprobeBin -v error -select_streams a `
+                                        -show_entries stream=index -of csv=p=0 $latestVideo.FullName 2>$null |
+                                        Where-Object { $_ -match '\S' })
+                                    if ($probe.Count -ge 1) { $origACount = $probe.Count }
+                                } catch { $origACount = 1 }
                                 # F4: -map 0:s? -map 0:t? + -c:s copy сохраняют субтитры/вложения
                                 # исходника — иначе встроенные субтитры исчезают после мержа перевода.
                                 $ffArgs = switch ($transMode) {
                                     "dual_track" { @("-y", "-i", $latestVideo.FullName, "-i", $transFile.FullName,
                                                      "-map", "0:v", "-map", "0:a", "-map", "1:a", "-map", "0:s?", "-map", "0:t?",
-                                                     "-c:v", "copy", "-c:a:0", "copy", "-c:a:1", $mergeACodec, "-b:a:1", "192k", "-c:s", "copy",
+                                                     "-c:v", "copy", "-c:a", "copy",
+                                                     "-c:a:$origACount", $mergeACodec, "-b:a:$origACount", "192k", "-c:s", "copy",
                                                      "-metadata:s:a:0", "language=$cfg_transOrigLang",
                                                      "-metadata:s:a:0", "title=Original",
-                                                     "-metadata:s:a:1", "language=$transLang",
-                                                     "-metadata:s:a:1", "title=AI Translation",
+                                                     "-metadata:s:a:$origACount", "language=$transLang",
+                                                     "-metadata:s:a:$origACount", "title=AI Translation",
                                                      "-disposition:a:0", "default", $outputFile) }
                                     "replace"    { @("-y", "-i", $latestVideo.FullName, "-i", $transFile.FullName,
                                                      "-map", "0:v", "-map", "1:a", "-map", "0:s?", "-map", "0:t?",

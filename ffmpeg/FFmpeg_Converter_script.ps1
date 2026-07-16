@@ -300,11 +300,18 @@ $sub_meta_codec = switch ($format_files_out) { "mkv" { "srt" } "webm" { "webvtt"
 if ($audio_only -ne "yes" -and $copy_codecs -ne "yes" -and $merge_files -ne "yes" -and $create_frame -ne "yes" -and $extract_audio_copy -ne "yes") {
 	$_incompat = @()
 	if ($format_files_out -eq "webm") {
-		if ($set_video_codec -and $set_video_codec -notmatch '^(libvpx|libvpx-vp9|vp8|vp9|av1|libsvtav1|libaom-av1)') {
+		# Набор закреплён с обоих концов: без хвостового якоря `libvpxJUNK` и `vp9foo`
+		# проходили бы как валидные. `av1*` — осознанный префикс (av1_nvenc/av1_qsv),
+		# паритет с glob'ом `av1*` в SH.
+		if ($set_video_codec -and $set_video_codec -notmatch '^(libvpx|libvpx-vp9|vp8|vp9|libsvtav1|libaom-av1)$' -and $set_video_codec -notmatch '^av1') {
 			$_incompat += "  • WebM не поддерживает видеокодек '$set_video_codec' — нужен VP8/VP9/AV1 (смените [video] codec или [video] container)."
 		}
-		if ($audio_codec_value -and $audio_codec_value.ToLower() -notmatch '^(libopus|opus|libvorbis|vorbis)$') {
-			$_incompat += "  • WebM не поддерживает аудиокодек '$audio_codec_value' — нужен Opus/Vorbis (смените [audio] codec или [video] container)."
+		# Смотрим на РЕАЛЬНО сформированный аргумент, а не на значение из конфига: при
+		# `codec = -aac` статус '-' и `-c:a` в ffmpeg не передаётся вовсе — контейнер
+		# выберет дефолт сам, отклонять такую конфигурацию не за что.
+		$_effAudioCodec = $set_audio_codec -replace '^-c:a\s+', ''
+		if ($_effAudioCodec -and $_effAudioCodec.ToLower() -notmatch '^(libopus|opus|libvorbis|vorbis)$') {
+			$_incompat += "  • WebM не поддерживает аудиокодек '$_effAudioCodec' — нужен Opus/Vorbis (смените [audio] codec или [video] container)."
 		}
 	}
 	if ($_incompat.Count -gt 0) {

@@ -186,6 +186,17 @@ if log_has "-c:v libx264"; then fail "webm abort: перекодирование
 
 run_capture 'output_container=":+:webm"' 'video_codec=":+:libvpx-vp9"' 'audio_codec=":+:libopus"'
 assert_contains "webm+vp9+opus: валидная комбинация доходит до сводки" "Обработано:" "$OUT_TEXT"
+
+# F24: отключённый аудиокодек (статус '-') не передаётся в ffmpeg как -c:a вовсе,
+# поэтому отклонять его как «несовместимый с WebM» не за что — контейнер сам
+# выберет дефолт. Проверка смотрела на значение из конфига, игнорируя статус.
+run_capture 'output_container=":+:webm"' 'video_codec=":+:libvpx-vp9"' 'audio_codec=":-:aac"'
+assert_not_contains "webm + отключённый aac: НЕ отклонён" "WebM не поддерживает аудиокодек" "$OUT_TEXT"
+assert_contains     "webm + отключённый aac: доходит до сводки" "Обработано:" "$OUT_TEXT"
+if log_has "-c:a aac"; then fail "webm + отключённый aac: -c:a не передан" "нет -c:a aac" "передан в ffmpeg"; else pass "webm + отключённый aac: -c:a не передан"; fi
+# Включённый несовместимый кодек по-прежнему обязан отклоняться.
+run_capture 'output_container=":+:webm"' 'video_codec=":+:libvpx-vp9"' 'audio_codec=":+:aac"'
+assert_contains "webm + включённый aac: отклонён" "WebM не поддерживает аудиокодек" "$OUT_TEXT"
 rm -f "$IN/f.mp4" "$DST/f.webm"
 
 # --- кодек субтитров meta по контейнеру ---

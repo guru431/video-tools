@@ -308,9 +308,13 @@ if [ "$audio_only" != "yes" ] && [ "$copy_codecs" != "yes" ] && [ "$merge_files"
 				""|libvpx|libvpx-vp9|vp8|vp9|av1*|libsvtav1|libaom-av1) ;;
 				*) _incompat="  • WebM не поддерживает видеокодек '$set_video_codec' — нужен VP8/VP9/AV1 (смените [video] codec или [video] container)." ;;
 			esac
-			case "$(printf '%s' "$audio_codec_value" | tr '[:upper:]' '[:lower:]')" in
+			# Смотрим на РЕАЛЬНО сформированный аргумент, а не на значение из конфига:
+			# при `codec = -aac` статус '-' и `-c:a` в ffmpeg не передаётся вовсе —
+			# контейнер выберет дефолт сам, отклонять такую конфигурацию не за что.
+			_eff_audio_codec="${set_audio_codec#-c:a }"
+			case "$(printf '%s' "$_eff_audio_codec" | tr '[:upper:]' '[:lower:]')" in
 				""|libopus|opus|libvorbis|vorbis) ;;
-				*) _incompat="${_incompat:+$_incompat$'\n'}  • WebM не поддерживает аудиокодек '$audio_codec_value' — нужен Opus/Vorbis (смените [audio] codec или [video] container)." ;;
+				*) _incompat="${_incompat:+$_incompat$'\n'}  • WebM не поддерживает аудиокодек '$_eff_audio_codec' — нужен Opus/Vorbis (смените [audio] codec или [video] container)." ;;
 			esac
 			;;
 	esac

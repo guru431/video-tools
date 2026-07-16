@@ -106,6 +106,10 @@ summary() {
     echo -e "\n${BOLD}${CYAN}═══════════════════════════════════════${NC}"
     echo -e "  Всего: $total  |  ${GREEN}✓ $TESTS_PASS${NC}  |  ${RED}✗ $TESTS_FAIL${NC}  |  ${YELLOW}○ $TESTS_SKIP${NC}"
     echo -e "${BOLD}${CYAN}═══════════════════════════════════════${NC}"
+    # Machine-readable итог для run_tests.sh: раньше runner вытаскивал числа из
+    # ✓/✗/○-глифов человеческой строки выше — это ломается от смены оформления,
+    # цветов и локали. Строка ниже — контракт между framework и runner.
+    echo "TESTS_RESULT pass=$TESTS_PASS fail=$TESTS_FAIL skip=$TESTS_SKIP"
     if [ "$TESTS_FAIL" -gt 0 ]; then
         return 1
     fi

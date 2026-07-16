@@ -43,21 +43,28 @@ run_suite() {
 
     echo "$output"
 
-    # Парсим итоговую строку Results из вывода
-    local pass fail skip
-    pass=$(echo "$output" | grep -o '✓ [0-9]*' | grep -o '[0-9]*' | tail -1)
-    fail=$(echo "$output" | grep -o '✗ [0-9]*' | grep -o '[0-9]*' | tail -1)
-    skip=$(echo "$output" | grep -o '○ [0-9]*' | grep -o '[0-9]*' | tail -1)
+    # Итог берём из machine-readable маркера framework (TESTS_RESULT pass=N fail=N skip=N),
+    # а не из ✓/✗/○-глифов: те зависят от оформления, цветов и локали.
+    local marker pass fail skip
+    marker=$(echo "$output" | grep -o 'TESTS_RESULT pass=[0-9]* fail=[0-9]* skip=[0-9]*' | tail -1)
+    pass=$(echo "$marker" | grep -o 'pass=[0-9]*' | grep -o '[0-9]*')
+    fail=$(echo "$marker" | grep -o 'fail=[0-9]*' | grep -o '[0-9]*')
+    skip=$(echo "$marker" | grep -o 'skip=[0-9]*' | grep -o '[0-9]*')
 
     pass="${pass:-0}"
     fail="${fail:-0}"
     skip="${skip:-0}"
 
-    # Тест-файл, упавший ДО печати summary, даёт 0/0/0 и иначе попал бы в "зелёную"
-    # ветку. Считаем такой прогон провалом, чтобы крах не маскировался под успех.
-    if [ "$exit_code" -ne 0 ] && [ "$fail" -eq 0 ] && [ "$pass" -eq 0 ]; then
+    # Любой ненулевой rc обязан дать провал. Если fail>0 — он уже посчитан (summary
+    # возвращает 1 именно из-за этих провалов, второй раз добавлять нельзя). Если
+    # fail==0, то suite умер по иной причине: крах до/после summary, set -e, exit N.
+    # Раньше здесь дополнительно требовалось pass==0, поэтому suite с успешными
+    # assertions и последующим `exit 7` уходил в зелёную ветку.
+    if [ "$exit_code" -ne 0 ] && [ "$fail" -eq 0 ]; then
+        TOTAL_PASS=$((TOTAL_PASS + pass))
+        TOTAL_SKIP=$((TOTAL_SKIP + skip))
         TOTAL_FAIL=$((TOTAL_FAIL + 1))
-        SUITE_RESULTS+=("${RED}✗${NC} $suite_name (crashed rc=$exit_code)")
+        SUITE_RESULTS+=("${RED}✗${NC} $suite_name (rc=$exit_code, assertions ok: $pass)")
         return
     fi
 
@@ -108,6 +115,7 @@ FFMPEG_TESTS=(
     "$TESTS_DIR/ffmpeg/test_13_parser_parity.sh"
     "$TESTS_DIR/ffmpeg/test_14_audio_only_codec.sh"
     "$TESTS_DIR/ffmpeg/test_15_findings.sh"
+    "$TESTS_DIR/ffmpeg/test_16_gui_state.sh"
 )
 
 YTDLP_TESTS=(

@@ -60,4 +60,53 @@ n_err=$(printf '%s\n' "$ps1" | grep -cF -- 'Unregister-Event -SourceIdentifier $
 assert_eq "evtOut: очистка и в цикле, и в finally"  "2"  "$n_out"
 assert_eq "evtErr: очистка и в цикле, и в finally"  "2"  "$n_err"
 
+# ══════════════════════════════════════════════════════════════
+suite "Runner не маскирует ненулевой exit suite"
+# ══════════════════════════════════════════════════════════════
+# Вызываем НАСТОЯЩУЮ run_suite, вырезанную из run_tests.sh: инлайн-копия логики
+# подсчёта проходила бы, даже если продакшн-runner снова начнёт врать.
+RUNNER="$TESTS_DIR/run_tests.sh"
+RUN_SUITE_SRC=$(sed -n '/^run_suite() {/,/^}/p' "$RUNNER")
+if [ -z "$RUN_SUITE_SRC" ]; then
+    fail "run_suite найдена в run_tests.sh" "найдена" "не найдена"
+fi
+
+# Прогоняет один временный suite через настоящую run_suite и печатает итог счётчиков.
+probe_runner() {
+    local body="$1"
+    (
+        TMPD=$(mktemp -d /tmp/rs_probe_XXXXXX)
+        printf '#!/bin/bash\nsource "%s/lib/framework.sh"\n%s\n' "$TESTS_DIR" "$body" > "$TMPD/probe.sh"
+        RED=''; GREEN=''; YELLOW=''; CYAN=''; BOLD=''; NC=''
+        TOTAL_PASS=0; TOTAL_FAIL=0; TOTAL_SKIP=0
+        SUITE_RESULTS=(); SUITES_FULLY_SKIPPED=0; FULLY_SKIPPED_NAMES=()
+        eval "$RUN_SUITE_SRC"
+        run_suite "$TMPD/probe.sh" > /dev/null 2>&1
+        echo "pass=$TOTAL_PASS fail=$TOTAL_FAIL"
+        rm -rf "$TMPD"
+    )
+}
+
+# Суть находки: assertions прошли, summary напечатан, но suite умер с exit 7.
+r=$(probe_runner 'suite "x"; pass "a"; pass "b"
+summary
+exit 7')
+assert_contains "exit 7 после успешного summary → провал" "fail=1" "$r"
+assert_contains "exit 7: успешные assertions не потеряны"  "pass=2" "$r"
+
+# Настоящие провалы не должны задваиваться: summary сам возвращает 1 из-за них.
+r=$(probe_runner 'suite "x"; pass "a"; fail "b" "ожид" "получ"
+summary')
+assert_contains "реальный провал считается один раз (без +1 за rc)" "fail=1" "$r"
+
+# Чистый suite остаётся зелёным.
+r=$(probe_runner 'suite "x"; pass "a"; pass "b"
+summary')
+assert_contains "чистый suite → нет провалов" "fail=0" "$r"
+
+# Крах ДО summary (маркера нет вообще) — тоже провал.
+r=$(probe_runner 'suite "x"; pass "a"
+exit 3')
+assert_contains "крах до summary → провал" "fail=1" "$r"
+
 summary

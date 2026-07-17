@@ -295,6 +295,21 @@ $thread_args = @("-threads", $threads)
 # mov_text и ронял mkv/webm-выход. Для прочих контейнеров — mov_text (best-effort).
 $sub_meta_codec = switch ($format_files_out) { "mkv" { "srt" } "webm" { "webvtt" } default { "mov_text" } }
 
+# --- Подпись настроек для manifest ---
+# Manifest обязан устаревать при смене ЛЮБОЙ настройки, определяющей содержимое выхода.
+# Иначе прогон с другим контейнером/кодеком/фильтрами увидит «complete» от прошлого
+# прогона и пропустит файл, так и не создав запрошенный результат. Число потоков и
+# overwrite сюда не входят: они влияют на то, КАК считается выход, а не на то, каким он
+# получится. Порядок и состав полей — паритет с SH; побайтового совпадения строки между
+# платформами не требуется: чужая подпись просто не совпадёт и вызовет перекодирование —
+# безопасное направление ошибки (лишняя работа, а не пропуск незаконченного файла).
+$settings_sig = @(
+	($video_settings_args -join ' '), ($audio_settings_args -join ' '),
+	($vf_parts -join ','), ($af_parts -join ','),
+	$format_files_out, $sub_meta_codec, $video_subtitles, $subtitles_style,
+	$start_coding, $length_coding, $split_by_silence
+) -join '|'
+
 # --- F8. Предпусковая проверка совместимости контейнера и кодеков ---
 # Несовместимую пару (напр. webm + libx264/aac) отклоняем ДО пакета с понятной причиной.
 if ($audio_only -ne "yes" -and $copy_codecs -ne "yes" -and $merge_files -ne "yes" -and $create_frame -ne "yes" -and $extract_audio_copy -ne "yes") {
@@ -343,6 +358,68 @@ $script:startTimeAll  = Get-Date
 function Get-CanonPath {
 	param([string]$Path)
 	try { return [System.IO.Path]::GetFullPath($Path) } catch { return $Path }
+}
+
+function Get-FileSize {
+	param([string]$Path)
+	try { return (Get-Item -LiteralPath $Path -ErrorAction Stop).Length } catch { return 0 }
+}
+
+# --- Транзакционная запись: имя временного файла ---
+# Временное имя строится ПРЕФИКСОМ, а не суффиксом, потому что расширение обязано
+# сохраниться: без -f ffmpeg выводит muxer из расширения, а режимы copy_codecs и
+# merge как раз идут с `-c copy` без -f. Суффиксное `.movie.mp4.partial` давало
+# "Error initializing the muxer ... Invalid argument" на настоящем ffmpeg.
+function Get-PartialPath {
+	param([string]$Path)
+	$dir = Split-Path $Path -Parent
+	$leaf = Split-Path $Path -Leaf
+	return (Join-Path $dir ".ffconv-partial-$leaf")
+}
+
+# --- Manifest готовности: input → outputs → completion state ---
+# Построчный формат (не JSON: CMD его не разберёт), одинаковый на трёх платформах:
+#   # ffconv-manifest v1
+#   source=<путь>
+#   source_size=<байты>
+#   settings=<подпись>
+#   output=<байты>|<путь>      ← размер первым: путь может содержать '|'
+#   state=complete
+# `state=complete` пишется последней строкой и только после успеха ВСЕХ частей,
+# поэтому оборванная запись не может выдать себя за готовый результат.
+# Сверяем размеры, а не хеши: чтение гигабайтов ради контрольной суммы стоило бы
+# сопоставимо с самим перекодированием, а размер ловит обрыв и подмену источника.
+function Write-Manifest {
+	param([string]$ManifestPath, [string]$Source, [string]$Signature, [string[]]$Outputs)
+	$lines = @("# ffconv-manifest v1", "source=$Source", "source_size=$(Get-FileSize $Source)", "settings=$Signature")
+	foreach ($o in $Outputs) { $lines += "output=$(Get-FileSize $o)|$o" }
+	$lines += "state=complete"
+	$tmp = "$ManifestPath.tmp"
+	try {
+		[System.IO.File]::WriteAllLines($tmp, $lines)
+		Move-Item -LiteralPath $tmp -Destination $ManifestPath -Force
+	} catch {}
+}
+
+function Test-ManifestComplete {
+	param([string]$ManifestPath, [string]$Source, [string]$Signature)
+	if (!(Test-Path -LiteralPath $ManifestPath)) { return $false }
+	try { $lines = [System.IO.File]::ReadAllLines($ManifestPath) } catch { return $false }
+	if ($lines -notcontains "state=complete") { return $false }
+	$recSize = ($lines | Where-Object { $_ -like "source_size=*" } | Select-Object -First 1)
+	if ($null -eq $recSize -or $recSize.Substring(12) -ne [string](Get-FileSize $Source)) { return $false }
+	# Подпись настроек: смена контейнера/кодека/фильтров обязана обесценить manifest.
+	$recSig = ($lines | Where-Object { $_ -like "settings=*" } | Select-Object -First 1)
+	if ($null -eq $recSig -or $recSig.Substring(9) -ne $Signature) { return $false }
+	foreach ($l in ($lines | Where-Object { $_ -like "output=*" })) {
+		$rest = $l.Substring(7)
+		$sep = $rest.IndexOf('|')
+		if ($sep -lt 0) { return $false }
+		$sz = $rest.Substring(0, $sep); $p = $rest.Substring($sep + 1)
+		if (!(Test-Path -LiteralPath $p)) { return $false }
+		if ([string](Get-FileSize $p) -ne $sz) { return $false }
+	}
+	return $true
 }
 
 # --- D8. Логирование ---
@@ -499,6 +576,18 @@ function Encode-File {
 		return
 	}
 
+	# Готовность подтверждает manifest: state=complete + неизменившийся источник + все
+	# перечисленные выходы на месте. Раньше признаком готовности считалось наличие одной
+	# лишь `(part.1)` — если остальные части не создались (обрыв, падение, нехватка
+	# места), весь input молча пропускался как «уже готовый» и хвост терялся навсегда.
+	$manifest = Join-Path "$folder_destination$file_path" ".$file_name.ffconv"
+	$file_sig = "$settings_sig|fmt=$current_format_out|copy=$copy_codecs"
+	if ($overwrite_existing -ne "yes" -and (Test-ManifestComplete $manifest $full_path $file_sig)) {
+		$script:countSkip++
+		Write-GUIProgress -CurrentFile $file.Name
+		return
+	}
+
 	# E3. Проверка валидности существующего файла
 	# Судим по exit code (как SH/CMD), а не по тексту stderr: ffmpeg с -v error может
 	# вывести не-фатальную диагностику для полностью декодируемого файла — тогда
@@ -516,11 +605,6 @@ function Encode-File {
 				Log-Msg "WARN" "Удаление битого файла: $out_base.$current_format_out"
 				Remove-Item "$out_base.$current_format_out" -Force
 			}
-		}
-		if (Test-Path "$out_base (part.1).$current_format_out") {
-			$script:countSkip++
-			Write-GUIProgress -CurrentFile $file.Name
-			return
 		}
 	}
 
@@ -639,6 +723,10 @@ function Encode-File {
 
 	if ($start_coding_status -eq "+") { $num = @($start_coding_value) }
 
+	# Готовые выходы копим, чтобы записать manifest одной транзакцией после цикла.
+	$produced = @()
+	$anyFail = $false
+
 	$c = 1
 	foreach ($b in $num) {
 		$pref = ""
@@ -722,7 +810,13 @@ function Encode-File {
 		$ffmpegArgs += $af_args
 		if ($b -gt 0 -and $sub_burned) { $ffmpegArgs += @("-ss", "$b") }
 		if ($current_set_length) { $ffmpegArgs += $current_set_length -split ' ' }
-		$ffmpegArgs += @($out_file, "-y")
+		# Пишем в соседний temp и переименовываем в цель только после rc=0. Прямая запись
+		# в out_file означала, что прерванный прогон (Kill, падение, нехватка места)
+		# оставлял обрезанный файл под финальным именем — следующий запуск принимал его
+		# за готовый результат. Переименование в пределах каталога атомарно.
+		$out_tmp = Get-PartialPath $out_file
+		if (Test-Path -LiteralPath $out_tmp) { Remove-Item -LiteralPath $out_tmp -Force -ErrorAction SilentlyContinue }
+		$ffmpegArgs += @($out_tmp, "-y")
 		$ffmpegArgs = $ffmpegArgs | Where-Object { $_ -ne "" -and $_ -ne $null }
 
 		# D7. Dry-run
@@ -821,17 +915,27 @@ function Encode-File {
 				}
 				# Ждём освобождения файла после Kill
 				Start-Sleep -Milliseconds 500
-				if (Test-Path $out_file) { Remove-Item $out_file -Force -ErrorAction SilentlyContinue }
+				if (Test-Path -LiteralPath $out_tmp) { Remove-Item -LiteralPath $out_tmp -Force -ErrorAction SilentlyContinue }
+				$anyFail = $true
 				$script:countFail++
 				Write-GUIProgress -FilePercent 0 -CurrentFile $file.Name
 			} else {
+				Move-Item -LiteralPath $out_tmp -Destination $out_file -Force
 				Log-Msg "OK" "$($file.Name) -> $(Split-Path $out_file -Leaf) ($elapsedStr)"
 				$script:countOk++
+				$produced += $out_file
 				try { $script:totalInBytes += $file.Length; $script:totalOutBytes += (Get-Item $out_file).Length } catch {}
 				Write-GUIProgress -FilePercent 100 -CurrentFile $file.Name
 			}
 		}
 		$c++
+	}
+
+	# Manifest пишем только когда удались ВСЕ части. Именно его отсутствие заставит
+	# следующий запуск доделать файл, вместо того чтобы принять уцелевшую (part.1) за
+	# готовый результат. Частичный успех manifest'а не получает намеренно.
+	if ($dry_run -ne "yes" -and -not $anyFail -and $produced.Count -gt 0) {
+		Write-Manifest $manifest $full_path $file_sig $produced
 	}
 }
 
@@ -845,18 +949,35 @@ if ($merge_files -eq "yes") {
 	if ($overwrite_existing -eq "yes" -or !(Test-Path "$folder_destination\$fname")) {
 		$tmpFile = [System.IO.Path]::GetTempFileName()
 		[System.IO.File]::WriteAllLines($tmpFile, ($_mergeSorted.FullName | ForEach-Object { "file '" + ($_ -replace "'", "'\''") + "'" }))
+		# Мержим в соседний temp, а не сразу поверх цели. Прежний вызов шёл без -y на
+		# существующий файл: ffmpeg спрашивал «File exists. Overwrite? [y/N]» и висел,
+		# ожидая stdin, которого в batch/GUI нет. А упавший мерж оставлял partial под
+		# именем цели, и следующий запуск принимал его за готовый результат.
+		$mergeTarget = "$folder_destination\$fname"
+		$mergeTmp = Get-PartialPath $mergeTarget
 		if ($dry_run -eq "yes") {
-			Write-Host "[DRY-RUN] $ffmpeg -hide_banner -strict -2 -f concat -safe 0 -i `"$tmpFile`" -c copy -map 0 `"$folder_destination\$fname`""
+			Write-Host "[DRY-RUN] $ffmpeg -hide_banner -nostdin -strict -2 -f concat -safe 0 -i `"$tmpFile`" -c copy -map 0 -y `"$mergeTmp`""
 			Remove-Item $tmpFile -Force
 		} else {
-			Log-Msg "INFO" "Объединение файлов -> $folder_destination\$fname"
-			& $ffmpeg -hide_banner -strict -2 -f concat -safe 0 -i $tmpFile -c copy -map 0 "$folder_destination\$fname"
-			if ($LASTEXITCODE -ne 0) {
-				Log-Msg "FAIL" "Объединение файлов"
-				$script:countFail++
-			} else {
-				Log-Msg "OK" "Объединение файлов -> $folder_destination\$fname"
+			Log-Msg "INFO" "Объединение файлов -> $mergeTarget"
+			if (Test-Path -LiteralPath $mergeTmp) { Remove-Item -LiteralPath $mergeTmp -Force -ErrorAction SilentlyContinue }
+			& $ffmpeg -hide_banner -nostdin -strict -2 -f concat -safe 0 -i $tmpFile -c copy -map 0 -y $mergeTmp
+			$mergeRc = $LASTEXITCODE
+			# rc=0 сам по себе не гарантирует читаемый контейнер — валидируем тем же
+			# `-f null -`, что и обычные выходные файлы, и только потом подменяем цель.
+			$mergeOk = $false
+			if ($mergeRc -eq 0 -and (Test-Path -LiteralPath $mergeTmp) -and (Get-FileSize $mergeTmp) -gt 0) {
+				& $ffmpeg -nostdin -v error -i $mergeTmp -f null - 2>&1 | Out-Null
+				if ($LASTEXITCODE -eq 0) { $mergeOk = $true }
+			}
+			if ($mergeOk) {
+				Move-Item -LiteralPath $mergeTmp -Destination $mergeTarget -Force
+				Log-Msg "OK" "Объединение файлов -> $mergeTarget"
 				$script:countOk++
+			} else {
+				Log-Msg "FAIL" "Объединение файлов"
+				if (Test-Path -LiteralPath $mergeTmp) { Remove-Item -LiteralPath $mergeTmp -Force -ErrorAction SilentlyContinue }
+				$script:countFail++
 			}
 			Remove-Item $tmpFile -Force
 		}

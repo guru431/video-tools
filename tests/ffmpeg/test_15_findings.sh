@@ -499,6 +499,51 @@ if [ -f "$DST/tx.mp4" ]; then pass "успех: финальный файл на
 if ls "$DST"/.ffconv-partial-* >/dev/null 2>&1; then fail "успех: temp убран" "нет temp" "остался"; else pass "успех: temp убран"; fi
 rm -f "$IN/tx.mp4" "$DST/tx.mp4" "$DST/.tx.ffconv"
 
+# ══════════════════════════════════════════════════════════════
+suite "F17/F18/F23/F26 (паритет PS1/CMD): transactional + manifest + merge"
+# ══════════════════════════════════════════════════════════════
+# SH проверен поведенчески выше. Для PS1/CMD (нет кроссплатформенного раннера в
+# Git Bash) держим source-scan на те же инварианты — иначе платформы разъедутся.
+PS1_SRC2="$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1")"
+CMD_SRC2="$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.cmd")"
+
+# --- Транзакционная запись: ffmpeg получает temp, цель появляется переименованием ---
+assert_contains     "PS1: есть Get-PartialPath"                 'function Get-PartialPath'          "$PS1_SRC2"
+assert_contains     "PS1: temp — префикс (расширение сохранено)" '".ffconv-partial-$leaf"'          "$PS1_SRC2"
+assert_contains     "PS1: ffmpeg пишет в out_tmp"               '$ffmpegArgs += @($out_tmp, "-y")'  "$PS1_SRC2"
+assert_contains     "PS1: цель появляется переименованием"      'Move-Item -LiteralPath $out_tmp -Destination $out_file -Force' "$PS1_SRC2"
+assert_not_contains "PS1: цель не передаётся ffmpeg напрямую"   '$ffmpegArgs += @($out_file, "-y")' "$PS1_SRC2"
+assert_contains     "CMD: temp — префикс (расширение сохранено)" 'set "out_tmp=%folder_destination%!file_path!.ffconv-partial-!file_name!!pref!.!current_format_out!"' "$CMD_SRC2"
+assert_contains     "CMD: ffmpeg пишет в out_tmp"               '!out_seek! "!out_tmp!" -y'         "$CMD_SRC2"
+assert_contains     "CMD: цель появляется переименованием"      'move /y "!out_tmp!" "!out_file!"'  "$CMD_SRC2"
+
+# --- Manifest вместо (part.1) ---
+assert_contains     "PS1: есть Test-ManifestComplete"           'function Test-ManifestComplete'    "$PS1_SRC2"
+assert_contains     "PS1: manifest сверяет подпись настроек"    'settings=*'                        "$PS1_SRC2"
+assert_not_contains "PS1: (part.1) больше не признак готовности" 'Test-Path "$out_base (part.1).$current_format_out"' "$PS1_SRC2"
+assert_contains     "CMD: есть :manifest_is_complete"           ':manifest_is_complete'             "$CMD_SRC2"
+assert_contains     "CMD: state=complete дописывается последней" '>>"!_mf!.tmp" echo state=complete' "$CMD_SRC2"
+assert_not_contains "CMD: (part.1) больше не признак готовности" 'if not exist "%folder_destination%!file_path!!file_name! (part.1).!current_format_out!" (' "$CMD_SRC2"
+
+# --- merge: -nostdin -y + temp + валидация (F23 был закрыт только в SH) ---
+assert_contains     "PS1: merge с -nostdin -y"                  '-nostdin -strict -2 -f concat -safe 0 -i $tmpFile -c copy -map 0 -y $mergeTmp' "$PS1_SRC2"
+assert_contains     "PS1: merge валидирует до подмены цели"     '& $ffmpeg -nostdin -v error -i $mergeTmp -f null -' "$PS1_SRC2"
+assert_contains     "PS1: merge подменяет цель переименованием" 'Move-Item -LiteralPath $mergeTmp -Destination $mergeTarget -Force' "$PS1_SRC2"
+assert_not_contains "PS1: merge не пишет прямо в цель"          '-c copy -map 0 "$folder_destination\$fname"' "$PS1_SRC2"
+assert_contains     "CMD: merge с -nostdin -y"                  '-nostdin -strict -2 -f concat -safe 0 -i "!full_path!" -c copy -map 0 -y "!_merge_tmp!"' "$CMD_SRC2"
+assert_contains     "CMD: merge валидирует до подмены цели"     '-i "!_merge_tmp!" -f null -'       "$CMD_SRC2"
+assert_contains     "CMD: merge подменяет цель переименованием" 'move /y "!_merge_tmp!" "!_merge_target!"' "$CMD_SRC2"
+
+# --- Ни одна платформа не должна вернуться к суффиксному .partial ---
+# Это и есть тот дефект, что ломал muxer: расширением становилось `.partial`.
+for _f in FFmpeg_Converter_script.sh FFmpeg_Converter_script.ps1 FFmpeg_Converter_script.cmd; do
+    if grep -qE '\.(partial)"?$|\{fname\}\.partial|\$fname\.partial|!fname!\.partial' "$PROJECT_DIR/ffmpeg/$_f" 2>/dev/null; then
+        fail "$_f: нет суффиксного .partial" "temp только префиксом" "найден суффикс .partial"
+    else
+        pass "$_f: нет суффиксного .partial"
+    fi
+done
+
 # ── Cleanup ───────────────────────────────────────────────────
 rm -rf "$WORK"
 

@@ -428,6 +428,10 @@ download_url() {
         [ "$force_kf" = "true" ] && cmd+=(--force-keyframes-at-cuts)
     fi
 
+    # F30. '--' закрывает список опций: всё дальше yt-dlp обязан трактовать как
+    # позиционный URL, даже если строка начинается с дефиса. Иначе значение вроде
+    # '--version' исполнилось бы как ОПЦИЯ вместо загрузки, а '-U' подменил бы бинарь.
+    cmd+=(--)
     cmd+=("$url")
 
     if [ "$DRY_RUN" = "true" ]; then
@@ -667,6 +671,8 @@ download_batch() {
         fi
 
         local url="https://www.youtube.com/@${handle}/${mode}"
+        # F30. '--' закрывает список опций (паритет с download_url выше).
+        cmd+=(--)
         cmd+=("$url")
 
         if [ "$DRY_RUN" = "true" ]; then

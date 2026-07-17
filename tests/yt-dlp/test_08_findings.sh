@@ -366,6 +366,29 @@ fi
 rm -rf "$W4"
 
 # ══════════════════════════════════════════════════════════════
+suite "F30: '--' закрывает опции перед позиционным URL"
+# ══════════════════════════════════════════════════════════════
+# Суть: без end-of-options строка вида '--version' исполнялась бы yt-dlp как ОПЦИЯ
+# (вместо загрузки), а '-U' мог обновить/подменить сам бинарь.
+write_cfg "[download]
+use_archive = false
+default_quality = 720"
+OUT=$(run_full "$CFG" --dry-run --quality 720 "https://youtube.com/watch?v=abc")
+DRY=$(dry_line "$OUT")
+assert_contains "SH: '--' присутствует в argv" " -- " "$DRY"
+# '--' обязан стоять непосредственно перед URL, иначе он не защищает.
+case "$DRY" in
+    *"-- https://youtube.com/watch?v=abc"*) pass "SH: '--' стоит прямо перед URL" ;;
+    *) fail "SH: '--' стоит прямо перед URL" "-- <URL> подряд" "$DRY" ;;
+esac
+rm -f "$CFG"
+
+# PS1 GUI: валидация ввода + '--' перед URL (source-scan, паритет с test_07).
+PS1_SRC_F30="$(cat "$PS1_SCRIPT")"
+assert_contains "PS1: ввод валидируется как http(s)-URL" "notmatch '^https?://" "$PS1_SRC_F30"
+assert_contains "PS1: '--' перед позиционным URL"        '$command += "--"'     "$PS1_SRC_F30"
+
+# ══════════════════════════════════════════════════════════════
 suite "CMD source-scan: F1/F2 guardrail + F4 мерж-мэпы"
 # ══════════════════════════════════════════════════════════════
 CMD_SRC="$(cat "$CMD_SCRIPT")"

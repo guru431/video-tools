@@ -372,6 +372,17 @@ $_fc.Add($btnAddUrl)
 $addUrlToQueue = {
     $url = $textBoxUrl.Text.Trim()
     if ([string]::IsNullOrWhiteSpace($url)) { return }
+    # F30. Вход обязан быть http(s)-URL. Раньше произвольная строка уходила в argv
+    # yt-dlp как есть: '--version' исполнялся как ОПЦИЯ (окно «скачало» версию),
+    # а '-U' мог обновить/подменить сам бинарь. Поиска (ytsearch:) GUI не поддерживает,
+    # поэтому всё, что не http(s)-URL, — ошибка ввода, а не задача загрузки.
+    if ($url -notmatch '^https?://\S+$') {
+        [System.Windows.Forms.MessageBox]::Show(
+            "Ожидается ссылка вида https://... (получено: '$url').`n`nGUI принимает только адреса видео, не опции yt-dlp.",
+            "Некорректная ссылка", "OK", "Warning") | Out-Null
+        $textBoxUrl.SelectAll()
+        return
+    }
     $exists = $global:urlQueue | Where-Object { $_.Url -eq $url }
     if ($exists) { $textBoxUrl.SelectAll(); return }
     $platform    = Get-Platform $url
@@ -1138,6 +1149,10 @@ $btnStart.Add_Click({
                 if ($chkForceKf.Checked) { $command += "--force-keyframes-at-cuts" }
             }
 
+            # F30. '--' закрывает список опций: всё дальше yt-dlp обязан трактовать как
+            # позиционный URL, даже если строка начинается с дефиса. Вместе с валидацией
+            # ввода это второй барьер против исполнения опции вместо загрузки.
+            $command += "--"
             # URL — сырой; Quote-WinArg сам решит, нужны ли кавычки (& ? = и пр. — литералы).
             $command += $currentUrl
 

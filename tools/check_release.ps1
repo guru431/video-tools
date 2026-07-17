@@ -21,20 +21,28 @@ function Get-Sha256([string]$p) { (Get-FileHash -Algorithm SHA256 $p).Hash }
 
 Push-Location $root
 try {
+    # Провенанс считаем по состоянию ДО сборки: сборка меняет tracked EXE/манифест, и
+    # `status` после неё ВСЕГДА грязный — вычисленный там dirty бессмыслен. Грязный ВХОД
+    # (незакоммиченные правки исходников) делает провенанс недостоверным → отказ.
+    $commit = ''
+    try { $commit = (& git -C $root rev-parse HEAD 2>$null).Trim() } catch { $commit = 'unknown' }
+    $dirty  = [bool](& git -C $root status --porcelain 2>$null)
+
     if (-not $ManifestOnly) {
+        if ($dirty) { throw "рабочее дерево не чистое ДО сборки — зафиксируйте/уберите правки, иначе провенанс манифеста недостоверен" }
         if (-not $SkipTests) {
             Write-Host "== Тесты =="
             & bash tests/run_tests.sh
             if ($LASTEXITCODE -ne 0) { throw "тесты провалены (rc=$LASTEXITCODE)" }
         }
         Write-Host "== Сборка EXE =="
+        # После КАЖДОЙ сборки сразу проверяем $LASTEXITCODE: последовательные native-вызовы
+        # иначе маскируют провал первой сборки успехом второй (rc второй перетирает rc первой).
         & powershell -ExecutionPolicy Bypass -File (Join-Path $root 'ffmpeg/build_exe.ps1')
+        if ($LASTEXITCODE -ne 0) { throw "сборка ffmpeg EXE провалена (rc=$LASTEXITCODE)" }
         & powershell -ExecutionPolicy Bypass -File (Join-Path $root 'yt-dlp/build_exe.ps1')
+        if ($LASTEXITCODE -ne 0) { throw "сборка yt-dlp EXE провалена (rc=$LASTEXITCODE)" }
     }
-
-    $commit = ''
-    try { $commit = (& git -C $root rev-parse HEAD 2>$null).Trim() } catch { $commit = 'unknown' }
-    $dirty  = [bool](& git -C $root status --porcelain 2>$null)
 
     $artifacts = @()
     foreach ($e in $exes) {
@@ -70,7 +78,7 @@ try {
     Write-Host "  source commit: $commit"
     Write-Host "  tree dirty   : $dirty"
     foreach ($a in $artifacts) { Write-Host "  $($a.path) : $($a.sha256)" }
-    if ($dirty) { Write-Host "ПРИМЕЧАНИЕ: рабочее дерево не чистое (после сборки EXE/манифеста это ожидаемо)." }
+    if ($dirty) { Write-Host "ПРИМЕЧАНИЕ: рабочее дерево не чистое (ManifestOnly: провенанс отражает ГРЯЗНЫЙ вход)." }
 }
 finally {
     Pop-Location

@@ -76,10 +76,33 @@ jobs:
           done
           exit $rc
 
+      # Целостность провенанса: SHA в release-manifest.json обязаны совпасть и с EXE,
+      # и с sidecar (треугольник manifest↔EXE↔sidecar). Ловит дрейф, когда обновили EXE,
+      # но забыли перегенерить манифест (или наоборот) — CI EXE↔sidecar это не видел.
+      - name: Verify release manifest ↔ EXE ↔ sidecar
+        shell: pwsh
+        run: |
+          $manifest = Get-Content release-manifest.json -Raw | ConvertFrom-Json
+          $rc = 0
+          foreach ($a in $manifest.artifacts) {
+            if (-not (Test-Path $a.path)) { Write-Host "MISSING EXE: $($a.path)"; $rc = 1; continue }
+            $got  = (Get-FileHash -Algorithm SHA256 $a.path).Hash.ToUpper()
+            $man  = $a.sha256.ToUpper()
+            $sc   = "$($a.path).sha256"
+            $side = if (Test-Path $sc) { (((Get-Content $sc -Raw) -split '\s+')[0]).ToUpper() } else { '' }
+            if ($man -ne $got) { Write-Host "MANIFEST MISMATCH: $($a.path) manifest=$man exe=$got"; $rc = 1 }
+            elseif ($side -and $side -ne $got) { Write-Host "SIDECAR MISMATCH: $($a.path) sidecar=$side exe=$got"; $rc = 1 }
+            else { Write-Host "OK triangle: $($a.path)" }
+          }
+          if ($rc -ne 0) { exit 1 }
+
       # Smoke-сборка: обе PS1-GUI собираются в EXE без ошибок (в отдельную папку,
-      # чтобы не трогать закоммиченные артефакты).
+      # чтобы не трогать закоммиченные артефакты). $LASTEXITCODE проверяем после КАЖДОЙ
+      # сборки: иначе провал первой маскируется успехом второй (rc перетирается).
       - name: Build EXEs (smoke)
         shell: pwsh
         run: |
           powershell -ExecutionPolicy Bypass -File ffmpeg/build_exe.ps1
+          if ($LASTEXITCODE -ne 0) { throw "ffmpeg build failed (rc=$LASTEXITCODE)" }
           powershell -ExecutionPolicy Bypass -File yt-dlp/build_exe.ps1
+          if ($LASTEXITCODE -ne 0) { throw "yt-dlp build failed (rc=$LASTEXITCODE)" }

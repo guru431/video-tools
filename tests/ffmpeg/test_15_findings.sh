@@ -522,6 +522,29 @@ for _f in FFmpeg_Converter_script.sh FFmpeg_Converter_script.ps1 FFmpeg_Converte
     fi
 done
 
+# ══════════════════════════════════════════════════════════════
+suite "F29: размер входа в сводке считается один раз, а не за каждую часть"
+# ══════════════════════════════════════════════════════════════
+# Тот же расклад, что в F16: файл режется на 4 части. Вход — ровно 4096 байт (4 KB).
+# Раньше запись "ok" писалась на каждую часть и несла ПОЛНЫЙ размер источника,
+# поэтому сводка показывала вход 4×4096 = 16 KB и завышенное сжатие: чем больше
+# частей, тем «лучше» выглядел результат. Выход считается по частям — это верно.
+dd if=/dev/zero of="$IN/stats.mp4" bs=1024 count=4 2>/dev/null
+OUT_TEXT=$(
+    export PATH="$MOCKS_DIR:$PATH"; export MOCK_FFMPEG_ENCODERS=""; export MOCK_FFMPEG_LOG="$FFMPEG_LOG"
+    export MOCK_FFMPEG_DURATION="00:02:00.00"
+    export MOCK_FFMPEG_SILENCE="28:32 55:59 94:98"
+    rm -f "$FFMPEG_LOG"
+    default_vars
+    length_coding=":+:00-00-30"; split_by_silence="yes"
+    source "$SCRIPT" 2>&1
+) < /dev/null
+
+assert_contains "4 части действительно созданы" "(part.4)" "$OUT_TEXT"
+assert_contains "вход засчитан один раз (4 KB, не 16 KB)" "Вход:        4 KB" "$OUT_TEXT"
+assert_not_contains "вход НЕ умножен на число частей" "Вход:        16 KB" "$OUT_TEXT"
+rm -f "$IN/stats.mp4" "$DST"/stats*.mp4
+
 # ── Cleanup ───────────────────────────────────────────────────
 rm -rf "$WORK"
 

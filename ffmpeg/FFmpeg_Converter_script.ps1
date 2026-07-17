@@ -727,6 +727,10 @@ function Encode-File {
 	$produced = @()
 	$anyFail = $false
 
+	# F29. Размер входа засчитываем ОДИН раз на исходный файл. Раньше он прибавлялся
+	# на КАЖДУЮ часть, поэтому при разбиении на N частей вход суммировался N раз —
+	# сводка показывала завышенное сжатие. Выход при этом честно считается по частям.
+	$inReported = $false
 	$c = 1
 	foreach ($b in $num) {
 		$pref = ""
@@ -924,7 +928,11 @@ function Encode-File {
 				Log-Msg "OK" "$($file.Name) -> $(Split-Path $out_file -Leaf) ($elapsedStr)"
 				$script:countOk++
 				$produced += $out_file
-				try { $script:totalInBytes += $file.Length; $script:totalOutBytes += (Get-Item $out_file).Length } catch {}
+				# F29. Вход — только с первой удавшейся части (см. $inReported выше).
+				try {
+					if (-not $inReported) { $script:totalInBytes += $file.Length; $inReported = $true }
+					$script:totalOutBytes += (Get-Item $out_file).Length
+				} catch {}
 				Write-GUIProgress -FilePercent 100 -CurrentFile $file.Name
 			}
 		}

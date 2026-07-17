@@ -23,7 +23,8 @@ template = %(uploader)s/%(upload_date)s - %(title).100U.%(ext)s
 playlist_template = %(uploader)s/%(playlist)s/%(playlist_index)03d - %(title).100U.%(ext)s
 
 [download]
-# Качество по умолчанию: 360, 480, 720, 1080, 1440, 2160
+# Качество по умолчанию: 360, 480, 720, 1080, 1440, 2160, audio
+# audio — скачать только аудиодорожку (формат задаётся ключом audio_format ниже).
 default_quality = 720
 # Пресет формата: auto, avc1_best, avc1_https, avc1_m3u8,
 #   avc1_https_60fps, avc1_m3u8_60fps, avc1_https_60fps_hdr, old_combo

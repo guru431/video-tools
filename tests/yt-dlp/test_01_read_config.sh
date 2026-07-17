@@ -10,58 +10,26 @@ MY_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 source "$TESTS_DIR/lib/framework.sh"
 
-SCRIPT_FILE="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v11.sh"
-
-# ── Извлекаем только функцию read_config из скрипта ─────────────────────────
-# Используем subshell чтобы изолировать функцию без запуска main кода
-CONFIG_FILE=""
-
-load_readconfig() {
-    # Sourсим только функции (строки до первой секции "main" кода)
-    # Функция read_config определена в строках ~47-86
-    # Прекращаем source при set -uo pipefail (строка 3) и после функций
-    # Самый надёжный способ: re-define функцию inline
-    read_config() {
-        local key="$1"
-        local section="$2"
-        local default="${3:-}"
-
-        if [ ! -f "$CONFIG_FILE" ]; then
-            echo "$default"
-            return
-        fi
-
-        local in_section=false
-        local value=""
-        while IFS= read -r line || [ -n "$line" ]; do
-            line=$(echo "$line" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
-            [[ -z "$line" || "$line" == \#* ]] && continue
-            if [[ "$line" =~ ^\[([^]]+)\]$ ]]; then
-                if [ "${BASH_REMATCH[1]}" = "$section" ]; then
-                    in_section=true
-                else
-                    in_section=false
-                fi
-                continue
-            fi
-            if $in_section && [[ "$line" =~ ^${key}[[:space:]]*=[[:space:]]*(.*) ]]; then
-                value="${BASH_REMATCH[1]}"
-                value=$(echo "$value" | sed 's/[[:space:]]*#.*//')
-                # Подстановка ${ENV_VAR} (зеркало реального скрипта)
-                while [[ "$value" == *'${'*'}'* ]]; do
-                    local _vn="${value#*\$\{}"; _vn="${_vn%%\}*}"
-                    [ -n "${!_vn:-}" ] || echo "WARN: переменная $_vn не задана" >&2
-                    value="${value//\$\{$_vn\}/${!_vn:-}}"
-                done
-                echo "$value"
-                return
-            fi
-        done < "$CONFIG_FILE"
-        echo "$default"
-    }
-}
-
-load_readconfig
+# ── Настоящая read_config из production-скрипта ────────────────────────────
+# Раньше здесь лежала inline-копия, честно подписанная «зеркало реального SH». Зеркало
+# успело разойтись с оригиналом и закрепляло УЖЕ ИСПРАВЛЕННЫЙ баг: копия резала значение
+# по любому '#' (старый жадный regex), тогда как production режет только по первому
+# " #" — то есть `my#file.log` копия обрезала до `my`. Ещё копия не убирала  из CRLF.
+# Тест «парсера конфига» проверял НЕ ТОТ парсер; ссылка вела на v11, которого в репозитории
+# давно нет, и это тоже никого не смущало. Production сорсится штатно: main() у него
+# гардится BASH_SOURCE (гард заведён ровно ради тестов).
+YT_SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.sh"
+if [ ! -f "$YT_SH" ]; then
+    suite "YT-DLP read_config"
+    fail "production-скрипт на месте" "$YT_SH" "файл не найден — тест проверял бы копию, а не production"
+    summary
+    exit 1
+fi
+source "$YT_SH"
+# Production включает `set -uo pipefail` на верхнем уровне; в тестовой оболочке это
+# роняет framework на первой же необъявленной переменной. На саму read_config опции
+# не влияют, поэтому снимаем.
+set +u +o pipefail
 
 write_config() {
     local content="$1"
@@ -172,6 +140,36 @@ rm -f "$CONFIG_FILE"
 CONFIG_FILE="/tmp/nonexistent_config_$$.ini"
 result=$(read_config "url" "proxy" "file_default")
 assert_eq "нет файла → default"  "file_default"  "$result"
+
+# ══════════════════════════════════════════════════════════════
+suite "read_config: инлайн-комментарий и CRLF (inline-копия их не покрывала)"
+# ══════════════════════════════════════════════════════════════
+# Ровно те места, где зеркало разошлось с оригиналом. Копия резала по любому '#'
+# (старый жадный regex) и не трогала \r — то есть эти ветки production не проверялись
+# вовсе, а копия закрепляла поведение, которое production уже исправил.
+
+# '#' без пробела слева — часть значения, а не комментарий. Копия обрезала до "my".
+write_config "[output]
+template = my#file.log"
+assert_eq "'#' без пробела слева — часть значения" "my#file.log" "$(read_config 'template' 'output' '')"
+rm -f "$CONFIG_FILE"
+
+# ' #' (пробел+решётка) — инлайн-комментарий, режется по ПЕРВОМУ вхождению.
+write_config "[output]
+base_dir = /downloads # сюда качаем
+template = a # b # c"
+assert_eq "' #' срезан, хвост пробелов убран" "/downloads" "$(read_config 'base_dir' 'output' '')"
+assert_eq "режется по ПЕРВОМУ ' #', не по последнему" "a" "$(read_config 'template' 'output' '')"
+rm -f "$CONFIG_FILE"
+
+# CRLF: config.ini на Windows может быть с \r. Копия его не убирала, поэтому значение
+# уезжало с невидимым \r на конце — и сравнение с ожидаемым молча ломалось бы.
+CONFIG_FILE=$(mktemp /tmp/test_ytdlp_crlf_XXXXXX.ini)
+printf '[download]\r\ndefault_quality = 1080\r\n' > "$CONFIG_FILE"
+crlf_val=$(read_config 'default_quality' 'download' '')
+assert_eq "CRLF: \\r убран из значения" "1080" "$crlf_val"
+assert_eq "CRLF: длина значения без \\r" "4" "${#crlf_val}"
+rm -f "$CONFIG_FILE"
 
 # ══════════════════════════════════════════════════════════════
 suite "Task 12: yt-dlp фиксы (анализ исходников, 3 платформы)"

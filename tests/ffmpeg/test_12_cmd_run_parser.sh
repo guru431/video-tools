@@ -76,9 +76,14 @@ assert_eq "[gpu] hw_accel = +intel распарсен (не дефолт :-:inte
 assert_eq "[VIDEO] Quality (капитал) + 5 trailing spaces -> video_quality=:+:23" \
     "video_quality=:+:23" "$(get_line video_quality)"
 
-# Task 8: инлайн # без пробела слева — часть значения (my#file.log целиком)
-assert_eq "log_file=my#file.log сохранён целиком (# без пробела)" \
-    "log_file=my#file.log" "$(get_line log_file)"
+# Task 8: инлайн # без пробела слева — часть значения (my#file.log целиком).
+# F28: относительный log_file резолвится от папки скрипта, поэтому значение приходит
+# абсолютным — проверяем, что имя с '#' уцелело целиком в хвосте пути.
+_lf=$(get_line log_file)
+case "$_lf" in
+    *my#file.log) pass "log_file=my#file.log сохранён целиком (# без пробела)" ;;
+    *) fail "log_file=my#file.log сохранён целиком (# без пробела)" "путь заканчивается на my#file.log" "$_lf" ;;
+esac
 
 # (д) пустое значение codec= -> остался дефолт :+:aac, не ':+:'
 assert_eq "[audio] codec= (пусто) -> остался дефолт audio_codec=:+:aac" \

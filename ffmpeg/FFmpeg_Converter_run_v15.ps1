@@ -104,11 +104,23 @@ $subtitles_style    = Read-Config "subtitles_style"    "other" "FontName=Arial,F
 $dry_run            = Read-Config "dry_run"            "other" "no"
 $enable_log         = Read-Config "enable_log"         "other" "no"
 $log_file           = Read-Config "log_file"           "other" "ffmpeg_convert.log"
+# F28. Относительный log_file резолвим от папки скрипта — как source/destination выше.
+# Иначе лог уезжал в текущий cwd процесса: запуск из другого каталога (ярлык, планировщик)
+# раскидывал ffmpeg_convert.log по случайным местам, хотя контракт обещает
+# script-relative пути для всех относительных значений config.ini.
+$log_file           = $log_file.Replace('\', $_sep)
+if (-not [System.IO.Path]::IsPathRooted($log_file)) { $log_file = Join-Path $PSScriptRoot $log_file }
 
 # start coding
-$scriptPath = Join-Path $PSScriptRoot "FFmpeg_Converter_script.ps1"
-if (-not (Test-Path $scriptPath)) {
-	Write-Error "Ошибка: не найден FFmpeg_Converter_script.ps1 рядом с этим файлом."
-	exit 1
+# Тестовый хук: при дот-сорсинге с $env:FFCONV_TEST=1 конвейер не запускаем — отдаём
+# тестам настоящую Read-Config вместо их собственной копии. Паритет с SH-гардом
+# (BASH_SOURCE == $0) и с $env:YTDLP_TEST в yt-dlp GUI. Копия успела разойтись с
+# оригиналом, а тест паритета SH↔PS1 и вовсе сравнивал копию с копией.
+if ($env:FFCONV_TEST -ne '1') {
+	$scriptPath = Join-Path $PSScriptRoot "FFmpeg_Converter_script.ps1"
+	if (-not (Test-Path $scriptPath)) {
+		Write-Error "Ошибка: не найден FFmpeg_Converter_script.ps1 рядом с этим файлом."
+		exit 1
+	}
+	. $scriptPath
 }
-. $scriptPath

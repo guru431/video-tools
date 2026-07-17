@@ -151,4 +151,82 @@ for _t in "$TESTS_DIR"/ffmpeg/*.sh "$TESTS_DIR"/yt-dlp/*.sh "$TESTS_DIR"/common/
 done
 assert_empty "ни один тест не зовёт сетевые бинари напрямую" "$net_offenders"
 
+# ══════════════════════════════════════════════════════════════
+suite "Тесты не держат собственных копий production-функций"
+# ══════════════════════════════════════════════════════════════
+# Суть находки: тесты переопределяли у себя функции production и проверяли КОПИЮ.
+# Копии тихо расходились с оригиналом, и расхождение работало в обе стороны:
+#   • yt-dlp read_config — копия резала значение по любому '#' (старый жадный regex),
+#     то есть закрепляла баг, который production уже исправил;
+#   • yt-dlp build_cookie_args — копия собирала argv СТРОКОЙ с кавычками, хотя
+#     production давно перешёл на массив (строчный билдер запрещён guardrail'ом выше);
+#   • ffmpeg read_config — в копии не было подстановки ${ENV_VAR} вовсе.
+# Во всех трёх случаях production можно было сломать при зелёных тестах. Проверка ниже
+# не даёт копиям вернуться: тест обязан дот-сорсить production (main гардится
+# BASH_SOURCE) или вырезать нужный кусок из настоящего файла.
+PROD_FUNCS="read_config to_flag build_cookie_args build_format_args detect_platform resolve_bin canon_path manifest_is_complete manifest_write partial_path"
+copy_offenders=""
+for _t in "$TESTS_DIR"/ffmpeg/test_*.sh "$TESTS_DIR"/yt-dlp/test_*.sh "$TESTS_DIR"/common/test_*.sh; do
+    [ -f "$_t" ] || continue
+    case "$(basename "$_t")" in test_guardrails.sh) continue ;; esac
+    for _fn in $PROD_FUNCS; do
+        # Определение функции в тесте: `name() {` или `function name`.
+        if grep -qE "^[[:space:]]*(function[[:space:]]+)?${_fn}[[:space:]]*\(\)[[:space:]]*\{" "$_t" 2>/dev/null; then
+            copy_offenders="$copy_offenders $(basename "$_t"):${_fn}"
+        fi
+    done
+done
+assert_empty "ни один тест не переопределяет production-функцию" "$copy_offenders"
+
+# Тесты, разбирающие config.ini, обязаны брать парсер из production, а не свой.
+for _pair in "ffmpeg/test_01_config_sh.sh:ffmpeg/FFmpeg_Converter_run_v15.sh" \
+             "yt-dlp/test_01_read_config.sh:yt-dlp/Downloading_from_YouTube_v15.sh" \
+             "yt-dlp/test_03_cookie_args.sh:yt-dlp/Downloading_from_YouTube_v15.sh"; do
+    _tf="${_pair%%:*}"; _pf="${_pair#*:}"
+    if grep -q "$(basename "$_pf")" "$TESTS_DIR/$_tf" 2>/dev/null; then
+        pass "$(basename "$_tf") ссылается на настоящий $(basename "$_pf")"
+    else
+        fail "$(basename "$_tf") ссылается на настоящий $(basename "$_pf")" "дот-сорсинг production" "ссылки нет"
+    fi
+done
+
+# Обе точки входа обязаны иметь main-гард, иначе дот-сорсинг запустит конвейер.
+for _g in "ffmpeg/FFmpeg_Converter_run_v15.sh" "yt-dlp/Downloading_from_YouTube_v15.sh"; do
+    if grep -qE '\[ "\$\{BASH_SOURCE\[0\]\}" = "\$\{?0\}?" \]' "$PROJECT_DIR/$_g" 2>/dev/null; then
+        pass "$(basename "$_g"): main-гард на месте (дот-сорсинг безопасен)"
+    else
+        fail "$(basename "$_g"): main-гард на месте" 'if [ "${BASH_SOURCE[0]}" = "$0" ]' "гарда нет — дот-сорсинг запустит конвейер"
+    fi
+done
+
+# Ссылки на исчезнувшие версии: тест на v11 молча «проверял» несуществующий файл.
+stale_refs=""
+for _t in "$TESTS_DIR"/ffmpeg/test_*.sh "$TESTS_DIR"/yt-dlp/test_*.sh "$TESTS_DIR"/common/test_*.sh; do
+    [ -f "$_t" ] || continue
+    case "$(basename "$_t")" in test_guardrails.sh) continue ;; esac
+    if grep -qE '_v1[0-4]\.(sh|ps1|cmd)' "$_t" 2>/dev/null; then
+        stale_refs="$stale_refs $(basename "$_t")"
+    fi
+done
+assert_empty "нет ссылок на устаревшие версии скриптов (v11..v14)" "$stale_refs"
+
+# ══════════════════════════════════════════════════════════════
+suite "Допустимые значения config.ini задокументированы"
+# ══════════════════════════════════════════════════════════════
+# Находка: `default_quality = audio` работал, но config.ini.example перечислял только
+# 360..2160 — пользователь не мог узнать о валидном значении. Единственный источник
+# истины — validate_enum в SH; example обязан перечислять ровно его значения.
+YT_EXAMPLE="$PROJECT_DIR/yt-dlp/config.ini.example"
+quality_enum=$(grep -oE 'validate_enum "\$1" "\$2" [0-9a-z ]+' "$YT_SH" 2>/dev/null | head -1 | sed 's/.*"\$2" //')
+if [ -z "$quality_enum" ]; then
+    fail "enum качества найден в production SH" "validate_enum со списком" "не найден"
+else
+    quality_doc=$(grep -A1 '^# Качество по умолчанию' "$YT_EXAMPLE" 2>/dev/null | head -2)
+    missing=""
+    for _v in $quality_enum; do
+        case "$quality_doc" in *"$_v"*) ;; *) missing="$missing $_v" ;; esac
+    done
+    assert_empty "все значения --quality перечислены в config.ini.example" "$missing"
+fi
+
 summary

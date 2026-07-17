@@ -1,6 +1,17 @@
 #!/bin/bash
 # ============================================================
-# test_03_cookie_args.sh — Тест build_cookie_args()
+# test_03_cookie_args.sh — Тест НАСТОЯЩЕЙ build_cookie_args() из production
+#
+# Раньше файл держал inline-копию, подписанную «идентично скрипту». Идентичной она
+# не была даже приблизительно: копия ЭХОИЛА СТРОКУ с литеральными кавычками
+# (`--cookies "путь"`), а production заполняет argv-МАССИВ COOKIE_ARGS_ARR и пишет
+# предупреждения. То есть тест проверял реализацию, от которой проект давно ушёл
+# (ручная сборка argv-строки прямо запрещена guardrail'ом), и не мог поймать ни
+# одной поломки настоящей функции.
+#
+# Контракт production: COOKIE_ARGS_ARR — массив, значения передаются в yt-dlp как
+# отдельные argv-элементы. Именно поэтому путь с пробелами не требует кавычек и не
+# разваливается на несколько аргументов — это и проверяем.
 # ============================================================
 
 TESTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -8,56 +19,41 @@ PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
 
 source "$TESTS_DIR/lib/framework.sh"
 
-# Inline определение функции (идентично скрипту)
-build_cookie_args() {
-    local method="$1"
-    local cookie_file="$2"
-    local cookie_browser="$3"
+YT_SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.sh"
+if [ ! -f "$YT_SH" ]; then
+    suite "Cookies: build_cookie_args"
+    fail "production-скрипт на месте" "$YT_SH" "файл не найден — тест проверял бы копию, а не production"
+    summary
+    exit 1
+fi
+source "$YT_SH"
+# Production включает `set -uo pipefail` на верхнем уровне; в тестовой оболочке это
+# роняет framework на первой же необъявленной переменной.
+set +u +o pipefail
 
-    case "$method" in
-        file)
-            if [ -f "$cookie_file" ]; then
-                echo "--cookies \"$cookie_file\""
-            else
-                : # файл не найден — нет вывода
-            fi
-            ;;
-        browser)
-            echo "--cookies-from-browser $cookie_browser"
-            ;;
-        none|"")
-            ;;
-        *)
-            : # неизвестный метод — нет вывода
-            ;;
-    esac
+# Хелпер: зовём настоящую функцию и отдаём массив в виде «arg|arg|arg» — так видно
+# ГРАНИЦЫ argv-элементов, а не только текст. Строковая копия этого показать не могла.
+cookie_call() {
+    COOKIE_ARGS_ARR=()
+    build_cookie_args "$1" "$2" "$3" >/dev/null 2>&1
+    local IFS='|'
+    printf '%s' "${COOKIE_ARGS_ARR[*]}"
 }
 
 # ══════════════════════════════════════════════════════════════
 suite "Cookies: метод none / пустой"
 # ══════════════════════════════════════════════════════════════
 
-r=$(build_cookie_args "none" "" "")
-assert_empty "method=none → пустой вывод"  "$r"
-
-r=$(build_cookie_args "" "" "")
-assert_empty "method='' → пустой вывод"  "$r"
+assert_empty "method=none → массив пуст"  "$(cookie_call "none" "" "")"
+assert_empty "method='' → массив пуст"    "$(cookie_call "" "" "")"
 
 # ══════════════════════════════════════════════════════════════
 suite "Cookies: метод browser"
 # ══════════════════════════════════════════════════════════════
 
-r=$(build_cookie_args "browser" "" "chrome")
-assert_eq "browser chrome"   "--cookies-from-browser chrome"   "$r"
-
-r=$(build_cookie_args "browser" "" "firefox")
-assert_eq "browser firefox"  "--cookies-from-browser firefox"  "$r"
-
-r=$(build_cookie_args "browser" "" "edge")
-assert_eq "browser edge"     "--cookies-from-browser edge"     "$r"
-
-r=$(build_cookie_args "browser" "" "chromium")
-assert_eq "browser chromium" "--cookies-from-browser chromium" "$r"
+for _b in chrome firefox edge chromium; do
+    assert_eq "browser $_b → 2 argv-элемента" "--cookies-from-browser|$_b" "$(cookie_call "browser" "" "$_b")"
+done
 
 # ══════════════════════════════════════════════════════════════
 suite "Cookies: метод file (файл существует)"
@@ -65,25 +61,41 @@ suite "Cookies: метод file (файл существует)"
 
 TMPFILE=$(mktemp /tmp/test_cookies_XXXXXX.txt)
 echo "# Netscape HTTP Cookie File" > "$TMPFILE"
-
-r=$(build_cookie_args "file" "$TMPFILE" "")
-assert_contains "file exists → --cookies path"  "--cookies"  "$r"
-assert_contains "file path присутствует"        "$TMPFILE"   "$r"
-
+assert_eq "file exists → --cookies + путь как ОТДЕЛЬНЫЕ argv" "--cookies|$TMPFILE" "$(cookie_call "file" "$TMPFILE" "")"
 rm -f "$TMPFILE"
+
+# Путь с пробелами — то, ради чего массив и заведён. Строковая копия отдавала
+# `--cookies "путь с пробелами"`, и кавычки уезжали в yt-dlp литералами.
+SPACE_DIR=$(mktemp -d /tmp/test cookies_XXXXXX 2>/dev/null || mktemp -d "/tmp/test cookies_XXXXXX")
+SPACE_FILE="$SPACE_DIR/my cookies.txt"
+echo "# Netscape HTTP Cookie File" > "$SPACE_FILE"
+space_res="$(cookie_call "file" "$SPACE_FILE" "")"
+assert_eq "путь с пробелами остаётся ОДНИМ argv-элементом" "--cookies|$SPACE_FILE" "$space_res"
+# Кавычек в значении быть не должно: их добавлял строковый билдер, и yt-dlp получал
+# их как часть имени файла.
+if [[ "$space_res" == *'"'* ]]; then
+    fail "в argv нет литеральных кавычек" "путь без кавычек" "$space_res"
+else
+    pass "в argv нет литеральных кавычек"
+fi
+rm -rf "$SPACE_DIR"
 
 # ══════════════════════════════════════════════════════════════
 suite "Cookies: метод file (файл не существует)"
 # ══════════════════════════════════════════════════════════════
 
-r=$(build_cookie_args "file" "/tmp/nonexistent_cookies_$$.txt" "")
-assert_empty "file not found → пустой вывод"  "$r"
+assert_empty "file not found → массив пуст" "$(cookie_call "file" "/tmp/nonexistent_cookies_$$.txt" "")"
+# Молчаливый пропуск был бы хуже ошибки: пользователь задал cookies и вправе узнать,
+# что их не применили. Копия предупреждения не выдавала вовсе.
+warn_out=$( COOKIE_ARGS_ARR=(); build_cookie_args "file" "/tmp/nonexistent_cookies_$$.txt" "" 2>&1 )
+assert_contains "file not found → предупреждение пользователю" "Файл cookies не найден" "$warn_out"
 
 # ══════════════════════════════════════════════════════════════
 suite "Cookies: неизвестный метод"
 # ══════════════════════════════════════════════════════════════
 
-r=$(build_cookie_args "unknown_method" "" "")
-assert_empty "unknown method → пустой вывод (нет краша)"  "$r"
+assert_empty "unknown method → массив пуст (нет краша)" "$(cookie_call "unknown_method" "" "")"
+warn_out=$( COOKIE_ARGS_ARR=(); build_cookie_args "unknown_method" "" "" 2>&1 )
+assert_contains "unknown method → предупреждение пользователю" "Неизвестный метод cookies" "$warn_out"
 
 summary

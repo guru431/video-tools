@@ -730,6 +730,11 @@ encode_file() {
 	local -a produced=()
 	local any_fail="no"
 
+	# F29. Размер входа засчитываем ОДИН раз на исходный файл. Раньше запись "ok"
+	# писалась на каждую часть и несла полный размер источника, поэтому при разбиении
+	# на N частей вход суммировался N раз — сводка показывала завышенное сжатие
+	# (а при большом N — «отрицательное»). Выход при этом честно считается по частям.
+	local in_reported=0
 	local c=1
 	for b in "${num[@]}"; do
 		local pref=""
@@ -899,7 +904,12 @@ encode_file() {
 				log_msg "OK" "$(basename "$full_path") -> $(basename "$out_file") (${elapsed_min}m ${elapsed_sec}s)"
 				local out_sz in_sz
 				out_sz=$(file_size "$out_file")
-				in_sz=$(file_size "$full_path")
+				# F29. Вход — только с первой удавшейся части (см. in_reported выше).
+				in_sz=0
+				if [ "$in_reported" -eq 0 ]; then
+					in_sz=$(file_size "$full_path")
+					in_reported=1
+				fi
 				produced+=("$out_file")
 				echo "ok:${out_sz}:${in_sz}" > "$(mktemp "$results_dir/r_XXXXXXXX")"
 			fi

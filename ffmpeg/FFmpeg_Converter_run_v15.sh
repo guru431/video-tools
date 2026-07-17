@@ -147,6 +147,15 @@ subtitles_style="$(read_config "subtitles_style" "other" "FontName=Arial,FontSiz
 dry_run="$(read_config "dry_run" "other" "no")"
 enable_log="$(read_config "enable_log" "other" "no")"
 log_file="$(read_config "log_file" "other" "ffmpeg_convert.log")"
+# F28. Относительный log_file резолвим от папки скрипта — как source/destination выше.
+# Иначе лог уезжал в текущий cwd процесса: запуск из другого каталога (ярлык, cron,
+# планировщик) раскидывал ffmpeg_convert.log по случайным местам, хотя контракт
+# обещает script-relative пути для всех относительных значений config.ini.
+log_file="${log_file//\\//}"
+case "$log_file" in
+	/*|[A-Za-z]:*) ;;
+	*) log_file="$SCRIPT_DIR/$log_file" ;;
+esac
 
 # start coding #
 # Гард запускает конвейер только при ПРЯМОМ запуске. Дот-сорсинг отдаёт настоящие

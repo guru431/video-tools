@@ -71,37 +71,42 @@ if [ "$parallel_files_status" = "+" ]; then parallel_count="$parallel_files_valu
 use_hw_accel="no"
 hw_accel_type=""
 hw_decode_args=""
+# F33. Сначала РАЗРЕШАЕМ нужный энкодер, затем проверяем, что он есть в сборке,
+# и только тогда включаем hardware. Раньше проверка была подстрочной (grep -q nvenc)
+# и давала два скрытых дефекта:
+#   • сборка с h264_nvenc, но без av1_nvenc, для libsvtav1 подставляла несуществующий
+#     av1_nvenc — падал каждый файл;
+#   • кодек вне маппинга (например libvpx-vp9) оставался программным, но
+#     -hwaccel_output_format cuda уже включался → софт получал hardware-кадры
+#     («Impossible to convert between the formats»).
 if [ "$hw_accel_status" = "+" ]; then
+	hw_suffix=""; hw_label=""
 	case "$hw_accel_value" in
-		nvidia)
-			if "$ffmpeg" -encoders 2>/dev/null | grep -q nvenc; then
-				use_hw_accel="yes"
-				hw_accel_type="nvidia"
-				hw_decode_args="-hwaccel cuda -hwaccel_output_format cuda"
-				case "$set_video_codec" in
-					libx264) set_video_codec="h264_nvenc" ;;
-					libx265) set_video_codec="hevc_nvenc" ;;
-					libsvtav1) set_video_codec="av1_nvenc" ;;
-				esac
-			else
-				echo "[ПРЕДУПРЕЖДЕНИЕ] NVENC не поддерживается данной сборкой ffmpeg. Используется программное кодирование."
-			fi
-			;;
-		intel)
-			if "$ffmpeg" -encoders 2>/dev/null | grep -q qsv; then
-				use_hw_accel="yes"
-				hw_accel_type="intel"
-				hw_decode_args="-hwaccel qsv -hwaccel_output_format qsv"
-				case "$set_video_codec" in
-					libx264) set_video_codec="h264_qsv" ;;
-					libx265) set_video_codec="hevc_qsv" ;;
-					libsvtav1) set_video_codec="av1_qsv" ;;
-				esac
-			else
-				echo "[ПРЕДУПРЕЖДЕНИЕ] QSV не поддерживается данной сборкой ffmpeg. Используется программное кодирование."
-			fi
-			;;
+		nvidia) hw_suffix="_nvenc"; hw_label="NVENC"; hw_try_args="-hwaccel cuda -hwaccel_output_format cuda"; hw_try_type="nvidia" ;;
+		intel)  hw_suffix="_qsv";   hw_label="QSV";   hw_try_args="-hwaccel qsv -hwaccel_output_format qsv";   hw_try_type="intel" ;;
 	esac
+	if [ -n "$hw_suffix" ]; then
+		# Кандидат: маппинг software→GPU либо уже готовое GPU-имя от пользователя.
+		hw_candidate=""
+		case "$set_video_codec" in
+			libx264)   hw_candidate="h264${hw_suffix}" ;;
+			libx265)   hw_candidate="hevc${hw_suffix}" ;;
+			libsvtav1) hw_candidate="av1${hw_suffix}" ;;
+			*${hw_suffix}) hw_candidate="$set_video_codec" ;;
+		esac
+		if [ -z "$hw_candidate" ]; then
+			echo "[ПРЕДУПРЕЖДЕНИЕ] У кодека $set_video_codec нет ${hw_label}-варианта. Используется программное кодирование."
+		# Якорим имя по границам столбца: подстрочный grep матчил бы av1_nvenc в
+		# строке про av1_nvenc_hypothetical и наоборот.
+		elif "$ffmpeg" -encoders 2>/dev/null | grep -qE "^[[:space:]]*[A-Z.]+[[:space:]]+${hw_candidate}([[:space:]]|$)"; then
+			use_hw_accel="yes"
+			hw_accel_type="$hw_try_type"
+			hw_decode_args="$hw_try_args"
+			set_video_codec="$hw_candidate"
+		else
+			echo "[ПРЕДУПРЕЖДЕНИЕ] Энкодер $hw_candidate отсутствует в данной сборке ffmpeg. Используется программное кодирование."
+		fi
+	fi
 fi
 
 # --- Время начала и длительности ---

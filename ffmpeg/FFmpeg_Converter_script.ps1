@@ -78,36 +78,41 @@ $parallel_count = if ($parallel_files_status -eq "+") { [int]$parallel_files_val
 $use_hw_accel = $false
 $hw_accel_type = ""
 $hw_decode_args = @()
+# F33. Сначала РАЗРЕШАЕМ нужный энкодер, затем проверяем, что он есть в сборке,
+# и только тогда включаем hardware. Раньше искали ЛЮБОЕ вхождение имени семейства
+# (nvenc/qsv) в списке энкодеров — это давало два скрытых дефекта:
+#   • сборка с h264_nvenc, но без av1_nvenc, для libsvtav1 подставляла несуществующий
+#     av1_nvenc — падал каждый файл;
+#   • кодек вне маппинга (например libvpx-vp9) оставался программным, но
+#     -hwaccel_output_format cuda уже включался → софт получал hardware-кадры
+#     («Impossible to convert between the formats»).
 if ($hw_accel_status -eq "+") {
 	$encoders_list = & $ffmpeg -encoders 2>&1 | Out-String
+	$hw_suffix = ""; $hw_label = ""; $hw_try_args = @(); $hw_try_type = ""
 	switch ($hw_accel_value) {
-		"nvidia" {
-			if ($encoders_list -match "nvenc") {
-				$use_hw_accel = $true
-				$hw_accel_type = "nvidia"
-				$hw_decode_args = @("-hwaccel", "cuda", "-hwaccel_output_format", "cuda")
-				switch ($set_video_codec) {
-					"libx264"   { $set_video_codec = "h264_nvenc" }
-					"libx265"   { $set_video_codec = "hevc_nvenc" }
-					"libsvtav1" { $set_video_codec = "av1_nvenc" }
-				}
-			} else {
-				Write-Host "[ПРЕДУПРЕЖДЕНИЕ] NVENC не поддерживается данной сборкой ffmpeg."
-			}
+		"nvidia" { $hw_suffix = "_nvenc"; $hw_label = "NVENC"; $hw_try_type = "nvidia"; $hw_try_args = @("-hwaccel", "cuda", "-hwaccel_output_format", "cuda") }
+		"intel"  { $hw_suffix = "_qsv";   $hw_label = "QSV";   $hw_try_type = "intel";  $hw_try_args = @("-hwaccel", "qsv", "-hwaccel_output_format", "qsv") }
+	}
+	if ($hw_suffix) {
+		# Кандидат: маппинг software→GPU либо уже готовое GPU-имя от пользователя.
+		$hw_candidate = switch -Regex ($set_video_codec) {
+			'^libx264$'    { "h264$hw_suffix"; break }
+			'^libx265$'    { "hevc$hw_suffix"; break }
+			'^libsvtav1$'  { "av1$hw_suffix";  break }
+			([regex]::Escape($hw_suffix) + '$') { $set_video_codec; break }
+			default        { "" }
 		}
-		"intel" {
-			if ($encoders_list -match "qsv") {
-				$use_hw_accel = $true
-				$hw_accel_type = "intel"
-				$hw_decode_args = @("-hwaccel", "qsv", "-hwaccel_output_format", "qsv")
-				switch ($set_video_codec) {
-					"libx264"   { $set_video_codec = "h264_qsv" }
-					"libx265"   { $set_video_codec = "hevc_qsv" }
-					"libsvtav1" { $set_video_codec = "av1_qsv" }
-				}
-			} else {
-				Write-Host "[ПРЕДУПРЕЖДЕНИЕ] QSV не поддерживается данной сборкой ffmpeg."
-			}
+		if (-not $hw_candidate) {
+			Write-Host "[ПРЕДУПРЕЖДЕНИЕ] У кодека $set_video_codec нет $hw_label-варианта. Используется программное кодирование."
+		# Якорим имя по границам столбца: подстрочный match поймал бы av1_nvenc
+		# в строке про av1_nvenc_hypothetical и наоборот.
+		} elseif ($encoders_list -match "(?m)^\s*[A-Z.]+\s+$([regex]::Escape($hw_candidate))(\s|$)") {
+			$use_hw_accel = $true
+			$hw_accel_type = $hw_try_type
+			$hw_decode_args = $hw_try_args
+			$set_video_codec = $hw_candidate
+		} else {
+			Write-Host "[ПРЕДУПРЕЖДЕНИЕ] Энкодер $hw_candidate отсутствует в данной сборке ffmpeg. Используется программное кодирование."
 		}
 	}
 }

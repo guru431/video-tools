@@ -32,9 +32,17 @@ if [[ "$*" == *"-encoders"* ]]; then
     echo " V..... libx264"
     echo " V..... libx265"
     echo " V..... libsvtav1"
-    if [ -n "$ENCODERS" ]; then
-        echo " V..... ${ENCODERS}_example"
-    fi
+    # Настоящие имена, а не "${ENCODERS}_example": скрипт обязан искать КОНКРЕТНЫЙ
+    # энкодер (h264_nvenc), а на фиктивном имени такую проверку не написать —
+    # мок удовлетворял только подстрочному grep -q nvenc.
+    # nvenc/qsv — вся семья (обратная совместимость со старыми тестами);
+    # явный список ("h264_nvenc hevc_nvenc") — чтобы проверять отсутствие av1_nvenc.
+    case "$ENCODERS" in
+        "") ;;
+        nvenc) echo " V....D h264_nvenc"; echo " V....D hevc_nvenc"; echo " V....D av1_nvenc" ;;
+        qsv)   echo " V....D h264_qsv";   echo " V....D hevc_qsv";   echo " V....D av1_qsv" ;;
+        *)     for _e in $ENCODERS; do echo " V....D $_e"; done ;;
+    esac
     exit 0
 fi
 

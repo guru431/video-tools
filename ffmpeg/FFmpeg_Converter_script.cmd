@@ -76,35 +76,13 @@ rem --- Многопоточность ---
 if "!multithreads_status!"=="+" (set "threads=!multithreads_value!") else (set "threads=1")
 
 rem --- C1. Аппаратное ускорение (NVIDIA / Intel) ---
+rem F33. Логика вынесена в подпрограмму: внутри скобочного блока %hw_suffix%
+rem раскрывается на этапе ПАРСИНГА (переменная ещё пуста) и подстановка ломается,
+rem а вложенные if/else с for /f CMD парсит ненадёжно ("else was unexpected").
 set "use_hw_accel=no"
 set "hw_accel_type="
 set "hw_decode_args="
-if "!hw_accel_status!"=="+" (
-	if "!hw_accel_value!"=="nvidia" (
-		set "encoder_check="
-		for /f "tokens=*" %%i in ('""%ffmpeg%" -encoders 2^>^&1 ^| findstr /i "h264_nvenc hevc_nvenc av1_nvenc""') do set "encoder_check=%%i"
-		if defined encoder_check (
-			set "use_hw_accel=yes"
-			set "hw_accel_type=nvidia"
-			set "hw_decode_args=-hwaccel cuda -hwaccel_output_format cuda"
-			if "!set_video_codec!"=="libx264" set "set_video_codec=h264_nvenc"
-			if "!set_video_codec!"=="libx265" set "set_video_codec=hevc_nvenc"
-			if "!set_video_codec!"=="libsvtav1" set "set_video_codec=av1_nvenc"
-		) else (echo [WARN] NVIDIA NVENC encoder not available, using software encoding)
-	)
-	if "!hw_accel_value!"=="intel" (
-		set "encoder_check="
-		for /f "tokens=*" %%i in ('""%ffmpeg%" -encoders 2^>^&1 ^| findstr /i "h264_qsv hevc_qsv av1_qsv""') do set "encoder_check=%%i"
-		if defined encoder_check (
-			set "use_hw_accel=yes"
-			set "hw_accel_type=intel"
-			set "hw_decode_args=-hwaccel qsv -hwaccel_output_format qsv"
-			if "!set_video_codec!"=="libx264" set "set_video_codec=h264_qsv"
-			if "!set_video_codec!"=="libx265" set "set_video_codec=hevc_qsv"
-			if "!set_video_codec!"=="libsvtav1" set "set_video_codec=av1_qsv"
-		) else (echo [WARN] Intel QSV encoder not available, using software encoding)
-	)
-)
+if "!hw_accel_status!"=="+" call :resolve_hw
 
 rem --- Время начала и длительности ---
 for /f "tokens=1,2 delims=:" %%a in ("%start_coding%") do (set "start_coding_status=%%a" & set "start_coding_value=%%b")
@@ -809,6 +787,49 @@ echo.
 echo.
 pause
 if !total_fail! gtr 0 (exit /b 1)
+exit /b 0
+
+rem --- F33. Разрешение GPU-энкодера: сначала кандидат, потом ТОЧНАЯ проверка ---
+rem Раньше искали ЛЮБОЙ nvenc/qsv в списке, что давало два скрытых дефекта:
+rem   * сборка с h264_nvenc, но без av1_nvenc, для libsvtav1 подставляла
+rem     несуществующий av1_nvenc - падал каждый файл;
+rem   * кодек вне маппинга (например libvpx-vp9) оставался программным, но
+rem     -hwaccel_output_format cuda уже включался -> софт получал hardware-кадры.
+:resolve_hw
+set "hw_suffix=" & set "hw_label=" & set "hw_try_type=" & set "hw_try_args="
+if "%hw_accel_value%"=="nvidia" (set "hw_suffix=_nvenc" & set "hw_label=NVENC" & set "hw_try_type=nvidia" & set "hw_try_args=-hwaccel cuda -hwaccel_output_format cuda")
+if "%hw_accel_value%"=="intel"  (set "hw_suffix=_qsv"   & set "hw_label=QSV"   & set "hw_try_type=intel"  & set "hw_try_args=-hwaccel qsv -hwaccel_output_format qsv")
+if not defined hw_suffix exit /b 0
+
+rem Кандидат: маппинг software->GPU либо уже готовое GPU-имя от пользователя.
+set "hw_candidate="
+if "%set_video_codec%"=="libx264"   set "hw_candidate=h264%hw_suffix%"
+if "%set_video_codec%"=="libx265"   set "hw_candidate=hevc%hw_suffix%"
+if "%set_video_codec%"=="libsvtav1" set "hw_candidate=av1%hw_suffix%"
+if not defined hw_candidate (
+	call set "_tail=%%set_video_codec:*%hw_suffix%=%%"
+	if not "!_tail!"=="%set_video_codec%" set "hw_candidate=%set_video_codec%"
+)
+if not defined hw_candidate (
+	echo [ПРЕДУПРЕЖДЕНИЕ] У кодека %set_video_codec% нет %hw_label%-варианта. Используется программное кодирование.
+	exit /b 0
+)
+
+rem Якорим имя по границе столбца: пробел слева и конец строки справа, иначе
+rem av1_nvenc матчился бы внутри av1_nvenc_hypothetical.
+set "encoder_check="
+rem Кавычки: `""%ffmpeg%"` — обёртка пути с пробелами; закрывающих кавычек ДВЕ —
+rem одна закрывает аргумент findstr, вторая внешнюю обёртку (иначе "The syntax of
+rem the command is incorrect" ещё до запуска ffmpeg).
+for /f "tokens=*" %%i in ('""%ffmpeg%" -encoders 2^>^&1 ^| findstr /r /c:" !hw_candidate!$""') do set "encoder_check=%%i"
+if not defined encoder_check (
+	echo [ПРЕДУПРЕЖДЕНИЕ] Энкодер !hw_candidate! отсутствует в данной сборке ffmpeg. Используется программное кодирование.
+	exit /b 0
+)
+set "use_hw_accel=yes"
+set "hw_accel_type=%hw_try_type%"
+set "hw_decode_args=%hw_try_args%"
+set "set_video_codec=%hw_candidate%"
 exit /b 0
 
 rem --- D6. Построение каскада atempo (milli-арифметика, без float) ---

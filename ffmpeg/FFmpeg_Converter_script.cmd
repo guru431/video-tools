@@ -27,6 +27,19 @@ if not exist "%folder_destination%\" (
 	)
 )
 
+rem F-collision. Если каталог назначения лежит СТРОГО ВНУТРИ источника, for /r
+rem подхватывает уже сконвертированные выходы и гонит их по кругу (или перекодирует
+rem поверх). Канонизируем оба пути (%%~fI снимает ../ и относительность), затем
+rem проверяем, что dest начинается с "source\". dest == source (in-place) вложенностью
+rem НЕ считается — там файлы это источники, а коллизию «выход==вход» снимает F12.
+for %%I in ("%folder_sources%")     do set "canon_src=%%~fI"
+for %%I in ("%folder_destination%") do set "canon_dst=%%~fI"
+if "%canon_src:~-1%"=="\" set "canon_src=%canon_src:~0,-1%"
+if "%canon_dst:~-1%"=="\" set "canon_dst=%canon_dst:~0,-1%"
+set "dest_inside_source="
+call set "_di_probe=%%canon_dst:%canon_src%\=%%"
+if not "%_di_probe%"=="%canon_dst%" set "dest_inside_source=1"
+
 "%ffmpeg%" -version >nul 2>&1
 if errorlevel 1 (
 	echo.
@@ -379,6 +392,16 @@ rem Тело вынесено из блока for: label внутри скобо
 rem а goto из тела for обрывал бы перечисление файлов. Счётчики total_* общие.
 :process_file
 		set "full_path=!pf_full!"
+		rem F-collision. Файл внутри каталога назначения — наш собственный выход
+		rem (dest строго внутри source). Пропускаем, иначе перекодируем по кругу.
+		if defined dest_inside_source (
+			set "_pf_probe=!full_path:%canon_dst%\=!"
+			if not "!_pf_probe!"=="!full_path!" (
+				echo [SKIP] внутри каталога назначения - собственный выход: !pf_nx!
+				call :log_msg "SKIP" "внутри каталога назначения: !full_path!"
+				exit /b
+			)
+		)
 		set "file_path=!pf_dp!"
 		rem F32. Два РАЗНЫХ имени, их нельзя смешивать:
 		rem   input_stem — имя источника без расширения (pf_n); по нему ищутся sidecar-субтитры;

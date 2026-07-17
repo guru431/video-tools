@@ -622,6 +622,20 @@ assert_contains     "CMD: кандидат энкодера разрешаетс
 assert_not_contains "CMD: нет findstr по семейству nvenc"            'findstr /i "h264_nvenc hevc_nvenc av1_nvenc"' "$cmd_ff"
 assert_not_contains "CMD: нет findstr по семейству qsv"              'findstr /i "h264_qsv hevc_qsv av1_qsv"'       "$cmd_ff"
 
+# ══════════════════════════════════════════════════════════════
+suite "F-collision: dest ВНУТРИ source не перекодирует собственные выходы"
+# ══════════════════════════════════════════════════════════════
+# Каталог назначения внутри источника: рекурсивный find подхватывал уже сконвертированные
+# файлы и гнал их по кругу. Теперь файлы, физически лежащие внутри dest, пропускаются.
+mkdir -p "$IN/nested"
+touch "$IN/real_src.mp4"          # нормальный источник — обрабатывается
+touch "$IN/nested/own_output.mp4" # лежит в dest — собственный выход, пропускается
+run_capture 'folder_sources="$IN"' 'folder_destination="$IN/nested"'
+assert_contains "собственный выход пропущен с пометкой" "внутри каталога назначения" "$OUT_TEXT"
+if log_has "own_output"; then fail "выход внутри dest не перекодирован" "нет ffmpeg на own_output" "перекодирован по кругу"; else pass "выход внутри dest не перекодирован"; fi
+if log_has "real_src"; then pass "нормальный источник обработан"; else fail "нормальный источник обработан" "ffmpeg на real_src" "пропущен"; fi
+rm -rf "$IN/nested"; rm -f "$IN/real_src.mp4"
+
 # ── Cleanup ───────────────────────────────────────────────────
 rm -rf "$WORK"
 

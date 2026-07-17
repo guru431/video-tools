@@ -462,6 +462,19 @@ canon_path() {
 	printf '%s/%s' "${d%/}" "$b"
 }
 
+# F-collision. Каталоги источника и назначения в каноническом виде. Если dest лежит
+# СТРОГО ВНУТРИ source, рекурсивный find подхватывает уже сконвертированные выходы и
+# гонит их по кругу (или перекодирует поверх) — такие файлы исключаем из обработки.
+# Важно: dest == source (in-place) НЕ считается вложенностью — там файлы это легитимные
+# источники, а коллизию «выход совпал со входом» снимает пофайловая проверка F12.
+# Канонизация снимает ../ и различия форм пути на всех платформах.
+canon_destination="$(canon_path "$folder_destination")"
+canon_sources="$(canon_path "$folder_sources")"
+dest_inside_source="no"
+case "$canon_destination" in
+	"$canon_sources"/*) dest_inside_source="yes" ;;
+esac
+
 # --- J1. Прогресс-бар в CLI ---
 show_progress_bar() {
 	local pct=$1 label="$2"
@@ -474,6 +487,16 @@ show_progress_bar() {
 # --- Функция кодирования одного файла ---
 encode_file() {
 	local full_path="$1"
+	# F-collision. Файл внутри каталога назначения — это наш собственный выход
+	# (dest строго внутри source). Пропускаем, иначе перекодируем результаты по кругу.
+	if [ "$dest_inside_source" = "yes" ]; then
+		case "$(canon_path "$full_path")" in
+			"$canon_destination"/*)
+				log_msg "SKIP" "внутри каталога назначения (собственный выход): $(basename "$full_path")"
+				echo "skip" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+				return ;;
+		esac
+	fi
 	local file_path="$(dirname "$full_path")/"
 	# F32. Два РАЗНЫХ имени, их нельзя смешивать:
 	#   input_stem — имя источника без расширения; по нему ищутся sidecar-субтитры;
@@ -963,6 +986,10 @@ if [ "$merge_files" = "yes" ]; then
 	# при повторном source старое значение иначе осталось бы.
 	fname=""
 	while IFS= read -r -d '' full_path; do
+		# F-collision: не берём собственные выходы (dest строго внутри source) как имя цели.
+		if [ "$dest_inside_source" = "yes" ]; then
+			case "$(canon_path "$full_path")" in "$canon_destination"/*) continue ;; esac
+		fi
 		if [ -z "$fname" ]; then fname=$(basename "$full_path"); break; fi
 	done < <(find "$folder_sources" \( "${format_find_pred[@]}" \) -print0 | sort_null)
 	if [ -z "$fname" ]; then
@@ -972,6 +999,10 @@ if [ "$merge_files" = "yes" ]; then
 		# -printf — GNU-расширение (нет на macOS/BSD). Портативно: -print0 + read.
 		# Имена с ' экранируем для concat-формата ffmpeg: ' -> '\''
 		while IFS= read -r -d '' mf; do
+			# F-collision: собственные выходы (dest строго внутри source) в concat не включаем.
+			if [ "$dest_inside_source" = "yes" ]; then
+				case "$(canon_path "$mf")" in "$canon_destination"/*) continue ;; esac
+			fi
 			printf "file '%s'\n" "${mf//\'/\'\\\'\'}" >> "$concat_list"
 		done < <(find "$folder_sources" \( "${format_find_pred[@]}" \) -print0 | sort_null)
 		# Мержим в соседний temp, а не сразу поверх цели. Прежний вызов шёл без -y на
@@ -1011,7 +1042,7 @@ else
 		# и в параллельном режиме КАЖДЫЙ файл отклонялся как ложная коллизия.
 		export -f encode_file log_msg show_progress_bar human_size \
 			canon_path file_size partial_path manifest_write manifest_is_complete
-		export audio_only folder_sources folder_destination ffmpeg format_files_out video_settings audio_settings
+		export audio_only folder_sources folder_destination canon_destination dest_inside_source ffmpeg format_files_out video_settings audio_settings
 		export save_old_extension create_frame copy_codecs split_by_silence extract_audio_copy
 		export video_bitrate_status set_video_bitrate_orig video_quality_status
 		export length_coding_status length_coding_value set_length_coding start_coding_status start_coding_value

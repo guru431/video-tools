@@ -346,6 +346,21 @@ if ($audio_only -ne "yes" -and $copy_codecs -ne "yes" -and $merge_files -ne "yes
 # --- Формат входных файлов ---
 $format_files_in_list = Get-ChildItem $folder_sources -Recurse -Include ($format_files_in -split "," | ForEach-Object { "*.$_" })
 
+# F-collision. Если каталог назначения лежит СТРОГО ВНУТРИ источника, рекурсивный обход
+# подхватывает уже сконвертированные выходы и гонит их по кругу (или перекодирует поверх).
+# Исключаем файлы под dest. GetFullPath канонизирует ../ и различия форм пути; сравнение
+# регистронезависимое (Windows). dest == source (in-place) вложенностью НЕ считается —
+# там файлы это источники, а коллизию «выход==вход» снимает пофайловая проверка ниже.
+$_sep = [System.IO.Path]::DirectorySeparatorChar
+$canon_sources     = [System.IO.Path]::GetFullPath($folder_sources).TrimEnd('\','/')
+$canon_destination = [System.IO.Path]::GetFullPath($folder_destination).TrimEnd('\','/')
+$dest_inside_source = $canon_destination.StartsWith($canon_sources + $_sep, [System.StringComparison]::OrdinalIgnoreCase)
+if ($dest_inside_source) {
+	$format_files_in_list = $format_files_in_list | Where-Object {
+		-not ([System.IO.Path]::GetFullPath($_.FullName)).StartsWith($canon_destination + $_sep, [System.StringComparison]::OrdinalIgnoreCase)
+	}
+}
+
 # --- GUI-прогресс (переменная из Runspace или env) ---
 if (-not $guiProgressFile) { $guiProgressFile = $env:FFMPEG_GUI_PROGRESS_FILE }
 if (-not $guiCancelFile)   { $guiCancelFile   = $env:FFMPEG_GUI_CANCEL_FILE }

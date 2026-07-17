@@ -45,6 +45,11 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+      # gitleaks ловит секреты/ключи, но НЕ generic PII/private-infra. Их до сих пор
+      # покрывал лишь локальный denylist (нет в web-commit/PR/форке). Этот скан —
+      # всегда-включённый генерик-нетворк для приватных IPv4 (RFC1918) и e-mail.
+      - name: Privacy scan (RFC1918 IP / e-mail)
+        run: bash tools/privacy-scan.sh
 
   # ── Windows: полный SH/CMD/PS1 паритет (skip = ошибка), сборка EXE, целостность sidecar. ──
   windows-tests-build:

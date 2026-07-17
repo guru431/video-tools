@@ -206,7 +206,9 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 
    Скрипт идемпотентен: включает `git config core.hooksPath .githooks` и заводит `.sanitize-patterns` из `.sanitize-patterns.example`.
 
-2. **CI** [`.github/workflows/ci.yml`](.github/workflows/ci.yml): работает для web-commit, PR и форков, где локальный hook не запускается. Линии: Linux (Bash + инварианты), secret-scan всей истории (gitleaks), Windows (полный SH/CMD/PS1 паритет с `STRICT_SKIP=1` — пропуск платформенного suite'а = ошибка; сборка EXE; сверка `.sha256`).
+2. **CI** [`.github/workflows/ci.yml`](.github/workflows/ci.yml): работает для web-commit, PR и форков, где локальный hook не запускается. Линии: Linux (Bash + инварианты), macOS (Bash 3.2/BSD — портируемость SH), secret-scan всей истории (gitleaks) + privacy-scan генерик-PII ([`tools/privacy-scan.sh`](tools/privacy-scan.sh): приватные IPv4 RFC1918 и e-mail — то, что раньше ловил лишь локальный denylist), Windows (полный SH/CMD/PS1 паритет с `STRICT_SKIP=1` — пропуск платформенного suite'а = ошибка; сборка EXE; сверка `.sha256` и треугольника manifest↔EXE↔sidecar).
+
+   Конкретные внутренние значения (домены, хосты, ФИО) остаются в локальном denylist — они приватны и в публичный CI-конфиг не выносятся; generic-паттерны (форматы ключей, RFC1918, e-mail) теперь покрыты всегда-включёнными линиями CI.
 
 ## Сборка EXE (опционально)
 

@@ -213,6 +213,17 @@ fi
 if [ "$TOTAL_FAIL" -gt 0 ]; then
     echo -e "\n${RED}${BOLD}ПРОВАЛЕНО: $TOTAL_FAIL тест(ов)${NC}"
     exit 1
+elif [ "$TOTAL_SKIP" -gt 0 ] || [ "$SUITES_FULLY_SKIPPED" -gt 0 ]; then
+    # «ВСЕ ТЕСТЫ ПРОЙДЕНЫ» при пропусках — это ложное успокоение: на WSL/Linux
+    # PS1/CMD-suite'ы пропускаются целиком, и та же строка означала «проверено всё»,
+    # хотя половина платформ не запускалась вовсе. Пройдено ≠ проверено.
+    echo -e "\n${GREEN}${BOLD}ПРОВАЛОВ НЕТ${NC}${YELLOW} — но проверено НЕ всё${NC}"
+    [ "$TOTAL_SKIP" -gt 0 ] && echo -e "${YELLOW}  Пропущено тестов: $TOTAL_SKIP${NC}"
+    if [ "$SUITES_FULLY_SKIPPED" -gt 0 ]; then
+        echo -e "${YELLOW}  Suite'ов пропущено целиком: $SUITES_FULLY_SKIPPED — ${FULLY_SKIPPED_NAMES[*]}${NC}"
+        echo -e "${YELLOW}  Требуется полное покрытие? Запустите с STRICT_SKIP=1 (нужны cmd + powershell).${NC}"
+    fi
+    exit 0
 else
     echo -e "\n${GREEN}${BOLD}ВСЕ ТЕСТЫ ПРОЙДЕНЫ${NC}"
     exit 0

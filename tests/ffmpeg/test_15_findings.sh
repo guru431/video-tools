@@ -356,47 +356,25 @@ rm -f "$IN/split.mp4" "$DST"/split*.mp4
 suite "F26: имя temp сохраняет расширение (иначе ffmpeg не выводит muxer)"
 # ══════════════════════════════════════════════════════════════
 # Суть: temp назывался `.movie.mp4.partial` — расширение стало `.partial`. Режимы
-# merge и copy_codecs идут с `-c copy` БЕЗ -f, а без -f настоящий ffmpeg выводит
-# muxer из расширения и падает: "Error initializing the muxer ... Invalid argument".
-# Мок этого не ловил (писал в любой файл), поэтому merge был сломан незаметно.
-XW=$(mktemp -d /tmp/test_ff_mux_XXXXXX); mkdir -p "$XW/bin"
+# merge и copy_codecs идут с `-c copy` БЕЗ выходного -f, а без него настоящий ffmpeg
+# выводит muxer из расширения и падает: "Error initializing the muxer ... Invalid
+# argument". Общий мок этого не проверял (писал в любой файл), поэтому merge был
+# сломан незаметно. Мок с тех пор ужесточён — тест намеренно идёт через ОБЩИЙ мок,
+# так что заодно проверяет, что тот воспроизводит контракт настоящего ffmpeg.
 
-# Мок мимикрирует вывод muxer по расширению у настоящего ffmpeg. Ключевая деталь:
-# `-f` ДО последнего -i задаёт формат ВХОДА (так `-f concat` в merge), и на выбор
-# выходного muxer не влияет. Выходным считается только `-f` после последнего -i.
-cat > "$XW/bin/ffmpeg" <<'MEOF'
-#!/bin/bash
-case "$*" in *"-f null"*) exit 0 ;; esac
-args=("$@"); last_i=-1
-for ((k=0; k<${#args[@]}; k++)); do [ "${args[k]}" = "-i" ] && last_i=$k; done
-has_out_f=no
-for ((k=last_i+1; k<${#args[@]}; k++)); do [ "${args[k]}" = "-f" ] && has_out_f=yes; done
-# Выход — последний аргумент, не считая флага -y.
-out=""; for a in "$@"; do [ "$a" = "-y" ] || out="$a"; done
-if [ "$has_out_f" = "no" ]; then
-    case "$out" in
-        *.mp4|*.mkv|*.webm|*.mov|*.avi|*.ts|*.m4a|*.mp3|*.opus|*.flac|*.ogg|*.mka|*.wav) ;;
-        *) echo "Error initializing the muxer for $out: Invalid argument" >&2; exit 1 ;;
-    esac
-fi
-printf 'X' > "$out"; exit 0
-MEOF
-chmod +x "$XW/bin/ffmpeg"
-
-# --- merge (-c copy, без -f) ---
+# --- merge (-c copy, выходного -f нет; `-f concat` относится ко ВХОДУ) ---
 touch "$IN/q1.mp4" "$IN/q2.mp4"; rm -f "$DST/q1.mp4"
-run_capture 'merge_files="yes"' "ffmpeg=\"$XW/bin/ffmpeg\""
+run_capture 'merge_files="yes"'
 assert_not_contains "merge: muxer инициализируется (temp сохранил расширение)" "Error initializing the muxer" "$OUT_TEXT"
 if [ -f "$DST/q1.mp4" ]; then pass "merge: цель создана"; else fail "merge: цель создана" "есть q1.mp4" "нет"; fi
 rm -f "$IN/q1.mp4" "$IN/q2.mp4" "$DST/q1.mp4"
 
 # --- copy_codecs (-c copy -map 0, без -f) ---
 touch "$IN/cc.avi"; rm -f "$DST/cc.avi"
-run_capture 'copy_codecs="yes"' "ffmpeg=\"$XW/bin/ffmpeg\""
+run_capture 'copy_codecs="yes"'
 assert_not_contains "copy_codecs: muxer инициализируется" "Error initializing the muxer" "$OUT_TEXT"
 if [ -f "$DST/cc.avi" ]; then pass "copy_codecs: выход создан"; else fail "copy_codecs: выход создан" "есть cc.avi" "нет"; fi
 rm -f "$IN/cc.avi" "$DST/cc.avi" "$DST/.cc.ffconv"
-rm -rf "$XW"
 
 # ══════════════════════════════════════════════════════════════
 suite "F27: параллельный режим не отклоняет файлы ложной коллизией"

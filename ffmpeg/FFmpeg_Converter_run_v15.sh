@@ -4,7 +4,9 @@
 # FFmpeg Converter — Конфигурация (Bash / Linux)
 # ============================================================
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# BASH_SOURCE[0], а не $0: при прямом запуске они совпадают, но при дот-сорсинге из
+# теста $0 — это уже путь тестового файла, и SCRIPT_DIR указал бы не туда.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="${SCRIPT_DIR}/config.ini"
 
 # --- Авто-определение ffmpeg рядом со скриптом ---
@@ -147,8 +149,14 @@ enable_log="$(read_config "enable_log" "other" "no")"
 log_file="$(read_config "log_file" "other" "ffmpeg_convert.log")"
 
 # start coding #
-if [ ! -f "${SCRIPT_DIR}/FFmpeg_Converter_script.sh" ]; then
-	echo "Ошибка: не найден FFmpeg_Converter_script.sh рядом с этим файлом." >&2
-	exit 1
+# Гард запускает конвейер только при ПРЯМОМ запуске. Дот-сорсинг отдаёт настоящие
+# read_config/to_flag тестам, которые раньше держали у себя inline-копию. Копия успела
+# разойтись с оригиналом: в ней не было подстановки ${ENV_VAR}, то есть тест «парсера
+# конфига» эту ветку не проверял вовсе, а сломать её в production можно было незаметно.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+	if [ ! -f "${SCRIPT_DIR}/FFmpeg_Converter_script.sh" ]; then
+		echo "Ошибка: не найден FFmpeg_Converter_script.sh рядом с этим файлом." >&2
+		exit 1
+	fi
+	source "${SCRIPT_DIR}/FFmpeg_Converter_script.sh"
 fi
-source "${SCRIPT_DIR}/FFmpeg_Converter_script.sh"

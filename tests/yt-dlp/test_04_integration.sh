@@ -16,12 +16,14 @@ YTDLP_LOG="/tmp/mock_ytdlp_int_$$.txt"
 OUTPUT_DIR="/tmp/test_ytdlp_out_$$"
 FAKE_URL="https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
-# Если скрипт переименован/удалён — сразу выходим, чтобы не давать ложных fail
+# Отсутствие production-скрипта — это ПРОВАЛ, а не пропуск. Раньше здесь были
+# skip + exit 0: переименованный или удалённый entrypoint давал зелёный тест,
+# ничего при этом не проверив, — то есть suite молча переставал что-либо охранять.
 if [ ! -f "$YTDLP_SCRIPT" ]; then
     suite "Интеграция: yt-dlp script"
-    skip "Скрипт $YTDLP_SCRIPT не найден" "файл существует"
+    fail "production-скрипт на месте" "$YTDLP_SCRIPT" "файл не найден — интеграционный тест ничего не проверяет"
     summary
-    exit 0
+    exit 1
 fi
 
 mkdir -p "$OUTPUT_DIR"

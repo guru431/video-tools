@@ -10,49 +10,19 @@ MY_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 source "$TESTS_DIR/lib/framework.sh"
 
-# ── Inline-определения функций (копии из run.sh, без форка sed) ─────────────
-to_flag() {
-    local val="$1"
-    local default="$2"
-    if [ -z "$val" ]; then echo "$default"; return; fi
-    local first="${val:0:1}"
-    local rest="${val:1}"
-    case "$first" in
-        +) echo ":+:$rest" ;;
-        -) echo ":-:$rest" ;;
-        *) echo ":+:$val" ;;
-    esac
-}
-
-read_config() {
-    local key="$1"
-    local section="$2"
-    local default="${3:-}"
-    if [ ! -f "$CONFIG_FILE" ]; then echo "$default"; return; fi
-    # Регистронезависимо (паритет с PS1/GUI); инлайн-комментарий только по " #".
-    local result="$default"
-    local saved_ncm; saved_ncm=$(shopt -p nocasematch)
-    shopt -s nocasematch
-    local in_section=false
-    while IFS= read -r line || [ -n "$line" ]; do
-        # trim без sed (быстро)
-        line="${line#"${line%%[![:space:]]*}"}"
-        line="${line%"${line##*[![:space:]]}"}"
-        [[ -z "$line" || "$line" == \#* ]] && continue
-        if [[ "$line" =~ ^\[([^]]+)\]$ ]]; then
-            [[ "${BASH_REMATCH[1]}" == "$section" ]] && in_section=true || in_section=false
-            continue
-        fi
-        if $in_section && [[ "$line" =~ ^${key}[[:space:]]*=[[:space:]]*(.*) ]]; then
-            local value="${BASH_REMATCH[1]}"
-            if [[ "$value" =~ ^(.*[^[:space:]])[[:space:]]+#.*$ ]]; then value="${BASH_REMATCH[1]}"; fi
-            result="$value"
-            break
-        fi
-    done < "$CONFIG_FILE"
-    eval "$saved_ncm"
-    echo "$result"
-}
+# ── Настоящие read_config/to_flag из production-скрипта ───────────────────
+# Раньше здесь лежали inline-копии. Копия успела разойтись с оригиналом: в ней не
+# было подстановки ${ENV_VAR} и иначе обрезался инлайн-комментарий — то есть тест
+# «парсера config.ini» проверял НЕ ТОТ парсер, и сломать настоящий можно было незаметно.
+# Дот-сорсим production; его main-гард (BASH_SOURCE == $0) не даёт запустить конвейер.
+RUN_SH="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v15.sh"
+if [ ! -f "$RUN_SH" ]; then
+    suite "Парсер config.ini (SH)"
+    fail "production-скрипт на месте" "$RUN_SH" "файл не найден — тест проверял бы копию, а не production"
+    summary
+    exit 1
+fi
+source "$RUN_SH"
 
 # ── Единый тестовый config.ini на все тесты ──────────────────────────────────
 CONFIG_FILE="$MY_DIR/config.ini"
@@ -173,6 +143,31 @@ assert_eq "Codec (капитал) распознан"  "+aac"  "$(read_config 'c
 assert_eq "my#file.log сохранён целиком"  "my#file.log"  "$(read_config 'log_file' 'other' '')"
 # ' #' (пробел+решётка) — инлайн-комментарий срезан
 assert_eq "инлайн ' #' срезан"  "value"  "$(read_config 'note' 'other' '')"
+
+# ══════════════════════════════════════════════════════════════
+suite "read_config: подстановка \${ENV_VAR} (inline-копия её не покрывала)"
+# ══════════════════════════════════════════════════════════════
+# Эта ветка есть в production, но её не было в inline-копии — то есть до перехода на
+# дот-сорсинг тест «парсера конфига» не проверял её ВООБЩЕ, и сломать её можно было
+# незаметно. Ровно тот класс дефекта, ради которого копии и убираются.
+cat > "$CONFIG_FILE" << 'EOCONFIG'
+[folders]
+source = ${FFCONV_TEST_SRC}/videos
+[other]
+log_file = ${FFCONV_TEST_SRC}/logs/${FFCONV_TEST_NAME}.log
+EOCONFIG
+export FFCONV_TEST_SRC="/tmp/ffconv_env"
+export FFCONV_TEST_NAME="batch7"
+assert_eq "одна \${VAR} подставлена"  "/tmp/ffconv_env/videos"  "$(read_config 'source' 'folders' '')"
+assert_eq "две \${VAR} в одной строке" "/tmp/ffconv_env/logs/batch7.log" "$(read_config 'log_file' 'other' '')"
+
+# Незаданная переменная → пусто + WARN в stderr (а не литерал ${VAR} в пути).
+unset FFCONV_TEST_NAME
+_env_out=$(read_config 'log_file' 'other' '' 2>/tmp/env_warn_$$.txt)
+_env_warn=$(cat /tmp/env_warn_$$.txt); rm -f /tmp/env_warn_$$.txt
+assert_eq       "незаданная \${VAR} → пусто, не литерал" "/tmp/ffconv_env/logs/.log" "$_env_out"
+assert_contains "незаданная \${VAR} → WARN в stderr"     "FFCONV_TEST_NAME не задана" "$_env_warn"
+unset FFCONV_TEST_SRC
 
 # ══════════════════════════════════════════════════════════════
 suite "run_v15.sh: Task 8 (анализ исходника)"

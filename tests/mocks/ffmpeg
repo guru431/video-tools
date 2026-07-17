@@ -131,7 +131,44 @@ if [ -n "$LAST_ARG" ] \
    && [[ "$LAST_ARG" != *"pipe:"* ]] \
    && [ "$LAST_ARG" != "-" ] \
    && [ "$LAST_ARG" != "null" ]; then
-    touch "$LAST_ARG" 2>/dev/null || true
+    # Контракт настоящего ffmpeg: без ВЫХОДНОГО -f muxer выводится из расширения файла,
+    # и неизвестное расширение — фатальная ошибка ещё до записи. Ключевая тонкость:
+    # `-f` ДО последнего -i задаёт формат ВХОДА (так `-f concat` в merge) и на выбор
+    # выходного muxer не влияет — выходным считается только -f после последнего -i.
+    #
+    # Без этой проверки мок принимал ЛЮБОЕ имя выхода и потому скрыл реальную поломку:
+    # merge писал в temp `.<имя>.mp4.partial`, то есть расширением становилось
+    # `.partial`, и настоящий ffmpeg падал с "Error initializing the muxer ...
+    # Invalid argument" — а тесты оставались зелёными. Мок обязан быть строг ровно там,
+    # где строг настоящий бинарь, иначе он выдаёт разрешение на сломанный код.
+    _m_args=("$@"); _m_last_i=-1
+    for ((_k=0; _k<${#_m_args[@]}; _k++)); do
+        [ "${_m_args[_k]}" = "-i" ] && _m_last_i=$_k
+    done
+    _m_out_f=no
+    if [ "$_m_last_i" -ge 0 ]; then
+        for ((_k=_m_last_i+1; _k<${#_m_args[@]}; _k++)); do
+            [ "${_m_args[_k]}" = "-f" ] && _m_out_f=yes
+        done
+    fi
+    if [ "$_m_out_f" = "no" ]; then
+        case "${LAST_ARG##*/}" in
+            *.mp4|*.mkv|*.webm|*.mov|*.avi|*.ts|*.flv|*.wmv|*.m4v|*.3gp|*.mpg|*.mpeg \
+            |*.m4a|*.mp3|*.opus|*.flac|*.ogg|*.oga|*.mka|*.wav|*.aac|*.ac3|*.wma \
+            |*.png|*.jpg|*.jpeg|*.bmp|*.gif|*.webp \
+            |*.srt|*.vtt|*.ass) ;;
+            *)
+                echo "[out#0 @ 0x0] Error initializing the muxer for $LAST_ARG: Invalid argument" >&2
+                echo "Error opening output file $LAST_ARG." >&2
+                exit 1
+                ;;
+        esac
+    fi
+    # Пишем байты, а не touch. Настоящий ffmpeg при rc=0 НИКОГДА не оставляет файл
+    # нулевой длины, а код справедливо проверяет выход через `[ -s ... ]`. Мок с touch
+    # создавал 0-байтовый «успех», который такую проверку не проходит: тест падал не
+    # из-за дефекта скрипта, а из-за нефизичного мока.
+    printf 'MOCK-FFMPEG-OUTPUT' > "$LAST_ARG" 2>/dev/null || true
 fi
 
 [ "$FAIL" = "1" ] && exit 1

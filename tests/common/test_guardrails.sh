@@ -109,4 +109,46 @@ r=$(probe_runner 'suite "x"; pass "a"
 exit 3')
 assert_contains "крах до summary → провал" "fail=1" "$r"
 
+# ══════════════════════════════════════════════════════════════
+suite "Сетевой guard: тесты не имеют права ходить в сеть"
+# ══════════════════════════════════════════════════════════════
+# Суть находки: у YTDLP_BIN был env-override «для тестов», а у VOT_BIN его не было —
+# check_translate_deps безусловно перезатирал переменную бинарём рядом со скриптом.
+# Тест перевода запустил настоящий vot-cli-live и ~22 секунды ходил во внешний сервис.
+# Ниже — три уровня защиты, чтобы это не вернулось незамеченным.
+
+# 1. Каждый внешний бинарь обязан иметь env-override, иначе тест не сможет его подменить.
+assert_contains "yt-dlp SH: YTDLP_BIN перекрывается из окружения" 'resolve_bin "${YTDLP_BIN:-}" yt-dlp' "$ysh"
+assert_contains "yt-dlp SH: VOT_BIN перекрывается из окружения"   'if [ -n "${VOT_BIN:-}" ]; then'      "$ysh"
+# Override обязан стоять ПЕРВЫМ в цепочке резолва: если сначала берётся бинарь рядом
+# со скриптом, переменная будет перезатёрта и override уже ничего не решит.
+vot_ov_ln=$(grep -n 'if \[ -n "${VOT_BIN:-}" \]; then' "$YT_SH" | head -1 | cut -d: -f1)
+vot_sd_ln=$(grep -n 'script_dir/vot-cli-live' "$YT_SH" | head -1 | cut -d: -f1)
+if [ -n "$vot_ov_ln" ] && [ -n "$vot_sd_ln" ] && [ "$vot_ov_ln" -lt "$vot_sd_ln" ]; then
+    pass "yt-dlp SH: VOT_BIN override проверяется ДО бинаря рядом со скриптом"
+else
+    fail "yt-dlp SH: VOT_BIN override проверяется первым" "override раньше script_dir" "override=$vot_ov_ln script_dir=$vot_sd_ln"
+fi
+
+# 2. Deny-stub в tests/mocks перехватывает резолв через PATH и падает громко.
+VOT_STUB="$TESTS_DIR/mocks/vot-cli-live"
+assert_file_exists "deny-stub vot-cli-live лежит в tests/mocks" "$VOT_STUB"
+if [ -x "$VOT_STUB" ]; then pass "deny-stub исполняемый"; else fail "deny-stub исполняемый" "+x" "нет"; fi
+stub_rc=0; stub_out=$("$VOT_STUB" --output=/dev/null "https://example.com" 2>&1) || stub_rc=$?
+assert_eq       "deny-stub падает вместо сетевого вызова" "97" "$stub_rc"
+assert_contains "deny-stub объясняет причину"             "СЕТЕВОЙ GUARD" "$stub_out"
+
+# 3. Ни один тест не имеет права звать сетевые бинари напрямую по имени.
+#    (Настоящий vot-cli-live/curl/wget мимо мока — это и есть выход в сеть.)
+net_offenders=""
+for _t in "$TESTS_DIR"/ffmpeg/*.sh "$TESTS_DIR"/yt-dlp/*.sh "$TESTS_DIR"/common/*.sh; do
+    [ -f "$_t" ] || continue
+    case "$(basename "$_t")" in test_guardrails.sh) continue ;; esac
+    # Ищем вызов команды в начале строки/после ; или && — не упоминание в строке/комментарии.
+    if grep -qE '(^|[;&|]|\$\()[[:space:]]*(vot-cli-live|curl|wget)[[:space:]]' "$_t" 2>/dev/null; then
+        net_offenders="$net_offenders $(basename "$_t")"
+    fi
+done
+assert_empty "ни один тест не зовёт сетевые бинари напрямую" "$net_offenders"
+
 summary

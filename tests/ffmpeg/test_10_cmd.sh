@@ -314,6 +314,31 @@ for bad in 0 -1 abc 150; do
 done
 
 # ══════════════════════════════════════════════════════════════
+suite "F25 CMD: потолок битрейта из видеопотока (:kbps_from_line)"
+# ══════════════════════════════════════════════════════════════
+# Вызывает НАСТОЯЩУЮ подпрограмму :kbps_from_line из production-файла (не инлайн-копию).
+# Контракт: число перед " kb/s" из строки Video; отсутствие kb/s или resolution → пусто.
+CMD_SCRIPT="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.cmd"
+KBPS_SRC=$(sed -n '/^:kbps_from_line/,/^endlocal & exit \/b/p' "$CMD_SCRIPT" | tr -d '\r')
+if [ -z "$KBPS_SRC" ]; then
+    fail "CMD: подпрограмма :kbps_from_line найдена в production-файле" "найдена" "не найдена"
+fi
+kbps_cmd() {
+    local body
+    body=$(printf '%s\n' \
+        "call :kbps_from_line \"$1\" R" \
+        "echo R=[!R!]" \
+        "goto :done_kbps" \
+        "$KBPS_SRC" \
+        ":done_kbps" | sed 's/$/\r/')
+    run_cmd "$body"
+}
+result=$(kbps_cmd '    Stream #0:0(und): Video: h264 (High), yuv420p, 1920x1080, 1808 kb/s, 30 fps, 30 tbr')
+assert_contains "видеопоток 1808 kb/s → 1808"  "R=[1808]"  "$result"
+result=$(kbps_cmd '    Stream #0:0(und): Video: h264 (High), yuv420p, 1920x1080, 30 fps, 30 tbr')
+assert_contains "видеопоток без kb/s → пусто (fallback на контейнер)"  "R=[]"  "$result"
+
+# ══════════════════════════════════════════════════════════════
 suite "CMD: keep_aspect_ratio else-binding (Task 5)"
 # ══════════════════════════════════════════════════════════════
 # При keep_aspect_ratio со статусом "-" масштабирование НЕ должно отключаться целиком

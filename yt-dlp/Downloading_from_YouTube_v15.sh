@@ -449,6 +449,16 @@ download_url() {
     log_info "Команда: ${cmd[*]}"
 
     if "${env_prefix[@]+"${env_prefix[@]}"}" "${cmd[@]}"; then
+        # Архив включён, но yt-dlp ничего не переместил (after_move не сработал → пустой
+        # manifest) — значит, видео уже было в архиве и реально не скачивалось. Это ПРОПУСК,
+        # а не загрузка: иначе COUNT_SKIP навсегда оставался бы 0, а архивные пропуски
+        # выдавались бы за успешные скачивания. return 2 — отдельный код: перевод (потребитель
+        # dl_rc==0) на пропуске не запускается, потому что переводить нечего.
+        if [ -n "$archive_path" ] && [ "$subs_only" != "true" ] && [ -n "${DL_MANIFEST:-}" ] && [ ! -s "$DL_MANIFEST" ]; then
+            log_info "Пропущено (уже в архиве): $url"
+            COUNT_SKIP=$((COUNT_SKIP + 1))
+            return 2
+        fi
         log_ok "Загрузка завершена: $url"
         COUNT_OK=$((COUNT_OK + 1))
         return 0
@@ -1035,10 +1045,11 @@ main() {
         fi
 
         # F13. Манифест точных путей от самого yt-dlp (--print-to-file after_move:filepath).
-        # Заполняется только при переводе — единственном потребителе; per-process файл,
-        # поэтому параллельный запуск не может подсунуть сюда свой результат.
+        # Потребители — перевод (нужны пути готовых файлов) и учёт archive-skip (пустой
+        # manifest при включённом архиве = видео уже скачано). Per-process файл, поэтому
+        # параллельный запуск не может подсунуть сюда свой результат.
         local dl_manifest=""
-        if [ "$TRANSLATE_ENABLED" = "true" ] && [ "$SUBS_ONLY" != "true" ]; then
+        if [ "$SUBS_ONLY" != "true" ] && { [ "$TRANSLATE_ENABLED" = "true" ] || [ "$USE_ARCHIVE" = "true" ]; }; then
             dl_manifest=$(mktemp 2>/dev/null) || dl_manifest="/tmp/ytdlp_manifest_$$"
             : > "$dl_manifest"
         fi

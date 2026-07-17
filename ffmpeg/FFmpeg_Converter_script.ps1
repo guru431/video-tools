@@ -625,9 +625,25 @@ function Encode-File {
 	# два отдельных pipeline'а на тот же файл — лишняя задержка для больших библиотек).
 	$ffmpeg_info = (& $ffmpeg -i $full_path 2>&1 | Out-String)
 
+	# F25. Битрейт ИМЕННО видеопотока: строка `Stream #...: Video: ..., N kb/s`.
+	# Раньше брали `Duration: ..., bitrate: N kb/s` — это битрейт КОНТЕЙНЕРА
+	# (видео + аудио + overhead): настройка обещает не повышать исходный видеобитрейт,
+	# а сравнивала с завышенным числом и потому всё равно его повышала.
 	$src_bitrate = $null
-	$bitrate_match = [regex]::Match($ffmpeg_info, "bitrate:\s+(\d+)\s*kb/s")
-	if ($bitrate_match.Success) { $src_bitrate = [int]$bitrate_match.Groups[1].Value }
+	$vstream_match = [regex]::Match($ffmpeg_info, "Stream #.*Video:.*?(\d+)\s*kb/s")
+	if ($vstream_match.Success) { $src_bitrate = [int]$vstream_match.Groups[1].Value }
+	# Часть контейнеров (MKV/WebM) per-stream битрейт не сообщает. Тогда откатываемся
+	# на битрейт контейнера — это верхняя оценка, а не битрейт видео, поэтому говорим
+	# об этом в лог, а не выдаём молча за исходный видеобитрейт.
+	if (-not $src_bitrate) {
+		$bitrate_match = [regex]::Match($ffmpeg_info, "bitrate:\s+(\d+)\s*kb/s")
+		if ($bitrate_match.Success) {
+			$src_bitrate = [int]$bitrate_match.Groups[1].Value
+			if ($video_bitrate_status -eq "+" -and $audio_only -ne "yes") {
+				Log-Msg "WARN" "$($file.Name): битрейт видеопотока не сообщён, используется битрейт контейнера (${src_bitrate}k) — верхняя оценка"
+			}
+		}
+	}
 
 	$set_video_bitrate_final = @()
 	if ($audio_only -ne "yes" -and $video_bitrate_status -eq "+" -and $video_quality_status -ne "+") {

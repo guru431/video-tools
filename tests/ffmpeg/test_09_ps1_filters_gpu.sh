@@ -341,4 +341,17 @@ assert_eq "copy_codecs ext вычислен ДО existence-check"  "ok"  "$order
 # Duration N/A → $num = @(0) fallback
 assert_contains "Duration N/A → num fallback"  'if ($num.Count -eq 0) {'  "$src_ps1"
 
+# ══════════════════════════════════════════════════════════════
+suite "F25 PS1: потолок битрейта из видеопотока, а не контейнера"
+# ══════════════════════════════════════════════════════════════
+# Сначала per-stream `Stream #...: Video: ..., N kb/s`; контейнерный bitrate — только
+# fallback и обязан сопровождаться WARN (иначе завышенный потолок поднимает видеобитрейт).
+assert_contains "PS1: приоритет битрейта видеопотока"  'Stream #.*Video:.*?(\d+)\s*kb/s'  "$src_ps1"
+assert_contains "PS1: fallback на контейнер сопровождается WARN"  "битрейт видеопотока не сообщён"  "$src_ps1"
+# Порядок: video-stream match идёт ДО container match
+vs_ln=$(grep -nF 'Stream #.*Video:.*?(\d+)\s*kb/s' "$SCRIPT_PS1" | head -1 | cut -d: -f1)
+ct_ln=$(grep -nF 'bitrate:\s+(\d+)\s*kb/s' "$SCRIPT_PS1" | head -1 | cut -d: -f1)
+order="bad"; [ -n "$vs_ln" ] && [ -n "$ct_ln" ] && [ "$vs_ln" -lt "$ct_ln" ] && order="ok"
+assert_eq "PS1: видеопоток проверяется до контейнера"  "ok"  "$order"
+
 summary

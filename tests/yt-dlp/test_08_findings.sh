@@ -40,6 +40,29 @@ assert_not_contains "субтитры: НЕТ --download-archive (F3)"  "--downl
 rm -f "$CFG"
 
 # ══════════════════════════════════════════════════════════════
+suite "Split/skip (SH): archive-skip увеличивает COUNT_SKIP"
+# ══════════════════════════════════════════════════════════════
+# Раньше COUNT_SKIP объявлялся, но нигде не инкрементился — пропуск по архиву выдавался
+# за успешную загрузку. Теперь: архив включён, yt-dlp ничего не переместил (пустой
+# manifest) → это «Пропущено», а не «Успешно».
+SKIP_DIR=$(mktemp -d /tmp/test_ytskip_XXXXXX)
+write_cfg "[output]
+base_dir = $SKIP_DIR
+[download]
+use_archive = true
+default_quality = 720
+[translation]
+enabled = false"
+# Пустой OUTFILE → мок не пишет after_move (эмуляция «уже в архиве»).
+OUT=$(MOCK_YTDLP_OUTFILE="" run_full "$CFG" --quality 720 "https://youtube.com/watch?v=skip1")
+assert_contains "archive-skip → сводка «Пропущено»" "Пропущено" "$OUT"
+assert_not_contains "archive-skip → НЕ «Успешно»"   "Успешно"   "$OUT"
+# Реальная загрузка (мок переместил файл) → «Успешно», не «Пропущено».
+OUT=$(MOCK_YTDLP_OUTFILE="$SKIP_DIR/v.mp4" run_full "$CFG" --quality 720 "https://youtube.com/watch?v=dl1")
+assert_contains "реальная загрузка → «Успешно»" "Успешно" "$OUT"
+rm -rf "$SKIP_DIR"; rm -f "$CFG"
+
+# ══════════════════════════════════════════════════════════════
 suite "F1/F2 (SH): AI-перевод отключается с явным сообщением"
 # ══════════════════════════════════════════════════════════════
 BASE_CFG="[download]

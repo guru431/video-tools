@@ -20,6 +20,31 @@ trap '[ "${TESTS_RESULT_OWNER:-}" = "$$" ] && rm -f "$TESTS_RESULT_FILE"' EXIT
 _tally() { printf '%s\n' "$1" >> "$TESTS_RESULT_FILE"; }
 _tally_count() { grep -c "^$1\$" "$TESTS_RESULT_FILE" 2>/dev/null || true; }
 
+# ── Сетевой guard ──────────────────────────────────────────
+# Тесты НИКОГДА не должны ходить в сеть. Инцидент: у VOT_BIN не было env-override,
+# и check_translate_deps безусловно перезатирал переменную бинарём рядом со скриптом —
+# тест перевода запускал настоящий vot-cli-live и ~22 с стучался во внешний сервис.
+# Override добавлен, но без guard'а регрессия вернулась бы незамеченной. Здесь мы
+# кладём в НАЧАЛО PATH poison-заглушки для сетевых инструментов: если production-код
+# в обход мока вызовет bare-бинарь, заглушка громко упадёт (exit 97) вместо тихого
+# сетевого вызова, и наблюдающий тест провалится. Легитимные тесты перевода передают
+# мок через VOT_BIN/YTDLP_BIN и prepend'ят mocks-каталог — те имеют приоритет.
+if [ -z "${TEST_NET_GUARD_DIR:-}" ]; then
+    TEST_NET_GUARD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/tests_netguard_XXXXXX")"
+    TEST_NET_GUARD_OWNER=$$
+    for _bin in vot-cli-live vot-cli-live.exe; do
+        cat > "$TEST_NET_GUARD_DIR/$_bin" <<'GUARD'
+#!/bin/bash
+echo "NETWORK GUARD: реальный '$(basename "$0")' вызван в тесте — сетевые вызовы запрещены. Передайте мок через VOT_BIN." >&2
+exit 97
+GUARD
+        chmod +x "$TEST_NET_GUARD_DIR/$_bin"
+    done
+    export PATH="$TEST_NET_GUARD_DIR:$PATH"
+    export TEST_NET_GUARD_DIR
+    trap '[ "${TESTS_RESULT_OWNER:-}" = "$$" ] && rm -f "$TESTS_RESULT_FILE"; [ "${TEST_NET_GUARD_OWNER:-}" = "$$" ] && rm -rf "$TEST_NET_GUARD_DIR"' EXIT
+fi
+
 # ── Цвета ──────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'

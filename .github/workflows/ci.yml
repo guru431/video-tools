@@ -22,6 +22,18 @@ jobs:
       - name: Run tests (SH + common; CMD/PS1 skip expected on Linux)
         run: bash tests/run_tests.sh
 
+  # ── macOS: SH + common под системным Bash 3.2 и BSD-userland. Ловит регрессии
+  #    портируемости (GNU-only sed/grep/sort, ${var,,}, stat -c), которые Linux не видит.
+  #    CMD/PS1 suite'ы ожидаемо пропускаются (нет cmd/powershell) — без STRICT_SKIP. ──
+  macos-tests:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bash version (диагностика — системный /bin/bash обычно 3.2)
+        run: /bin/bash --version | head -1
+      - name: Run tests (SH + common под BSD-userland; CMD/PS1 skip expected)
+        run: /bin/bash tests/run_tests.sh
+
   # ── Secret scan всей истории (обход неактивного hook / web-commit / чужого автора). ──
   secret-scan:
     runs-on: ubuntu-latest

@@ -1,5 +1,14 @@
 # Fix Analysis Findings + ENV-substitution Feature — Implementation Plan
 
+> ⚠️ **АРХИВ (2026-06-10). План закрыт как рабочий чеклист.**
+>
+> Незакрытые `- [ ]` ниже НЕ означают «задача открыта»: часть из них выполнена
+> позднее вне этого плана, часть переформулирована. Открытые находки живут только
+> в `FINDINGS.md`, идеи — в `IDEAS.md`.
+>
+> Файл сохранён ради контекста решений (почему фикс сделан именно так), а не для
+> исполнения. Не начинать работу по нему, не сверившись с `FINDINGS.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Исправить все подтверждённые находки анализа 2026-06-09/10 (P1/P2/P3 в ffmpeg и yt-dlp, 3 платформы) и реализовать подстановку `${ENV_VAR}` в config.ini yt-dlp.

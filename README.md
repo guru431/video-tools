@@ -1,6 +1,6 @@
 # Video Tools
 
-ffmpeg/yt-dlp скрипты для загрузки и конвертации видео. Каждый инструмент реализован на 3 платформах (.sh, .cmd, .ps1), включая GUI (WinForms) и сборку PS1 в EXE через ps2exe. 917 автоматических тестов на чистом Bash (на платформах без CMD/PowerShell часть suite'ов пропускается).
+ffmpeg/yt-dlp скрипты для загрузки и конвертации видео. Каждый инструмент реализован на 3 платформах (.sh, .cmd, .ps1), включая GUI (WinForms) и сборку PS1 в EXE через ps2exe. 1193 автоматических теста на чистом Bash (на платформах без CMD/PowerShell часть suite'ов пропускается).
 
 ---
 
@@ -30,13 +30,13 @@ video/
 │   ├── vot-cli-live.exe                 # AI-перевод аудио через Яндекс (опционально)
 │   └── _VideoDownloader_v15.exe         # Скомпилированный GUI
 │
-├── tests/                               # Автоматические тесты (917 шт.)
+├── tests/                               # Автоматические тесты (1193 шт.)
 │   ├── run_tests.sh                     # Точка входа
 │   ├── lib/framework.sh                 # Assert-функции, форматированный вывод
 │   ├── mocks/{ffmpeg,ffprobe,yt-dlp}    # Mock-бинарники
-│   ├── ffmpeg/test_01..14*.sh           # 14 тест-файлов (332 теста)
-│   ├── yt-dlp/test_01..07*.sh           # 7 тест-файлов (265 тестов)
-│   └── common/test_*.sh                 # 6 файлов (320 тестов): кодировки, паритет, guardrail'ы
+│   ├── ffmpeg/test_01..16*.sh           # 16 тест-файлов (489 тестов)
+│   ├── yt-dlp/test_01..08*.sh           # 8 тест-файлов (355 тестов)
+│   └── common/test_*.sh                 # 6 файлов (349 тестов): кодировки, паритет, guardrail'ы
 │
 └── README.md
 ```
@@ -137,13 +137,13 @@ yt-dlp/_VideoDownloader_v15.exe
 
 ## Тестирование
 
-917 тестов на чистом Bash, без внешних зависимостей. Mock-бинарники для ffmpeg, ffprobe, yt-dlp. На платформах без CMD/PowerShell соответствующие suite'ы пропускаются (в CI это ошибка на Windows-линии, ожидаемо на Linux).
+1193 теста на чистом Bash, без внешних зависимостей. Mock-бинарники для ffmpeg, ffprobe, yt-dlp. На платформах без CMD/PowerShell соответствующие suite'ы пропускаются (в CI это ошибка на Windows-линии, ожидаемо на Linux).
 
 ```bash
-bash tests/run_tests.sh           # все тесты (917)
-bash tests/run_tests.sh ffmpeg    # ffmpeg (332 теста, 14 файлов)
-bash tests/run_tests.sh yt-dlp    # yt-dlp (265 тестов, 7 файлов)
-bash tests/run_tests.sh common    # кросс-платформенные инварианты (320 тестов, 6 файлов)
+bash tests/run_tests.sh           # все тесты (1193)
+bash tests/run_tests.sh ffmpeg    # ffmpeg (489 тестов, 16 файлов)
+bash tests/run_tests.sh yt-dlp    # yt-dlp (355 тестов, 8 файлов)
+bash tests/run_tests.sh common    # кросс-платформенные инварианты (349 тестов, 6 файлов)
 ```
 
 ### Тест-модули FFmpeg (14 файлов)

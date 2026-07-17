@@ -229,4 +229,37 @@ else
     assert_empty "все значения --quality перечислены в config.ini.example" "$missing"
 fi
 
+# ══════════════════════════════════════════════════════════════
+suite "Документы не расходятся с реальным набором тестов"
+# ══════════════════════════════════════════════════════════════
+# Находка: README/TESTING заявляли 917 тестов и 14/7 файлов, когда runner
+# регистрировал другое. Числа, которые никто не сверяет, устаревают молча.
+# Источник истины — регистрация в run_tests.sh; ниже сверяем с ней.
+RUNNER_F="$TESTS_DIR/run_tests.sh"
+n_ff=$(grep -c 'TESTS_DIR/ffmpeg/' "$RUNNER_F")
+n_yt=$(grep -c 'TESTS_DIR/yt-dlp/' "$RUNNER_F")
+n_cm=$(grep -c 'TESTS_DIR/common/' "$RUNNER_F")
+
+README_F="$PROJECT_DIR/README.md"
+TESTING_F="$TESTS_DIR/TESTING.md"
+readme_txt="$(cat "$README_F")"
+
+assert_contains "README: число ffmpeg-файлов совпадает с runner ($n_ff)"  "$n_ff тест-файлов"  "$readme_txt"
+assert_contains "README: число yt-dlp-файлов совпадает с runner ($n_yt)"  "$n_yt тест-файлов"  "$readme_txt"
+assert_contains "README: число common-файлов совпадает с runner ($n_cm)"  "$n_cm файлов"       "$readme_txt"
+
+# Устаревшие версии скриптов в документации: ссылка на v11 «объясняла» файл,
+# которого нет начиная с v12.
+for _d in "$README_F" "$TESTING_F"; do
+    if grep -qE '_v1[0-4]\.(sh|ps1|cmd)' "$_d" 2>/dev/null; then
+        fail "$(basename "$_d"): нет ссылок на версии v11..v14" "нет" "$(grep -oE '[A-Za-z_]+_v1[0-4]\.(sh|ps1|cmd)' "$_d" | head -1)"
+    else
+        pass "$(basename "$_d"): нет ссылок на версии v11..v14"
+    fi
+done
+
+# Доктрина инлайн-копий вычищена: TESTING больше не учит копировать production-функции
+# в тест — это прямо запрещено guardrail'ом выше.
+assert_not_contains "TESTING не рекомендует копировать функции в тест" "функции копируются прямо в тест-файл" "$(cat "$TESTING_F")"
+
 summary

@@ -18,7 +18,7 @@ bash tests/run_tests.sh ffmpeg
 bash tests/run_tests.sh yt-dlp
 ```
 
-**Актуальное число тестов — только из раннера:** `bash tests/run_tests.sh` (сейчас 917: ffmpeg 332, yt-dlp 265, common 320). На платформах без CMD/PowerShell часть suite'ов пропускается.
+**Актуальное число тестов — только из раннера:** `bash tests/run_tests.sh` (сейчас 1193: ffmpeg 489, yt-dlp 355, common 349). На платформах без CMD/PowerShell часть suite'ов пропускается.
 
 > ⚠️ Ниже — подробный справочник по отдельным файлам; per-file counts могут отставать от текущего набора (единственный источник истины по числам — раннер). Полный список тест-файлов см. `tests/run_tests.sh`.
 
@@ -52,13 +52,17 @@ tests/
 
 ---
 
-## Тест-модули FFmpeg (7 файлов, ~125 тестов)
+## Тест-модули FFmpeg (16 файлов, 489 тестов)
 
 ### test_01_config_sh — Парсинг config.ini (Bash) · 29 тестов
 
 Тестирует функции `read_config()` и `to_flag()` из `FFmpeg_Converter_run.sh`.
 
-**Ключевой приём:** функции копируются прямо в тест-файл (без fork), поэтому тест быстрый и изолированный.
+**Ключевой приём:** тест дот-сорсит настоящий `FFmpeg_Converter_run_v15.sh` (конвейер под
+main-гардом `BASH_SOURCE == $0`), поэтому проверяется production-функция, а не её копия.
+Собственные копии production-функций **запрещены** и ловятся guardrail'ом в
+`tests/common/test_guardrails.sh`: копии тихо расходились с оригиналом и закрепляли
+уже исправленные баги.
 
 | Suite | Что проверяет |
 |-------|---------------|
@@ -183,7 +187,7 @@ tests/
 
 ### test_04_integration — Интеграционный · 13 тестов
 
-Запускает `Downloading_from_YouTube_v11.sh` с mock yt-dlp через PATH подмену.
+Запускает `Downloading_from_YouTube_v15.sh` с mock yt-dlp через `YTDLP_BIN`.
 
 | Suite | Что проверяет |
 |-------|---------------|

@@ -469,6 +469,11 @@ assert_contains "PS1 F4: -c:s copy"                          '"-c:s", "copy"'   
 # F14: запрошенный перевод без результата → failCount++ (не молчаливый успех).
 assert_contains "PS1 F14: флаг успешного перевода"           '$translateOk = $true'   "$PS1_SRC"
 assert_contains "PS1 F14: провал перевода инкрементит failCount" 'if (-not $translateOk) {' "$PS1_SRC"
+# #14: Stop отменяет перевод (убивает vot) + окно не висит бессрочно (DoEvents + таймаут).
+assert_contains "PS1 #14: vot-процесс отслеживается для Stop"   '$global:translateProcess = $votProc' "$PS1_SRC"
+assert_contains "PS1 #14: Stop убивает vot"                     '$global:translateProcess.Kill()'     "$PS1_SRC"
+assert_contains "PS1 #14: message-loop прокачивается (не висит)" 'DoEvents()'                          "$PS1_SRC"
+assert_contains "PS1 #14: потолок времени на сетевой vot"        '$_votTimeoutMs'                      "$PS1_SRC"
 
 # ══════════════════════════════════════════════════════════════
 suite "F22 (паритет): индекс дорожки перевода считается на всех платформах"

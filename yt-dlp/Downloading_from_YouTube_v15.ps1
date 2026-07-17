@@ -936,6 +936,10 @@ $_fc.Add($textCommand)
 # ── Глобальные переменные ─────────────────────────────────────────────────
 $global:processRunning  = $false
 $global:downloadProcess = $null
+# Дочерний процесс AI-перевода (vot-cli-live). Ходит в сеть и раньше выполнялся
+# синхронным ReadToEnd/WaitForExit на UI-потоке без таймаута — зависший сервис держал
+# окно бессрочно, а Stop его не трогал. Теперь Stop убивает и его.
+$global:translateProcess = $null
 
 function Stop-Download {
     param([bool]$silent = $false)
@@ -945,6 +949,10 @@ function Stop-Download {
     # массовый Stop-Process убивал бы параллельные загрузки других программ.
     if ($global:downloadProcess -ne $null -and -not $global:downloadProcess.HasExited) {
         try { $global:downloadProcess.Kill() } catch { }
+    }
+    # AI-перевод: убиваем vot-cli-live, иначе Stop не прерывал бы сетевой перевод.
+    if ($global:translateProcess -ne $null -and -not $global:translateProcess.HasExited) {
+        try { $global:translateProcess.Kill() } catch { }
     }
     if (-not $silent) {
         Append-Output "Загрузка остановлена" ([System.Drawing.Color]::Yellow)
@@ -1341,14 +1349,31 @@ $btnStart.Add_Click({
                         $votArgs = @("--output=$tempDir", "--voice-style=$transVoice", "--reslang=$transLang", $currentUrl)
                         $votPsi.Arguments = Join-WinArgs $votArgs
                         $votProc = [System.Diagnostics.Process]::Start($votPsi)
-                        # Сливаем stdout/stderr асинхронно: последовательный ReadToEnd по обоим
-                        # пайпам приводит к deadlock, если дочерний процесс заполнит stderr-буфер,
-                        # пока мы блокируемся на stdout.
+                        $global:translateProcess = $votProc
+                        # Оба потока читаем асинхронно: последовательный ReadToEnd по одному
+                        # пайпу блокирует до его закрытия (т.е. до выхода vot), а при сетевом
+                        # висе — бессрочно; плюс deadlock, если переполнится второй буфер.
+                        $outTask = $votProc.StandardOutput.ReadToEndAsync()
                         $errTask = $votProc.StandardError.ReadToEndAsync()
-                        $null = $votProc.StandardOutput.ReadToEnd()
-                        $null = $errTask.Result
+                        # Ждём с прокачкой message-loop (DoEvents), чтобы окно не висело и Stop
+                        # оставался кликабельным. Отмена (processRunning=false) и потолок времени
+                        # убивают vot — иначе зависший перевод держал бы GUI бессрочно.
+                        $_votTimeoutMs = 900000
+                        $_votSw = [System.Diagnostics.Stopwatch]::StartNew()
+                        while (-not $votProc.HasExited) {
+                            [System.Windows.Forms.Application]::DoEvents()
+                            if (-not $global:processRunning) { try { $votProc.Kill() } catch {}; break }
+                            if ($_votSw.ElapsedMilliseconds -gt $_votTimeoutMs) {
+                                try { $votProc.Kill() } catch {}
+                                Append-Output "AI-перевод: превышен таймаут vot-cli-live — прервано." ([System.Drawing.Color]::Red)
+                                break
+                            }
+                            Start-Sleep -Milliseconds 150
+                        }
                         $votProc.WaitForExit()
+                        $null = $outTask.Result; $null = $errTask.Result
                         if ($votProc) { $votProc.Dispose() }
+                        $global:translateProcess = $null
 
                         $transFile = Get-ChildItem -Path $tempDir -Filter "*.mp3" -File | Select-Object -First 1
 

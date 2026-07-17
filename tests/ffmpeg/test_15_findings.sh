@@ -166,6 +166,26 @@ export MOCK_MERGE_FAIL=0
 unset MOCK_HANG_LOG
 rm -f "$IN/z1.mp4" "$IN/z2.mp4" "$DST/z1.mp4"; rm -rf "$MW"
 
+# Паритет PS1/CMD (source-scan): тот же транзакционный контракт мержа, что проверен
+# поведенчески для SH выше. Поведенческий прогон SH — это source "$SCRIPT"; для PS1/CMD
+# он потребовал бы полного запуска worker'а, поэтому здесь фиксируем, что все четыре
+# элемента контракта присутствуют и не разойдутся между платформами.
+PS1_MERGE="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1"
+CMD_MERGE="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.cmd"
+ps1_m="$(cat "$PS1_MERGE")"; cmd_m="$(cat "$CMD_MERGE")"
+# 1) concat идёт с -nostdin -y (не висит на «Overwrite? [y/N]»).
+assert_contains "PS1 merge: -nostdin -y при concat" '-hide_banner -nostdin -strict -2 -f concat -safe 0' "$ps1_m"
+assert_contains "CMD merge: -nostdin -y при concat" '-hide_banner -nostdin -strict -2 -f concat -safe 0' "$cmd_m"
+# 2) мерж в соседний temp (.ffconv-partial-), а не сразу поверх цели.
+assert_contains "PS1 merge: temp через Get-PartialPath" 'Get-PartialPath $mergeTarget' "$ps1_m"
+assert_contains "CMD merge: temp .ffconv-partial-"      '.ffconv-partial-!fname!'       "$cmd_m"
+# 3) валидация -f null - до подмены цели.
+assert_contains "PS1 merge: валидация -f null - перед move" '-v error -i $mergeTmp -f null -' "$ps1_m"
+assert_contains "CMD merge: валидация -f null - перед move" '-v error -i "!_merge_tmp!" -f null -' "$cmd_m"
+# 4) atomic move поверх цели.
+assert_contains "PS1 merge: Move-Item поверх цели"  'Move-Item -LiteralPath $mergeTmp -Destination $mergeTarget -Force' "$ps1_m"
+assert_contains "CMD merge: move /y поверх цели"    'move /y "!_merge_tmp!" "!_merge_target!"' "$cmd_m"
+
 # ══════════════════════════════════════════════════════════════
 suite "F6: извлечение кадров — маркер завершения и retry-безопасность"
 # ══════════════════════════════════════════════════════════════

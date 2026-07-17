@@ -52,9 +52,9 @@ tests/
 
 ---
 
-## Тест-модули FFmpeg (16 файлов, 489 тестов)
+## Тест-модули FFmpeg
 
-### test_01_config_sh — Парсинг config.ini (Bash) · 29 тестов
+### test_01_config_sh — Парсинг config.ini (Bash)
 
 Тестирует функции `read_config()` и `to_flag()` из `FFmpeg_Converter_run.sh`.
 
@@ -73,7 +73,7 @@ main-гардом `BASH_SOURCE == $0`), поэтому проверяется pr
 | `read_config: edge cases` | несуществующий ключ, несуществующая секция, отсутствующий файл |
 | `to_flag + read_config: полный цикл` | Как в `run.sh`: audio_codec, video_codec, parallel (-), hw_accel (+) |
 
-### test_02_config_ps1 — Парсинг config.ini (PowerShell) · 11 тестов
+### test_02_config_ps1 — Парсинг config.ini (PowerShell)
 
 Запускает PowerShell (`pwsh`) для тестирования функций `Read-Config` и `To-Flag` из `FFmpeg_Converter_run.ps1`.
 
@@ -86,7 +86,7 @@ main-гардом `BASH_SOURCE == $0`), поэтому проверяется pr
 | `PS1 Read-Config: inline комментарии` | Значение не включает комментарий `# ...` |
 | `PS1 vs Bash: паритет значений` | PS1 и Bash дают одинаковый результат |
 
-### test_03_audio_args — Аудио-аргументы · 16 тестов
+### test_03_audio_args — Аудио-аргументы
 
 Запускает `FFmpeg_Converter_script.sh` через `run_script()`, извлекает переменные через `trap EXIT`.
 
@@ -98,7 +98,7 @@ main-гардом `BASH_SOURCE == $0`), поэтому проверяется pr
 | `Аудио: нормализация` | loudnorm включён/выключен в `af_chain` |
 | `Режим audio_only` | `-vn`, формат `mp3`, кодек `libmp3lame` |
 
-### test_04_video_args — Видео-аргументы · 14 тестов
+### test_04_video_args — Видео-аргументы
 
 | Suite | Что проверяет |
 |-------|---------------|
@@ -107,7 +107,7 @@ main-гардом `BASH_SOURCE == $0`), поэтому проверяется pr
 | `Видео: контейнер` | mp4, mkv, webm — в format_files_out и ffmpeg-аргументах |
 | `Видео: частота кадров` | `-r 25`, `-r 60` |
 
-### test_05_filters — Фильтры · 23 теста
+### test_05_filters — Фильтры
 
 | Suite | Что проверяет |
 |-------|---------------|
@@ -118,7 +118,7 @@ main-гардом `BASH_SOURCE == $0`), поэтому проверяется pr
 | `Фильтры: atempo каскад (< 0.5)` | Скорость 0.25x → `atempo=0.5,atempo=0.5` |
 | `Фильтры: комбо rotate + scale` | Оба фильтра через запятую в `vf_chain` |
 
-### test_06_gpu — GPU · 23 теста
+### test_06_gpu — GPU
 
 Управляется через `MOCK_FFMPEG_ENCODERS=nvenc|qsv|""`.
 
@@ -131,7 +131,7 @@ main-гардом `BASH_SOURCE == $0`), поэтому проверяется pr
 | `GPU: NVENC не поддерживается` | Fallback на `libx264` если в mock нет nvenc |
 | `GPU: hw_accel отключён (-)` | Программный кодек при `hw_accel=-nvidia` |
 
-### test_07_integration — Интеграционный · 13 тестов
+### test_07_integration — Интеграционный
 
 Создаёт реальный MP4 (1 сек, 64x64) через системный ffmpeg, затем запускает `script.sh` с mock ffmpeg. Проверяет полный пайплайн вызова.
 
@@ -143,11 +143,24 @@ main-гардом `BASH_SOURCE == $0`), поэтому проверяется pr
 | `Интеграция: dry_run` | ffmpeg НЕ вызывается (выводится только команда) |
 | `Интеграция: FAIL ffmpeg` | Файл не создан, ошибка в сводке |
 
+### Остальные ffmpeg-файлы
+
+Полный и авторитетный список — в `tests/run_tests.sh`. Кратко:
+
+| Файл | Что проверяет |
+|------|---------------|
+| `test_08_ps1_audio_video.sh` / `test_09_ps1_filters_gpu.sh` | PS1: аудио/видео-аргументы, фильтры, GPU (F25/F33) |
+| `test_10_cmd.sh` / `test_11_cmd_smoke.sh` / `test_12_cmd_run_parser.sh` | CMD: подпрограммы (`:build_atempo`, `:resolve_hw`, `:kbps_from_line`), парсер config |
+| `test_13_parser_parity.sh` | Паритет парсеров SH↔PS1↔CMD |
+| `test_14_audio_only_codec.sh` | audio_only + выбор кодека/контейнера |
+| `test_15_findings.sh` | Фиксы аудита ffmpeg (F5/F16/F17/F23/F25/F26/F32/F33 и др.) |
+| `test_16_gui_state.sh` | GUI: начальные значения контролов из config |
+
 ---
 
-## Тест-модули YT-DLP (4 файла, ~73 теста)
+## Тест-модули YT-DLP
 
-### test_01_read_config — Парсинг config.ini · 16 тестов
+### test_01_read_config — Парсинг config.ini
 
 Использует ту же `read_config()` что и ffmpeg (функции идентичны). Тестирует на yt-dlp-specific секциях.
 
@@ -160,7 +173,7 @@ main-гардом `BASH_SOURCE == $0`), поэтому проверяется pr
 | `translation` | enabled, target_lang, voice_style, mode |
 | `defaults и edge cases` | отсутствующий ключ, пустой файл, default-значения |
 
-### test_02_format_args — Пресеты форматов · 34 теста
+### test_02_format_args — Пресеты форматов
 
 Проверяет `build_format_args()` — 7 пресетов × 8 уровней качества (0-6 + субтитры 91/92).
 
@@ -175,7 +188,7 @@ main-гардом `BASH_SOURCE == $0`), поэтому проверяется pr
 | `old_combo` | Legacy: 18, 20/18, 22/20/18, ... |
 | `Неизвестный пресет` | Fallback на `avc1_best` |
 
-### test_03_cookie_args — Cookies · 10 тестов
+### test_03_cookie_args — Cookies
 
 | Suite | Что проверяет |
 |-------|---------------|
@@ -185,7 +198,7 @@ main-гардом `BASH_SOURCE == $0`), поэтому проверяется pr
 | `file (не существует)` | Предупреждение, cookie_arg пустой |
 | `неизвестный метод` | Graceful fallback |
 
-### test_04_integration — Интеграционный · 13 тестов
+### test_04_integration — Интеграционный
 
 Запускает `Downloading_from_YouTube_v15.sh` с mock yt-dlp через `YTDLP_BIN`.
 
@@ -197,6 +210,17 @@ main-гардом `BASH_SOURCE == $0`), поэтому проверяется pr
 | `Прокси` | `--proxy http://proxy:3128` |
 | `Субтитры (quality 91/92)` | `--sub-lang ru/en --write-auto-sub --skip-download` |
 | `Ошибка yt-dlp` | `MOCK_YTDLP_FAIL=1` — exit code != 0 |
+
+### Остальные yt-dlp-файлы
+
+Полный и авторитетный список — в `tests/run_tests.sh`. Кратко:
+
+| Файл | Что проверяет |
+|------|---------------|
+| `test_05_cmd.sh` | CMD: format/cookie/translate, errorlevel-фикс (интерактивный `.cmd`) |
+| `test_06_ps1.sh` | PS1 GUI (dot-source под `YTDLP_TEST=1`): Read-Config/Get-Platform/пресеты/Quote-WinArg |
+| `test_07_new_features.sh` | SponsorBlock, embed, playlist, trim и прочие поздние фичи |
+| `test_08_findings.sh` | Фиксы аудита (F1–F4, F13/F14, F30–F33, archive-skip): SH-прогон + source-scan CMD/PS1 |
 
 ---
 

@@ -526,10 +526,16 @@ function Encode-File {
 			default    { 'mka'  }
 		}
 		$outAudio = "$folder_destination$file_path$file_name.$ext"
+		# Единый overwrite-контракт: при overwrite_existing=yes перезаписываем готовый файл,
+		# а не пропускаем молча (раньше пропуск был безусловным — overwrite не работал).
 		if (Test-Path $outAudio) {
-			$script:countSkip++
-			Write-GUIProgress -CurrentFile $file.Name
-			return
+			if ($overwrite_existing -eq "yes") {
+				Remove-Item -LiteralPath $outAudio -Force -ErrorAction SilentlyContinue
+			} else {
+				$script:countSkip++
+				Write-GUIProgress -CurrentFile $file.Name
+				return
+			}
 		}
 		# D7. Dry-run: спецрежим тоже только печатает команду, не создаёт файл.
 		if ($dry_run -eq "yes") {
@@ -992,6 +998,19 @@ function Encode-File {
 	if ($dry_run -ne "yes" -and -not $anyFail -and $produced.Count -gt 0) {
 		Write-Manifest $manifest $full_path $file_sig $produced
 	}
+}
+
+# F-modes. Спецрежимы (merge/extract/frame/copy/audio) взаимоисключающи: при нескольких
+# включённых часть опций молча игнорируется. Называем эффективный режим по приоритету
+# merge>extract>frame>copy>audio и ЯВНО предупреждаем о проигнорированных.
+$_activeModes = @()
+if ($merge_files -eq "yes")        { $_activeModes += "merge" }
+if ($extract_audio_copy -eq "yes") { $_activeModes += "extract" }
+if ($create_frame -eq "yes")       { $_activeModes += "frame" }
+if ($copy_codecs -eq "yes")        { $_activeModes += "copy" }
+if ($audio_only -eq "yes")         { $_activeModes += "audio" }
+if ($_activeModes.Count -gt 1) {
+	Log-Msg "WARN" "Включено несколько взаимоисключающих режимов ($($_activeModes -join ' ')). Активен «$($_activeModes[0])» (приоритет merge>extract>frame>copy>audio), остальные проигнорированы."
 }
 
 # --- Основная логика ---

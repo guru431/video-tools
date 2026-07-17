@@ -623,6 +623,27 @@ assert_not_contains "CMD: нет findstr по семейству nvenc"         
 assert_not_contains "CMD: нет findstr по семейству qsv"              'findstr /i "h264_qsv hevc_qsv av1_qsv"'       "$cmd_ff"
 
 # ══════════════════════════════════════════════════════════════
+suite "F-modes: взаимоисключающие режимы → явный WARN, extract уважает overwrite"
+# ══════════════════════════════════════════════════════════════
+# Несколько спецрежимов сразу → часть опций молча игнорировалась. Теперь активный режим
+# по приоритету называется явно, остальные помечаются проигнорированными.
+touch "$IN/m.mp4"
+run_capture 'copy_codecs="yes"' 'audio_only="yes"' 'dry_run="yes"'
+assert_contains "конфликт режимов → WARN" "взаимоисключающих режимов" "$OUT_TEXT"
+assert_contains "WARN называет активный режим (copy>audio)" "Активен «copy»" "$OUT_TEXT"
+rm -f "$IN/m.mp4"
+
+# extract_audio_copy при overwrite_existing=yes перезаписывает готовый выход, а не
+# пропускает молча (раньше пропуск был безусловным — overwrite для режима не работал).
+touch "$IN/ea.mp4"; mkdir -p "$DST"; : > "$DST/ea.m4a"
+run_capture 'extract_audio_copy="yes"' 'overwrite_existing="yes"'
+if log_has "-vn -c:a copy"; then pass "extract+overwrite=yes → перекодирование выполнено"; else fail "extract+overwrite=yes → перекодирование" "ffmpeg -vn -c:a copy" "пропущен"; fi
+: > "$DST/ea.m4a"
+run_capture 'extract_audio_copy="yes"' 'overwrite_existing="no"'
+if log_has "-vn -c:a copy"; then fail "extract+overwrite=no → пропуск" "нет извлечения" "перекодировал"; else pass "extract+overwrite=no → готовый выход пропущен"; fi
+rm -f "$IN/ea.mp4" "$DST/ea.m4a"
+
+# ══════════════════════════════════════════════════════════════
 suite "F-collision: dest ВНУТРИ source не перекодирует собственные выходы"
 # ══════════════════════════════════════════════════════════════
 # Каталог назначения внутри источника: рекурсивный find подхватывал уже сконвертированные

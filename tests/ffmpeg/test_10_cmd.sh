@@ -461,4 +461,10 @@ assert_contains "Duration N/A → num fallback"  'if not defined num set "num=0"
 assert_contains     "CMD AMF: режим cqp + qp_i/qp_p/qp_b"  '_amf" set "crf_args=-rc cqp -qp_i'  "$src_cmd"
 assert_not_contains "CMD AMF: нет одиночного -qp mapping"  '_amf" set "crf_args=-qp '          "$src_cmd"
 
+# F-modes/#7: конфликт спецрежимов → WARN; extract уважает overwrite_existing.
+assert_contains "CMD: WARN о взаимоисключающих режимах" "взаимоисключающих режимов" "$src_cmd"
+assert_contains "CMD: extract уважает overwrite_existing" 'if exist "!out_audio!" if "%overwrite_existing%"=="yes" del' "$src_cmd"
+# F-collision (#6): skip файлов внутри каталога назначения
+assert_contains "CMD: dest-inside-source флаг" 'set "dest_inside_source=1"' "$src_cmd"
+
 summary

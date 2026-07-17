@@ -525,9 +525,16 @@ encode_file() {
 			*)      ext="mka"  ;;
 		esac
 		out_audio="${folder_destination}${file_path}${file_name}.${ext}"
+		# Единый overwrite-контракт: как и обычный режим, extract при overwrite_existing=yes
+		# перезаписывает готовый файл, а не пропускает его молча (раньше пропуск был
+		# безусловным — overwrite_existing=yes для этого режима не работал).
 		if [ -f "$out_audio" ]; then
-			echo "skip" > "$(mktemp "$results_dir/r_XXXXXXXX")"
-			return
+			if [ "$overwrite_existing" = "yes" ]; then
+				rm -f "$out_audio"
+			else
+				echo "skip" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+				return
+			fi
 		fi
 		# D7. Dry-run: спецрежим тоже только печатает команду, не создаёт файл.
 		if [ "$dry_run" = "yes" ]; then
@@ -978,6 +985,22 @@ else
 		_sort_z_warned=1
 		tr '\0' '\n' | LC_ALL=C sort | tr '\n' '\0'
 	}
+fi
+
+# F-modes. Спецрежимы (merge/extract/frame/copy/audio) взаимоисключающи по построению:
+# при нескольких включённых часть опций молча игнорируется. Определяем ЭФФЕКТИВНЫЙ режим
+# по документированному приоритету и ЯВНО предупреждаем о проигнорированных, а не молчим.
+# Приоритет исполнения: merge > extract > frame > copy > audio > (обычный transcode).
+_active_modes=""
+[ "$merge_files" = "yes" ]        && _active_modes="${_active_modes} merge"
+[ "$extract_audio_copy" = "yes" ] && _active_modes="${_active_modes} extract"
+[ "$create_frame" = "yes" ]       && _active_modes="${_active_modes} frame"
+[ "$copy_codecs" = "yes" ]        && _active_modes="${_active_modes} copy"
+[ "$audio_only" = "yes" ]         && _active_modes="${_active_modes} audio"
+_active_modes="${_active_modes# }"
+if [ "$(printf '%s' "$_active_modes" | wc -w)" -gt 1 ]; then
+	_mode_winner="${_active_modes%% *}"
+	log_msg "WARN" "Включено несколько взаимоисключающих режимов ($_active_modes). Активен «$_mode_winner» (приоритет merge>extract>frame>copy>audio), остальные проигнорированы."
 fi
 
 # --- Основная логика ---

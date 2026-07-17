@@ -150,6 +150,15 @@ assert_eq "h264_nvenc+hwoff: crf_args=-cq 23"  "-cq 23"   "$(getv "$OUT" crf_arg
 OUT=$(run_script "" 'hw_accel=":-:intel"' 'video_codec=":+:h264_qsv"' 'video_quality=":+:23"')
 assert_eq "h264_qsv+hwoff: crf_args=-global_quality 23"  "-global_quality 23"  "$(getv "$OUT" crf_args)"
 
+# ══════════════════════════════════════════════════════════════
+suite "AMF: constant-quality через cqp + qp_i/qp_p/qp_b, а не несуществующий -qp"
+# ══════════════════════════════════════════════════════════════
+# AMD AMF (h264_amf/hevc_amf/av1_amf) не принимает одиночный `-qp N` — ffmpeg падал
+# "Unrecognized option qp". CQP задаётся режимом cqp и отдельными -qp_i/-qp_p/-qp_b.
+OUT=$(run_script "" 'hw_accel=":-:"' 'video_codec=":+:h264_amf"' 'video_quality=":+:23"')
+assert_eq "h264_amf: crf_args=cqp+qp_i/qp_p/qp_b" "-rc cqp -qp_i 23 -qp_p 23 -qp_b 23" "$(getv "$OUT" crf_args)"
+assert_not_contains "h264_amf: нет одиночного -qp 23" "-qp 23" "$(getv "$OUT" crf_args)"
+
 # ── Cleanup ───────────────────────────────────────────────────
 rm -rf "$EMPTY_DIR"
 

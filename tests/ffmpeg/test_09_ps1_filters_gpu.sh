@@ -354,4 +354,8 @@ ct_ln=$(grep -nF 'bitrate:\s+(\d+)\s*kb/s' "$SCRIPT_PS1" | head -1 | cut -d: -f1
 order="bad"; [ -n "$vs_ln" ] && [ -n "$ct_ln" ] && [ "$vs_ln" -lt "$ct_ln" ] && order="ok"
 assert_eq "PS1: видеопоток проверяется до контейнера"  "ok"  "$order"
 
+# AMF: constant-quality через cqp + qp_i/qp_p/qp_b, а не несуществующий одиночный -qp.
+assert_contains     "PS1 AMF: режим cqp + qp_i/qp_p/qp_b"  '"-rc", "cqp", "-qp_i"' "$src_ps1"
+assert_not_contains "PS1 AMF: нет одиночного @(\"-qp\", ...)" '@("-qp", $video_quality_value)' "$src_ps1"
+
 summary

@@ -229,7 +229,10 @@ else
 		case "$set_video_codec" in
 			*_nvenc) crf_args="-cq $video_quality_value" ;;
 			*_qsv)   crf_args="-global_quality $video_quality_value" ;;
-			*_amf)   crf_args="-qp $video_quality_value" ;;
+			# AMF (h264_amf/hevc_amf/av1_amf) не имеет одиночного -qp: constant-quality
+			# задаётся режимом cqp + отдельными -qp_i/-qp_p/-qp_b. Прежний общий `-qp N`
+			# ffmpeg не принимал ("Unrecognized option qp") — каждый AMF-файл падал.
+			*_amf)   crf_args="-rc cqp -qp_i $video_quality_value -qp_p $video_quality_value -qp_b $video_quality_value" ;;
 			*)       crf_args="-crf $video_quality_value" ;;
 		esac
 	fi

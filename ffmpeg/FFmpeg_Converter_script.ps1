@@ -225,7 +225,9 @@ if ($audio_only -eq "yes") {
 		$crf_args = switch -Regex ($set_video_codec) {
 			'_nvenc$' { @("-cq", $video_quality_value); break }
 			'_qsv$'   { @("-global_quality", $video_quality_value); break }
-			'_amf$'   { @("-qp", $video_quality_value); break }
+			# AMF не имеет одиночного -qp: constant-quality = режим cqp + -qp_i/-qp_p/-qp_b.
+			# Прежний общий `-qp N` ffmpeg отвергал — каждый AMF-файл падал.
+			'_amf$'   { @("-rc", "cqp", "-qp_i", $video_quality_value, "-qp_p", $video_quality_value, "-qp_b", $video_quality_value); break }
 			default   { @("-crf", $video_quality_value) }
 		}
 	}

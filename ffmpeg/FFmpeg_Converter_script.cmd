@@ -193,7 +193,9 @@ if "%audio_only%"=="yes" (
 		set "crf_args=-crf !video_quality_value!"
 		if "!set_video_codec:~-6!"=="_nvenc" set "crf_args=-cq !video_quality_value!"
 		if "!set_video_codec:~-4!"=="_qsv" set "crf_args=-global_quality !video_quality_value!"
-		if "!set_video_codec:~-4!"=="_amf" set "crf_args=-qp !video_quality_value!"
+		rem AMF не имеет одиночного -qp: constant-quality = режим cqp + -qp_i/-qp_p/-qp_b.
+		rem Прежний общий `-qp N` ffmpeg отвергал ("Unrecognized option qp") — AMF-файл падал.
+		if "!set_video_codec:~-4!"=="_amf" set "crf_args=-rc cqp -qp_i !video_quality_value! -qp_p !video_quality_value! -qp_b !video_quality_value!"
 	)
 	rem Имя muxer для -f: mkv/ts — расширения файла, а не имена форматов ffmpeg.
 	rem Расширение выходного файла не меняется, только аргумент -f.

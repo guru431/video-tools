@@ -462,6 +462,11 @@ if %dl_errorlevel%==0 (
 :: ── AI-перевод (если выбран) ─────────────────────────────────────────────
 if not "%translate_lang%"=="" (
     if %dl_errorlevel%==0 (
+        rem F14 (паритет с .sh/.ps1). Перевод запрошен и применим → обязан либо дать
+        rem переведённый файл (translate_ok=1), либо быть засчитан как ошибка в итоге ниже.
+        rem Иначе провал (нет зависимостей, vot без результата, пустой манифест, ошибка
+        rem мержа) тонет: загрузка «успешна», а перевода нет.
+        set "translate_ok="
         echo.
         echo ─────────────────────────────────────────
         echo Получение AI-перевода ^(%translate_lang%^)...
@@ -560,6 +565,7 @@ if not "%translate_lang%"=="" (
                 if exist "!output_file!" (
                     move /y "!output_file!" "!video_file!" >nul
                     echo Перевод добавлен успешно!
+                    set "translate_ok=1"
                 ) else (
                     echo ОШИБКА: не удалось объединить аудиодорожки — оригинал сохранён
                 )
@@ -568,6 +574,10 @@ if not "%translate_lang%"=="" (
                 echo ОШИБКА: мерж завершился с ошибкой — оригинал сохранён
             )
         )
+        rem Диагностика молчаливого случая: vot вернул 0, но нет mp3, либо yt-dlp не
+        rem сообщил медиафайл — мерж не выполнялся, translate_ok остался пуст.
+        if not defined trans_file echo ОШИБКА: vot не создал файл перевода — переводить нечего
+        if not defined video_file echo ОШИБКА: yt-dlp не сообщил ни одного медиафайла — переводить нечего
 
         :: Очистка
         rmdir /s /q "!temp_dir!" 2>nul
@@ -575,6 +585,14 @@ if not "%translate_lang%"=="" (
 )
 :skip_translate
 if defined _dl_manifest del "!_dl_manifest!" 2>nul
+
+:: F14: перевод был запрошен, загрузка удалась, но переведённого файла нет → это НЕ
+:: полный успех. Итог и цвет отражают ошибку, а CLI-код становится ненулевым (cron/CI).
+if not "%translate_lang%"=="" if %dl_errorlevel%==0 if not defined translate_ok (
+    set "final_message=Загрузка успешна, но AI-перевод не выполнен!"
+    set "col=06"
+    set "translate_failed=1"
+)
 
 :: ── Результат ────────────────────────────────────────────────────────────
 echo.
@@ -584,3 +602,6 @@ echo   %final_message%
 echo =========================================
 echo.
 pause
+if not "%dl_errorlevel%"=="0" exit /b 1
+if defined translate_failed exit /b 1
+exit /b 0

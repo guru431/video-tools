@@ -1286,6 +1286,12 @@ $btnStart.Add_Click({
                     $lblStatus.Text = "AI-перевод $itemNum/$totalItems..."
                     Append-Output "Получение AI-перевода..." ([System.Drawing.Color]::Cyan)
 
+                    # F14 (паритет с .sh). Запрошенный перевод, применимый к режиму, обязан
+                    # ЛИБО дать переведённый файл, ЛИБО быть засчитан как ошибка. Иначе провал
+                    # перевода (нет зависимостей, vot без результата, ошибка мержа) тонет:
+                    # загрузка ++successCount, а сводка рапортует чистый успех, ничего не переведя.
+                    $translateOk = $false
+
                     $transLang      = $comboTransLang.SelectedItem
                     $transVoice     = $comboTransVoice.SelectedItem
                     $transModeNames = @("dual_track", "mix", "replace")
@@ -1402,6 +1408,7 @@ $btnStart.Add_Click({
                                 if ($LASTEXITCODE -eq 0 -and (Test-Path $outputFile)) {
                                     Move-Item -Path $outputFile -Destination $latestVideo.FullName -Force
                                     Append-Output "Перевод добавлен!" ([System.Drawing.Color]::LightGreen)
+                                    $translateOk = $true
                                 } else {
                                     Remove-Item -Path $outputFile -Force -ErrorAction SilentlyContinue
                                     Append-Output "Ошибка мержа аудиодорожек — оригинал сохранён" ([System.Drawing.Color]::Red)
@@ -1415,6 +1422,13 @@ $btnStart.Add_Click({
                             Append-Output "Не удалось получить перевод" ([System.Drawing.Color]::Yellow)
                         }
                         Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+                    }
+                    # Перевод был запрошен и применим, но результата нет → это ошибка (nonzero-
+                    # семантика .sh: COUNT_FAIL++). Загрузка уже засчитана в successCount, поэтому
+                    # элемент отражается как «скачан, но перевод не выполнен».
+                    if (-not $translateOk) {
+                        $failCount++
+                        Append-Output "AI-перевод не выполнен — засчитано как ошибка." ([System.Drawing.Color]::Red)
                     }
                 }
                 if ($dlManifest) { Remove-Item -LiteralPath $dlManifest -Force -ErrorAction SilentlyContinue }

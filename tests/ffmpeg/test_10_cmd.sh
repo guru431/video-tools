@@ -339,6 +339,60 @@ result=$(kbps_cmd '    Stream #0:0(und): Video: h264 (High), yuv420p, 1920x1080,
 assert_contains "видеопоток без kb/s → пусто (fallback на контейнер)"  "R=[]"  "$result"
 
 # ══════════════════════════════════════════════════════════════
+suite "F33 CMD: GPU-энкодер разрешается точной проверкой (:resolve_hw)"
+# ══════════════════════════════════════════════════════════════
+# Ни один прежний CMD-тест не исполнял ветку GPU (никто не выставлял hw_accel).
+# При F33 :resolve_hw падала на дисбалансе кавычек, а smoke/test_10 были зелёными.
+# Здесь вызывается НАСТОЯЩАЯ :resolve_hw из production с mock-ffmpeg, отдающим список
+# энкодеров. Контракт как у SH test_15::F33: включаем hardware ТОЛЬКО при точном энкодере.
+RESOLVE_HW_SRC=$(awk '/^:resolve_hw/{f=1} f&&/^:build_atempo/{exit} f{print}' "$CMD_SCRIPT" | tr -d '\r')
+if [ -z "$RESOLVE_HW_SRC" ]; then
+    fail "CMD: подпрограмма :resolve_hw найдена в production-файле" "найдена" "не найдена"
+fi
+# Mock ffmpeg.cmd: печатает список энкодеров (имя в конце строки — под якорь `$` findstr).
+MOCK_FF=$(mktemp /tmp/test_ffmock_XXXXXX.cmd)
+printf '@echo off\r\necho  V..... libx264\r\necho  V..... libx265\r\necho  V..... libsvtav1\r\nfor %%%%e in (%%MOCK_ENC%%) do echo  V....D %%%%e\r\nexit /b 0\r\n' > "$MOCK_FF"
+MOCK_FF_WIN=$(cygpath -w "$MOCK_FF" 2>/dev/null || echo "$MOCK_FF" | sed 's|/c/|C:/|;s|/|\\|g')
+
+resolve_hw_cmd() {
+    # $1=set_video_codec  $2=hw_accel_value  $3=MOCK_ENC (список энкодеров)
+    local body
+    body=$(printf '%s\n' \
+        "set \"MOCK_ENC=$3\"" \
+        "set \"ffmpeg=$MOCK_FF_WIN\"" \
+        "set \"set_video_codec=$1\"" \
+        "set \"hw_accel_value=$2\"" \
+        "set \"use_hw_accel=no\"" \
+        "set \"hw_decode_args=\"" \
+        "call :resolve_hw" \
+        "echo codec=!set_video_codec!" \
+        "echo hw=!use_hw_accel!" \
+        "echo decode=!hw_decode_args!" \
+        "goto :done_hw" \
+        "$RESOLVE_HW_SRC" \
+        ":done_hw" | sed 's/$/\r/')
+    run_cmd "$body"
+}
+
+# 1) libx264 + nvidia + сборка с h264_nvenc → hardware включается точным энкодером.
+result=$(resolve_hw_cmd "libx264" "nvidia" "h264_nvenc hevc_nvenc av1_nvenc")
+assert_contains "libx264+nvidia → энкодер h264_nvenc"  "codec=h264_nvenc"  "$result"
+assert_contains "libx264+nvidia → use_hw_accel=yes"    "hw=yes"            "$result"
+assert_contains "libx264+nvidia → -hwaccel cuda в argv" "-hwaccel cuda"    "$result"
+
+# 2) libsvtav1 + nvidia, но БЕЗ av1_nvenc в сборке → остаёмся на software (F33-суть).
+result=$(resolve_hw_cmd "libsvtav1" "nvidia" "h264_nvenc hevc_nvenc")
+assert_contains "libsvtav1 без av1_nvenc → кодек не подменён"  "codec=libsvtav1"  "$result"
+assert_not_contains "libsvtav1 без av1_nvenc → hardware НЕ включён"  "hw=yes"  "$result"
+assert_not_contains "libsvtav1 без av1_nvenc → без hwaccel-кадров"   "-hwaccel cuda"  "$result"
+
+# 3) кодек без GPU-варианта (libvpx-vp9) → software, hardware-кадры не включаются.
+result=$(resolve_hw_cmd "libvpx-vp9" "nvidia" "h264_nvenc hevc_nvenc av1_nvenc")
+assert_contains "libvpx-vp9 → кодек software оставлен"  "codec=libvpx-vp9"  "$result"
+assert_not_contains "libvpx-vp9 → hardware НЕ включён"  "hw=yes"  "$result"
+rm -f "$MOCK_FF"
+
+# ══════════════════════════════════════════════════════════════
 suite "CMD: keep_aspect_ratio else-binding (Task 5)"
 # ══════════════════════════════════════════════════════════════
 # При keep_aspect_ratio со статусом "-" масштабирование НЕ должно отключаться целиком

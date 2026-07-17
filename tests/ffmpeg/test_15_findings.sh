@@ -352,6 +352,153 @@ else
 fi
 rm -f "$IN/split.mp4" "$DST"/split*.mp4
 
+# ══════════════════════════════════════════════════════════════
+suite "F26: имя temp сохраняет расширение (иначе ffmpeg не выводит muxer)"
+# ══════════════════════════════════════════════════════════════
+# Суть: temp назывался `.movie.mp4.partial` — расширение стало `.partial`. Режимы
+# merge и copy_codecs идут с `-c copy` БЕЗ -f, а без -f настоящий ffmpeg выводит
+# muxer из расширения и падает: "Error initializing the muxer ... Invalid argument".
+# Мок этого не ловил (писал в любой файл), поэтому merge был сломан незаметно.
+XW=$(mktemp -d /tmp/test_ff_mux_XXXXXX); mkdir -p "$XW/bin"
+
+# Мок мимикрирует вывод muxer по расширению у настоящего ffmpeg. Ключевая деталь:
+# `-f` ДО последнего -i задаёт формат ВХОДА (так `-f concat` в merge), и на выбор
+# выходного muxer не влияет. Выходным считается только `-f` после последнего -i.
+cat > "$XW/bin/ffmpeg" <<'MEOF'
+#!/bin/bash
+case "$*" in *"-f null"*) exit 0 ;; esac
+args=("$@"); last_i=-1
+for ((k=0; k<${#args[@]}; k++)); do [ "${args[k]}" = "-i" ] && last_i=$k; done
+has_out_f=no
+for ((k=last_i+1; k<${#args[@]}; k++)); do [ "${args[k]}" = "-f" ] && has_out_f=yes; done
+# Выход — последний аргумент, не считая флага -y.
+out=""; for a in "$@"; do [ "$a" = "-y" ] || out="$a"; done
+if [ "$has_out_f" = "no" ]; then
+    case "$out" in
+        *.mp4|*.mkv|*.webm|*.mov|*.avi|*.ts|*.m4a|*.mp3|*.opus|*.flac|*.ogg|*.mka|*.wav) ;;
+        *) echo "Error initializing the muxer for $out: Invalid argument" >&2; exit 1 ;;
+    esac
+fi
+printf 'X' > "$out"; exit 0
+MEOF
+chmod +x "$XW/bin/ffmpeg"
+
+# --- merge (-c copy, без -f) ---
+touch "$IN/q1.mp4" "$IN/q2.mp4"; rm -f "$DST/q1.mp4"
+run_capture 'merge_files="yes"' "ffmpeg=\"$XW/bin/ffmpeg\""
+assert_not_contains "merge: muxer инициализируется (temp сохранил расширение)" "Error initializing the muxer" "$OUT_TEXT"
+if [ -f "$DST/q1.mp4" ]; then pass "merge: цель создана"; else fail "merge: цель создана" "есть q1.mp4" "нет"; fi
+rm -f "$IN/q1.mp4" "$IN/q2.mp4" "$DST/q1.mp4"
+
+# --- copy_codecs (-c copy -map 0, без -f) ---
+touch "$IN/cc.avi"; rm -f "$DST/cc.avi"
+run_capture 'copy_codecs="yes"' "ffmpeg=\"$XW/bin/ffmpeg\""
+assert_not_contains "copy_codecs: muxer инициализируется" "Error initializing the muxer" "$OUT_TEXT"
+if [ -f "$DST/cc.avi" ]; then pass "copy_codecs: выход создан"; else fail "copy_codecs: выход создан" "есть cc.avi" "нет"; fi
+rm -f "$IN/cc.avi" "$DST/cc.avi" "$DST/.cc.ffconv"
+rm -rf "$XW"
+
+# ══════════════════════════════════════════════════════════════
+suite "F27: параллельный режим не отклоняет файлы ложной коллизией"
+# ══════════════════════════════════════════════════════════════
+# Суть: encode_file уходит в дочернюю оболочку (xargs bash -c), а canon_path не был
+# в списке export -f. Обе стороны сравнения «выход == вход» становились пустыми
+# строками — то есть равными — и КАЖДЫЙ файл отклонялся как ложная коллизия.
+touch "$IN/par1.mp4" "$IN/par2.mp4"; rm -f "$DST/par1.mp4" "$DST/par2.mp4"
+run_capture 'parallel_files=":+:2"'
+assert_not_contains "параллель: нет ложной коллизии in==out" "выход совпадает с входом" "$OUT_TEXT"
+assert_not_contains "параллель: canon_path доступен в дочерней оболочке" "canon_path: command not found" "$OUT_TEXT"
+if [ -f "$DST/par1.mp4" ] && [ -f "$DST/par2.mp4" ]; then pass "параллель: оба файла перекодированы"; else fail "параллель: оба файла перекодированы" "par1.mp4 + par2.mp4" "$(ls "$DST" 2>/dev/null | tr '\n' ' ')"; fi
+rm -f "$IN"/par*.mp4 "$DST"/par*.mp4 "$DST"/.par*.ffconv
+
+# ══════════════════════════════════════════════════════════════
+suite "F17: готовность многочастного выхода подтверждает manifest, а не (part.1)"
+# ══════════════════════════════════════════════════════════════
+# Суть: наличие ОДНОЙ лишь `(part.1)` трактовалось как «файл целиком готов». Если
+# остальные части не создались (обрыв, падение, нехватка места), весь input молча
+# пропускался, и хвост исходника терялся навсегда.
+split_run() {
+    OUT_TEXT=$(
+        export PATH="$MOCKS_DIR:$PATH"; export MOCK_FFMPEG_ENCODERS=""; export MOCK_FFMPEG_LOG="$FFMPEG_LOG"
+        export MOCK_FFMPEG_DURATION="00:02:00.00"
+        rm -f "$FFMPEG_LOG"
+        default_vars; length_coding=":+:00-00-30"
+        for ov in "$@"; do eval "$ov"; done
+        source "$SCRIPT" 2>&1
+    ) < /dev/null
+}
+
+touch "$IN/sp.mp4"; rm -f "$DST"/sp*.mp4 "$DST"/.sp.ffconv
+# Осиротевшая part.1 без manifest — ровно тот случай, где старый код сдавался.
+: > "$DST/sp (part.1).mp4"
+split_run
+if log_has "-c:v libx264"; then pass "осиротевшая (part.1): файл дообработан, а не пропущен"; else fail "осиротевшая (part.1): файл дообработан" "ffmpeg вызван" "пропущен как готовый"; fi
+
+# Успешный полный прогон → manifest complete со всеми частями.
+rm -f "$DST"/sp*.mp4 "$DST"/.sp.ffconv
+split_run
+if [ -f "$DST/.sp.ffconv" ]; then pass "полный прогон: manifest записан"; else fail "полный прогон: manifest записан" "есть .sp.ffconv" "нет"; fi
+assert_contains "manifest: помечен complete" "state=complete" "$(cat "$DST/.sp.ffconv" 2>/dev/null)"
+MF_PARTS=$(grep -c '^output=' "$DST/.sp.ffconv" 2>/dev/null || echo 0)
+assert_eq "manifest: перечислены все 4 части" "4" "$MF_PARTS"
+
+# Повтор при полном manifest → пропуск.
+split_run
+if log_has "-c:v libx264"; then fail "полный manifest: повтор пропущен" "ffmpeg не вызван" "перекодировал заново"; else pass "полный manifest: повтор пропущен"; fi
+
+# Удалили одну часть → manifest есть, но выход неполон → доработать, а не пропустить.
+rm -f "$DST/sp (part.3).mp4"
+split_run
+if log_has "-c:v libx264"; then pass "пропавшая часть: manifest обесценен, файл переработан"; else fail "пропавшая часть: файл переработан" "ffmpeg вызван" "пропущен"; fi
+
+# Источник изменился → manifest обесценен (сверка по размеру).
+rm -f "$DST"/sp*.mp4 "$DST"/.sp.ffconv; split_run
+printf 'ИЗМЕНЁННЫЙ ИСТОЧНИК' > "$IN/sp.mp4"
+split_run
+if log_has "-c:v libx264"; then pass "изменённый источник: manifest обесценен"; else fail "изменённый источник: manifest обесценен" "ffmpeg вызван" "пропущен"; fi
+rm -f "$IN/sp.mp4" "$DST"/sp*.mp4 "$DST"/.sp.ffconv
+
+# ══════════════════════════════════════════════════════════════
+suite "F17b: manifest обесценивается при смене настроек выхода"
+# ══════════════════════════════════════════════════════════════
+# Manifest, привязанный только к источнику, пропустил бы файл при смене контейнера —
+# запрошенный выход так и не был бы создан.
+touch "$IN/sig.mp4"; rm -f "$DST"/sig.* "$DST"/.sig.ffconv
+run_capture 'output_container=":+:mkv"'
+if [ -f "$DST/sig.mkv" ]; then pass "первый прогон: mkv создан"; else fail "первый прогон: mkv создан" "есть sig.mkv" "нет"; fi
+run_capture 'output_container=":+:mkv"'
+if log_has "-c:v libx264"; then fail "те же настройки: повтор пропущен" "ffmpeg не вызван" "вызван"; else pass "те же настройки: повтор пропущен"; fi
+run_capture 'output_container=":+:mp4"'
+if [ -f "$DST/sig.mp4" ]; then pass "смена контейнера: mp4 создан (manifest обесценен)"; else fail "смена контейнера: mp4 создан" "есть sig.mp4" "нет"; fi
+rm -f "$IN/sig.mp4" "$DST"/sig.* "$DST"/.sig.ffconv
+
+# ══════════════════════════════════════════════════════════════
+suite "F18: прерванное кодирование не оставляет файл под финальным именем"
+# ══════════════════════════════════════════════════════════════
+# Суть: ffmpeg писал сразу в out_file. Обрыв БЕЗ шанса на очистку (kill -9, пропажа
+# питания, переполнение диска) оставлял обрезанный файл под финальным именем, и
+# следующий запуск принимал его за готовый результат. Ветка `rm -f` от этого не
+# спасает — она просто не успевает выполниться. Проверяем структурное свойство,
+# которое и даёт гарантию: имя цели не передаётся ffmpeg вовсе, оно появляется
+# только атомарным переименованием уже дописанного файла.
+touch "$IN/tx.mp4"; rm -f "$DST/tx.mp4" "$DST"/.ffconv-partial-* "$DST"/.tx.ffconv
+run_capture
+if log_has ".ffconv-partial-tx.mp4"; then pass "ffmpeg пишет во временное имя, а не в цель"; else fail "ffmpeg пишет во временное имя" "аргумент .ffconv-partial-tx.mp4" "ffmpeg получил финальное имя"; fi
+ENC_ARGS=$(grep -F -- "-c:v libx264" "$FFMPEG_LOG" 2>/dev/null | head -1)
+if grep -qE -- "(^| )$DST/tx\.mp4( |$)" <<< "$ENC_ARGS"; then fail "финальное имя не передаётся ffmpeg" "нет $DST/tx.mp4 в аргументах" "$ENC_ARGS"; else pass "финальное имя не передаётся ffmpeg"; fi
+rm -f "$DST/tx.mp4" "$DST/.tx.ffconv"
+
+run_capture 'export MOCK_FFMPEG_FAIL=1'
+if [ ! -f "$DST/tx.mp4" ]; then pass "провал: финального имени нет"; else fail "провал: финального имени нет" "нет tx.mp4" "создан обрезанный"; fi
+if ls "$DST"/.ffconv-partial-* >/dev/null 2>&1; then fail "провал: temp убран" "нет temp" "остался: $(ls "$DST"/.ffconv-partial-* 2>/dev/null)"; else pass "провал: temp убран"; fi
+if [ ! -f "$DST/.tx.ffconv" ]; then pass "провал: manifest не записан"; else fail "провал: manifest не записан" "нет" "есть"; fi
+
+# Успех: финальное имя появляется, temp исчезает.
+run_capture
+if [ -f "$DST/tx.mp4" ]; then pass "успех: финальный файл на месте"; else fail "успех: финальный файл на месте" "есть tx.mp4" "нет"; fi
+if ls "$DST"/.ffconv-partial-* >/dev/null 2>&1; then fail "успех: temp убран" "нет temp" "остался"; else pass "успех: temp убран"; fi
+rm -f "$IN/tx.mp4" "$DST/tx.mp4" "$DST/.tx.ffconv"
+
 # ── Cleanup ───────────────────────────────────────────────────
 rm -rf "$WORK"
 

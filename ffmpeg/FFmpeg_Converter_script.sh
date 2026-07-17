@@ -328,6 +328,17 @@ fi
 # --- Потоки ---
 thread_args="-threads $threads"
 
+# --- Подпись настроек для manifest ---
+# Manifest обязан устаревать при смене ЛЮБОЙ настройки, определяющей содержимое выхода.
+# Иначе прогон с другим контейнером/кодеком/фильтрами увидит «complete» от прошлого
+# прогона и пропустит файл, так и не создав запрошенный результат. Число потоков и
+# overwrite сюда не входят: они влияют на то, КАК считается выход, а не на то, каким он
+# получится.
+settings_sig=$(printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s' \
+	"$video_settings" "$audio_settings" "$vf_chain" "$af_chain" \
+	"$format_files_out" "$sub_meta_codec" "$video_subtitles" "$subtitles_style" \
+	"$start_coding" "$length_coding" "$split_by_silence")
+
 # --- Формат входных файлов ---
 # Предикаты find собираем массивом с quoted-паттернами: строка с *.ext без
 # кавычек раскрывается shell-глоббингом по файлам в cwd и ломает выборку find.
@@ -364,6 +375,60 @@ _cleanup_on_int() {
 	exit 130
 }
 trap _cleanup_on_int INT TERM
+
+file_size() { stat -c%s "$1" 2>/dev/null || stat -f%z "$1" 2>/dev/null || echo 0; }
+
+# --- Транзакционная запись: имя временного файла ---
+# Временное имя строится ПРЕФИКСОМ, а не суффиксом, потому что расширение обязано
+# сохраниться: без -f ffmpeg выводит muxer из расширения, а режимы copy_codecs и
+# merge как раз идут с `-c copy` без -f. Суффиксное `.movie.mp4.partial` давало
+# "Error initializing the muxer ... Invalid argument" на настоящем ffmpeg.
+partial_path() { printf '%s/.ffconv-partial-%s' "$(dirname "$1")" "$(basename "$1")"; }
+
+# --- Manifest готовности: input → outputs → completion state ---
+# Построчный формат (не JSON: CMD его не разберёт), одинаковый на трёх платформах:
+#   # ffconv-manifest v1
+#   source=<путь>
+#   source_size=<байты>
+#   output=<байты>|<путь>      ← размер первым: путь может содержать '|'
+#   state=complete
+# `state=complete` пишется последней строкой и только после успеха ВСЕХ частей,
+# поэтому оборванная запись не может выдать себя за готовый результат.
+# Сверяем размеры, а не хеши: чтение гигабайтов ради контрольной суммы стоило бы
+# сопоставимо с самим перекодированием, а размер ловит обрыв и подмену источника.
+manifest_write() {
+	local mf="$1" src="$2" sig="$3"; shift 3
+	local tmp="${mf}.tmp" o
+	{
+		echo "# ffconv-manifest v1"
+		echo "source=$src"
+		echo "source_size=$(file_size "$src")"
+		echo "settings=$sig"
+		for o in "$@"; do echo "output=$(file_size "$o")|$o"; done
+		echo "state=complete"
+	} > "$tmp" && mv -f "$tmp" "$mf"
+}
+
+manifest_is_complete() {
+	local mf="$1" src="$2" sig="$3"
+	[ -f "$mf" ] || return 1
+	grep -q '^state=complete$' "$mf" 2>/dev/null || return 1
+	local rec
+	rec=$(grep '^source_size=' "$mf" 2>/dev/null | head -1 | cut -d= -f2)
+	[ "$rec" = "$(file_size "$src")" ] || return 1
+	# Подпись настроек: смена контейнера/кодека/фильтров обязана обесценить manifest.
+	rec=$(grep '^settings=' "$mf" 2>/dev/null | head -1)
+	[ "${rec#settings=}" = "$sig" ] || return 1
+	local line sz path
+	while IFS= read -r line; do
+		case "$line" in output=*) ;; *) continue ;; esac
+		line="${line#output=}"
+		sz="${line%%|*}"; path="${line#*|}"
+		[ -f "$path" ] || return 1
+		[ "$(file_size "$path")" = "$sz" ] || return 1
+	done < "$mf"
+	return 0
+}
 
 human_size() {
 	local bytes=$1
@@ -492,6 +557,17 @@ encode_file() {
 		return
 	fi
 
+	# Готовность подтверждает manifest: state=complete + неизменившийся источник + все
+	# перечисленные выходы на месте. Раньше признаком готовности считалось наличие одной
+	# лишь `(part.1)` — если остальные части не создались (обрыв, падение, нехватка
+	# места), весь input молча пропускался как «уже готовый» и хвост терялся навсегда.
+	local manifest="${folder_destination}${file_path}.${file_name}.ffconv"
+	local file_sig="${settings_sig}|fmt=${current_format_out}|copy=${copy_codecs}"
+	if [ "$overwrite_existing" != "yes" ] && manifest_is_complete "$manifest" "$full_path" "$file_sig"; then
+		echo "skip" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+		return
+	fi
+
 	# F7. overwrite_existing=yes → готовый файл не считаем финальным и перекодируем с
 	# новыми настройками (ffmpeg -y перезапишет). Иначе валидный файл пропускается.
 	if [ "$overwrite_existing" != "yes" ]; then
@@ -504,10 +580,6 @@ encode_file() {
 				log_msg "WARN" "Удаление битого файла: ${folder_destination}${file_path}${file_name}.${current_format_out}"
 				rm -f "${folder_destination}${file_path}${file_name}.${current_format_out}"
 			fi
-		fi
-		if [ -f "${folder_destination}${file_path}${file_name} (part.1).${current_format_out}" ]; then
-			echo "skip" > "$(mktemp "$results_dir/r_XXXXXXXX")"
-			return
 		fi
 	fi
 
@@ -654,6 +726,10 @@ encode_file() {
 
 	if [ "$start_coding_status" = "+" ]; then num=($start_coding_value); fi
 
+	# Готовые выходы копим, чтобы записать manifest одной транзакцией после цикла.
+	local -a produced=()
+	local any_fail="no"
+
 	local c=1
 	for b in "${num[@]}"; do
 		local pref=""
@@ -755,12 +831,21 @@ encode_file() {
 			progress_file=$(mktemp "${TMPDIR:-/tmp}/ffconv.XXXXXXXX")
 			err_file=$(mktemp "${TMPDIR:-/tmp}/ffconv.XXXXXXXX")
 
+			# Пишем в соседний temp и переименовываем только после rc=0. Прямая запись в
+			# out_file означала, что прерванный прогон (Ctrl-C, падение, нехватка места)
+			# оставлял обрезанный файл под финальным именем — следующий запуск принимал
+			# его за готовый результат и пропускал. Переименование в пределах каталога
+			# атомарно, поэтому имя цели появляется только у полностью записанного файла.
+			local out_tmp
+			out_tmp="$(partial_path "$out_file")"
+			rm -f "$out_tmp"
+
 			"$ffmpeg" -nostdin -hide_banner -strict -2 $hw_decode_args \
 				$in_seek -i "$full_path" "${subtitles_params[@]}" \
 				$convert_settings $thread_args "${vf_args[@]}" "${af_args[@]}" \
 				$current_set_length $out_seek \
 				-progress "$progress_file" -nostats \
-				"$out_file" -y 2>"$err_file" &
+				"$out_tmp" -y 2>"$err_file" &
 			local ffmpeg_pid=$!
 			_current_ffmpeg_pid=$ffmpeg_pid
 
@@ -806,19 +891,29 @@ encode_file() {
 						echo "  $errline"
 					done
 				fi
-				rm -f "$out_file"
+				rm -f "$out_tmp"
+				any_fail="yes"
 				echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
 			else
+				mv -f "$out_tmp" "$out_file"
 				log_msg "OK" "$(basename "$full_path") -> $(basename "$out_file") (${elapsed_min}m ${elapsed_sec}s)"
 				local out_sz in_sz
-				out_sz=$(stat -c%s "$out_file" 2>/dev/null || stat -f%z "$out_file" 2>/dev/null || echo 0)
-				in_sz=$(stat -c%s "$full_path" 2>/dev/null || stat -f%z "$full_path" 2>/dev/null || echo 0)
+				out_sz=$(file_size "$out_file")
+				in_sz=$(file_size "$full_path")
+				produced+=("$out_file")
 				echo "ok:${out_sz}:${in_sz}" > "$(mktemp "$results_dir/r_XXXXXXXX")"
 			fi
 			rm -f "$err_file"
 		fi
 		((c+=1))
 	done
+
+	# Manifest пишем только когда удались ВСЕ части. Именно его отсутствие заставит
+	# следующий запуск доделать файл, вместо того чтобы принять уцелевшую (part.1) за
+	# готовый результат. Частичный успех manifest'а не получает намеренно.
+	if [ "$dry_run" != "yes" ] && [ "$any_fail" = "no" ] && [ ${#produced[@]} -gt 0 ]; then
+		manifest_write "$manifest" "$full_path" "$file_sig" "${produced[@]}"
+	fi
 }
 
 # `sort -z` — GNU-расширение, в штатном macOS/BSD sort его нет, а macOS заявлена
@@ -856,7 +951,7 @@ if [ "$merge_files" = "yes" ]; then
 		# существующий файл: ffmpeg спрашивал «File exists. Overwrite? [y/N]» и висел,
 		# ожидая stdin, которого в batch/GUI нет. А упавший мерж оставлял partial под
 		# именем цели, и следующий запуск принимал его за готовый результат.
-		merge_tmp="${folder_destination}/.${fname}.partial"
+		merge_tmp="$(partial_path "${folder_destination}/${fname}")"
 		if [ "$dry_run" = "yes" ]; then
 			echo "[DRY-RUN] $ffmpeg -hide_banner -nostdin -strict -2 -f concat -safe 0 -i \"$concat_list\" -c copy -map 0 -y \"$merge_tmp\""
 			rm -f "$concat_list"
@@ -883,7 +978,12 @@ if [ "$merge_files" = "yes" ]; then
 else
 	# B1b. Параллельная обработка файлов
 	if [ "$parallel_count" -gt 1 ] 2>/dev/null; then
-		export -f encode_file log_msg show_progress_bar human_size
+		# canon_path/file_size/partial_path/manifest_* обязаны быть в списке: encode_file
+		# зовёт их в дочерней оболочке `bash -c`. Без экспорта canon_path обе стороны
+		# сравнения «выход == вход» становились пустыми строками — то есть равными, —
+		# и в параллельном режиме КАЖДЫЙ файл отклонялся как ложная коллизия.
+		export -f encode_file log_msg show_progress_bar human_size \
+			canon_path file_size partial_path manifest_write manifest_is_complete
 		export audio_only folder_sources folder_destination ffmpeg format_files_out video_settings audio_settings
 		export save_old_extension create_frame copy_codecs split_by_silence extract_audio_copy
 		export video_bitrate_status set_video_bitrate_orig video_quality_status
@@ -891,7 +991,7 @@ else
 		export video_subtitles_status video_subtitles_value subtitles_style
 		export vf_chain af_chain hw_decode_args thread_args use_hw_accel
 		export silence_threshold silence_duration dry_run enable_log log_file
-		export overwrite_existing sub_meta_codec
+		export overwrite_existing sub_meta_codec settings_sig
 		export keep_aspect_ratio_status keep_aspect_ratio_value playback_speed_status playback_speed_value
 		export results_dir
 		find "$folder_sources" \( "${format_find_pred[@]}" \) -print0 | xargs -0 -P "$parallel_count" -I {} bash -c 'encode_file "$@"' _ {}

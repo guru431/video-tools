@@ -242,11 +242,27 @@ n_cm=$(grep -c 'TESTS_DIR/common/' "$RUNNER_F")
 
 README_F="$PROJECT_DIR/README.md"
 TESTING_F="$TESTS_DIR/TESTING.md"
-readme_txt="$(cat "$README_F")"
 
-assert_contains "README: число ffmpeg-файлов совпадает с runner ($n_ff)"  "$n_ff тест-файлов"  "$readme_txt"
-assert_contains "README: число yt-dlp-файлов совпадает с runner ($n_yt)"  "$n_yt тест-файлов"  "$readme_txt"
-assert_contains "README: число common-файлов совпадает с runner ($n_cm)"  "$n_cm файлов"       "$readme_txt"
+# Числа ИЗВЛЕКАЕМ и сравниваем численно. Прежняя версия этой проверки искала
+# подстроку ("$n файлов") и была фиктивной: "6 файлов" находится внутри
+# "16 файлов", поэтому она не могла упасть и давала ложную уверенность.
+# Дерево структуры (строки вида "# N тест-файлов" / "# N файлов (").
+readme_ff=$(grep -oE '# [0-9]+ тест-файлов' "$README_F" | sed -n 1p | grep -oE '[0-9]+')
+readme_yt=$(grep -oE '# [0-9]+ тест-файлов' "$README_F" | sed -n 2p | grep -oE '[0-9]+')
+readme_cm=$(grep -oE '# [0-9]+ файлов \(' "$README_F" | sed -n 1p | grep -oE '[0-9]+')
+assert_eq "README (дерево): ffmpeg-файлов = runner" "$n_ff" "${readme_ff:-НЕ_НАЙДЕНО}"
+assert_eq "README (дерево): yt-dlp-файлов = runner" "$n_yt" "${readme_yt:-НЕ_НАЙДЕНО}"
+assert_eq "README (дерево): common-файлов = runner" "$n_cm" "${readme_cm:-НЕ_НАЙДЕНО}"
+
+# Блок примеров запуска (строки "bash tests/run_tests.sh <модуль> ... N файлов").
+usage_ff=$(grep -oE 'run_tests\.sh ffmpeg[^#]*#[^)]*, [0-9]+ файлов' "$README_F" | grep -oE '[0-9]+ файлов' | grep -oE '[0-9]+')
+usage_yt=$(grep -oE 'run_tests\.sh yt-dlp[^#]*#[^)]*, [0-9]+ файлов' "$README_F" | grep -oE '[0-9]+ файлов' | grep -oE '[0-9]+')
+usage_cm=$(grep -oE 'run_tests\.sh common[^#]*#[^)]*, [0-9]+ файлов' "$README_F" | grep -oE '[0-9]+ файлов' | grep -oE '[0-9]+')
+assert_eq "README (примеры): ffmpeg-файлов = runner" "$n_ff" "${usage_ff:-НЕ_НАЙДЕНО}"
+assert_eq "README (примеры): yt-dlp-файлов = runner" "$n_yt" "${usage_yt:-НЕ_НАЙДЕНО}"
+assert_eq "README (примеры): common-файлов = runner" "$n_cm" "${usage_cm:-НЕ_НАЙДЕНО}"
+
+readme_txt="$(cat "$README_F")"
 
 # Устаревшие версии скриптов в документации: ссылка на v11 «объясняла» файл,
 # которого нет начиная с v12.

@@ -23,8 +23,16 @@ if [ -n "$added" ]; then
   fi
 fi
 
-# Collect staged diff once (exclude the hook itself to avoid self-matching)
-diff_content=$(git diff --cached --unified=0 -- . ':(exclude).githooks/pre-commit' 2>/dev/null || git diff --cached --unified=0 -- . ':(exclude).githooks/pre-commit')
+# Collect staged diff once (exclude the hook itself to avoid self-matching).
+# ONLY ADDED lines: the scanner used to see the whole diff, so a remediation commit
+# that DELETES a leaked token contained "-ghp_..." and got blocked — exactly when it
+# must pass. That pushed people toward --no-verify, disabling every other check too.
+# --unified=0 → no context lines; '^+' keeps additions, '^+++' drops the file header.
+diff_content=$(
+  { git diff --cached --unified=0 -- . ':(exclude).githooks/pre-commit' 2>/dev/null \
+    || git diff --cached --unified=0 -- . ':(exclude).githooks/pre-commit'; } \
+  | grep '^+' | grep -v '^+++' || true
+)
 
 # 2) High-confidence secret/token formats (generic, very low false-positive)
 generic='-----BEGIN [A-Z ]*PRIVATE KEY-----|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|gho_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{16,}|ccr-[A-Za-z0-9]{8,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+|[0-9]{8,10}:[A-Za-z0-9_-]{35}|[A-Za-z][A-Za-z0-9+.-]*://[^/@:[:space:]]+:[^/@[:space:]]+@'

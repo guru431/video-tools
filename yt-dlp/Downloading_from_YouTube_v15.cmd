@@ -207,11 +207,15 @@ set "save_settings="
 
 :: Субтитры — не зависят от пресета
 if "%quality%"=="91" (
-    set "save_settings=--sub-lang ru --write-auto-sub --sub-format vtt --skip-download"
+rem F31. --write-subs запрашивает авторские субтитры, --write-auto-subs оставляет
+rem автоматические как fallback. Раньше слался только auto-флаг — авторские
+rem (обычно точнее) молча пропадали. Формат vtt здесь захардкожен по дизайну:
+rem этот CLI интерактивный и config.ini не читает (санкционированное исключение).
+    set "save_settings=--write-subs --write-auto-subs --sub-langs ru --sub-format vtt --skip-download"
     goto :format_done
 )
 if "%quality%"=="92" (
-    set "save_settings=--sub-lang en --write-auto-sub --sub-format vtt --skip-download"
+    set "save_settings=--write-subs --write-auto-subs --sub-langs en --sub-format vtt --skip-download"
     goto :format_done
 )
 

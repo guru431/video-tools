@@ -389,7 +389,12 @@ download_url() {
     cmd+=(-o "$output_template")
 
     if [ "$subs_only" = "true" ]; then
-        cmd+=(--sub-lang "$SUB_LANG" --write-auto-sub --sub-format "$SUB_FORMAT" --skip-download)
+        # F31. Ручные субтитры не теряем: --write-subs запрашивает авторские, --write-auto-subs
+        # оставляет автоматические как fallback. Раньше слался только auto-флаг, хотя ни UI,
+        # ни документация не обещают «только автоматические» — авторские (обычно точнее)
+        # молча пропадали. Режим «субтитры вместе с видео» уже делал ровно так.
+        # --sub-langs/--sub-format — актуальные имена (--sub-lang — legacy-алиас).
+        cmd+=(--write-subs --write-auto-subs --sub-langs "$SUB_LANG" --sub-format "$SUB_FORMAT" --skip-download)
     else
         build_format_args "$quality" "$FORMAT_PRESET" "$(detect_platform "$url")"
         cmd+=("${FMT_ARGS_ARR[@]}")
@@ -636,7 +641,12 @@ download_batch() {
         cmd+=(--sleep-subtitles "$sleep_sub")
 
         if [ "$subs_only" = "true" ]; then
-            cmd+=(--sub-lang "$SUB_LANG" --write-auto-sub --sub-format "$SUB_FORMAT" --skip-download)
+            # F31. Ручные субтитры не теряем: --write-subs запрашивает авторские, --write-auto-subs
+        # оставляет автоматические как fallback. Раньше слался только auto-флаг, хотя ни UI,
+        # ни документация не обещают «только автоматические» — авторские (обычно точнее)
+        # молча пропадали. Режим «субтитры вместе с видео» уже делал ровно так.
+        # --sub-langs/--sub-format — актуальные имена (--sub-lang — legacy-алиас).
+        cmd+=(--write-subs --write-auto-subs --sub-langs "$SUB_LANG" --sub-format "$SUB_FORMAT" --skip-download)
         else
             build_format_args "$QUALITY" "$FORMAT_PRESET" "youtube"
             cmd+=("${FMT_ARGS_ARR[@]}")

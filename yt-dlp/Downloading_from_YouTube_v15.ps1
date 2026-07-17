@@ -94,6 +94,9 @@ $cfg_audioFormat   = Read-Config "audio_format"        "download"  "best"
 $cfg_sponsorblock  = Read-Config "sponsorblock"        "download"  "off"
 $cfg_subsWithVideo = Read-Config "download_with_video" "subtitles" "off"
 $cfg_subLang       = Read-Config "lang"                "subtitles" "ru"
+# F31. Формат субтитров читаем из конфига (паритет с SH). Раньше был захардкожен vtt,
+# то есть ключ [subtitles] format в GUI не работал вовсе.
+$cfg_subFormat     = Read-Config "format"              "subtitles" "vtt"
 
 $qualityMap = @{ "audio" = 0; "720" = 3; "360" = 1; "480" = 2; "1080" = 4; "1440" = 5; "2160" = 6 }
 $defaultQualityIdx = if ($qualityMap.ContainsKey($cfg_quality)) { $qualityMap[$cfg_quality] } else { 3 }
@@ -1093,8 +1096,13 @@ $btnStart.Add_Click({
                         $command += "-f", $formatPresets[$effectiveFmt][$qi]
                     }
                 }
-                7 { $command += "--sub-lang", "ru", "--write-auto-sub", "--sub-format", "vtt", "--skip-download" }
-                8 { $command += "--sub-lang", "en", "--write-auto-sub", "--sub-format", "vtt", "--skip-download" }
+                # F31. --write-subs запрашивает авторские субтитры, --write-auto-subs
+                # оставляет автоматические как fallback. Раньше слался только auto-флаг —
+                # авторские (обычно точнее) молча пропадали, хотя пункт меню называется
+                # «Только субтитры», а не «только автоматические». Язык — из пункта меню
+                # (RU/EN — осознанный выбор пользователя), формат — из конфига.
+                7 { $command += "--write-subs", "--write-auto-subs", "--sub-langs", "ru", "--sub-format", $cfg_subFormat, "--skip-download" }
+                8 { $command += "--write-subs", "--write-auto-subs", "--sub-langs", "en", "--sub-format", $cfg_subFormat, "--skip-download" }
             }
 
             # Аудио-формат: только для «Только аудио» (qi=0) и явного mp3/m4a/opus.

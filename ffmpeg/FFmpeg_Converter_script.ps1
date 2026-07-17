@@ -470,7 +470,15 @@ function Encode-File {
 
 	$full_path = $file.FullName
 	$file_path = "$($file.DirectoryName)\"
-	$file_name = $file.BaseName
+	# F32. Два РАЗНЫХ имени, их нельзя смешивать:
+	#   $input_stem — имя источника без расширения; по нему ищутся sidecar-субтитры;
+	#   $file_name  — базовое имя ВЫХОДА (при save_old_extension=yes несёт расширение
+	#                 источника, чтобы movie.avi -> movie.avi.mp4).
+	# Раньше переменная была одна: при save_old_extension=yes она становилась
+	# "movie.mp4", и sidecar искался как "movie.mp4.srt" вместо "movie.srt" —
+	# burn/meta молча пропускались.
+	$input_stem = $file.BaseName
+	$file_name = $input_stem
 	if ($save_old_extension -eq "yes") { $file_name = $file.Name }
 	$file_path = $file_path -replace [regex]::Escape($folder_sources), ''
 	if (!(Test-Path "$folder_destination$file_path")) { New-Item -ItemType Directory "$folder_destination$file_path" -Force | Out-Null }
@@ -760,7 +768,8 @@ function Encode-File {
 			$sub_found = $false
 			foreach ($ext in @("srt", "vtt")) {
 				if (-not $sub_found) {
-					$sub_file = "$folder_sources$file_path$file_name.$ext"
+					# F32. Sidecar ищем по СТЕМУ входа: movie.srt рядом с movie.mp4.
+					$sub_file = "$folder_sources$file_path$input_stem.$ext"
 					if (Test-Path $sub_file) {
 						if ($video_subtitles_value -eq "burn") {
 							$sub_escaped = $sub_file -replace '\\','/' -replace "'","\'" -replace ':','\:' -replace '\[','\[' -replace '\]','\]' -replace ';','\;' -replace '%','\%'; $sub_burned = $true

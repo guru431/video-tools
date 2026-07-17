@@ -366,6 +366,39 @@ fi
 rm -rf "$W4"
 
 # ══════════════════════════════════════════════════════════════
+suite "F31: «только субтитры» не теряет авторские captions"
+# ══════════════════════════════════════════════════════════════
+# Суть: все платформы слали только --write-auto-sub, хотя ни UI, ни docs не обещают
+# «только автоматические» — авторские (обычно точнее) молча пропадали. При этом режим
+# «субтитры вместе с видео» уже запрашивал оба вида: один продукт, две политики.
+write_cfg "[download]
+use_archive = false
+[subtitles]
+lang = ru
+format = srt"
+OUT=$(run_full "$CFG" --dry-run --subs "https://youtube.com/watch?v=abc")
+DRY=$(dry_line "$OUT")
+assert_contains "SH: --write-subs (авторские) запрошены"   "--write-subs"      "$DRY"
+assert_contains "SH: --write-auto-subs (fallback) остался" "--write-auto-subs" "$DRY"
+assert_contains "SH: --skip-download сохранён"             "--skip-download"   "$DRY"
+# Формат и язык — из конфига, а не захардкожены.
+assert_contains "SH: --sub-format из конфига (srt)"        "--sub-format srt"  "$DRY"
+assert_contains "SH: --sub-langs из конфига (ru)"          "--sub-langs ru"    "$DRY"
+rm -f "$CFG"
+
+# PS1: формат из конфига (был захардкожен vtt → ключ [subtitles] format не работал).
+PS1_SRC_F31="$(cat "$PS1_SCRIPT")"
+assert_contains "PS1: format читается из конфига"    'Read-Config "format"              "subtitles" "vtt"' "$PS1_SRC_F31"
+assert_contains "PS1: --write-subs в режиме субтитров" '"--write-subs", "--write-auto-subs", "--sub-langs", "ru"' "$PS1_SRC_F31"
+assert_not_contains "PS1: vtt больше не захардкожен"  '"--sub-format", "vtt"' "$PS1_SRC_F31"
+
+# CMD: интерактивный CLI, config.ini не читает (санкционированное исключение),
+# поэтому vtt здесь остаётся — но авторские субтитры обязаны запрашиваться.
+CMD_SRC_F31="$(cat "$CMD_SCRIPT")"
+assert_contains "CMD: --write-subs в режиме субтитров" "--write-subs --write-auto-subs --sub-langs ru" "$CMD_SRC_F31"
+assert_not_contains "CMD: legacy --write-auto-sub без --write-subs" "--sub-lang ru --write-auto-sub" "$CMD_SRC_F31"
+
+# ══════════════════════════════════════════════════════════════
 suite "F30: '--' закрывает опции перед позиционным URL"
 # ══════════════════════════════════════════════════════════════
 # Суть: без end-of-options строка вида '--version' исполнялась бы yt-dlp как ОПЦИЯ

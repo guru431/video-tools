@@ -163,7 +163,7 @@ if [ -f "$YTDLP_LOG" ]; then
     CALL=$(cat "$YTDLP_LOG")
     assert_contains "subs → --write-auto-sub"   "--write-auto-sub"   "$CALL"
     assert_contains "subs → --skip-download"    "--skip-download"    "$CALL"
-    assert_contains "subs → --sub-lang ru"      "--sub-lang ru"      "$CALL"
+    assert_contains "subs → --sub-langs ru"     "--sub-langs ru"     "$CALL"
 else
     skip "subs тест" "mock не был вызван"
 fi

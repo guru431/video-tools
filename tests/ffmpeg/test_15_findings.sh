@@ -545,6 +545,26 @@ assert_contains "вход засчитан один раз (4 KB, не 16 KB)" "
 assert_not_contains "вход НЕ умножен на число частей" "Вход:        16 KB" "$OUT_TEXT"
 rm -f "$IN/stats.mp4" "$DST"/stats*.mp4
 
+# ══════════════════════════════════════════════════════════════
+suite "F32: sidecar-субтитры находятся и при save_old_extension=yes"
+# ══════════════════════════════════════════════════════════════
+# Суть: имя выхода и стем входа жили в одной переменной. При save_old_extension=yes
+# она становилась "movie.mp4", поэтому sidecar искался как "movie.mp4.srt" вместо
+# "movie.srt" — прожиг/метаданные субтитров молча пропускались.
+touch "$IN/sub.mp4"
+printf '1\n00:00:00,000 --> 00:00:01,000\nX\n' > "$IN/sub.srt"
+
+# save_old_extension=no — работало и раньше, фиксируем как контроль.
+run_capture 'video_subtitles=":+:burn"'
+if log_has "subtitles="; then pass "save_old_extension=no: субтитры прожигаются"; else fail "save_old_extension=no: субтитры прожигаются" "фильтр subtitles=" "нет"; fi
+
+# save_old_extension=yes — суть находки: sidecar обязан найтись по стему.
+run_capture 'video_subtitles=":+:burn"' 'save_old_extension="yes"'
+if log_has "subtitles="; then pass "save_old_extension=yes: субтитры прожигаются (F32)"; else fail "save_old_extension=yes: субтитры прожигаются (F32)" "фильтр subtitles=" "нет — sidecar не найден"; fi
+# Имя выхода при этом обязано сохранить расширение источника: sub.mp4 -> sub.mp4.mp4
+if log_has "sub.mp4.mp4"; then pass "save_old_extension=yes: имя выхода несёт расширение источника"; else fail "save_old_extension=yes: имя выхода несёт расширение источника" "sub.mp4.mp4" "нет"; fi
+rm -f "$IN/sub.mp4" "$IN/sub.srt" "$DST"/sub*
+
 # ── Cleanup ───────────────────────────────────────────────────
 rm -rf "$WORK"
 

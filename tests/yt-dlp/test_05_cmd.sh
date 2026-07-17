@@ -91,8 +91,8 @@ assert_not_contains "нет битого itag-комбо 28/26"  "28/26"  "$CMD_
 suite "CMD yt-dlp: субтитры (качество 91/92)"
 # ══════════════════════════════════════════════════════════════
 
-assert_contains "quality=91 → --sub-lang ru"   "--sub-lang ru"   "$CMD_SRC"
-assert_contains "quality=92 → --sub-lang en"   "--sub-lang en"   "$CMD_SRC"
+assert_contains "quality=91 → --sub-langs ru"  "--sub-langs ru"  "$CMD_SRC"
+assert_contains "quality=92 → --sub-langs en"  "--sub-langs en"  "$CMD_SRC"
 assert_contains "субтитры → --skip-download"   "--skip-download" "$CMD_SRC"
 
 # ══════════════════════════════════════════════════════════════

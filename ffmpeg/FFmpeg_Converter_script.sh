@@ -467,7 +467,15 @@ show_progress_bar() {
 encode_file() {
 	local full_path="$1"
 	local file_path="$(dirname "$full_path")/"
-	local file_name="$(basename "$full_path" | sed 's/\.[^.]*$//')"
+	# F32. Два РАЗНЫХ имени, их нельзя смешивать:
+	#   input_stem — имя источника без расширения; по нему ищутся sidecar-субтитры;
+	#   file_name  — базовое имя ВЫХОДА (при save_old_extension=yes несёт расширение
+	#                источника, чтобы movie.avi -> movie.avi.mp4).
+	# Раньше переменная была одна: при save_old_extension=yes она становилась
+	# "movie.mp4", и sidecar искался как "movie.mp4.srt" вместо "movie.srt" —
+	# burn/meta молча пропускались.
+	local input_stem="$(basename "$full_path" | sed 's/\.[^.]*$//')"
+	local file_name="$input_stem"
 	if [ "$save_old_extension" = "yes" ]; then file_name="$(basename "$full_path")"; fi
 	file_path="${file_path:${#folder_sources}}"
 	if [ ! -d "$folder_destination$file_path" ]; then mkdir -p "$folder_destination$file_path"; fi
@@ -767,7 +775,8 @@ encode_file() {
 			local sub_found=""
 			for ext in srt vtt; do
 				if [ -z "$sub_found" ]; then
-					local sub_file="${folder_sources}${file_path}${file_name}.${ext}"
+					# F32. Sidecar ищем по СТЕМУ входа: movie.srt рядом с movie.mp4.
+					local sub_file="${folder_sources}${file_path}${input_stem}.${ext}"
 					if [ -f "$sub_file" ]; then
 						if [ "$video_subtitles_value" = "burn" ]; then
 							sub_burned="yes"

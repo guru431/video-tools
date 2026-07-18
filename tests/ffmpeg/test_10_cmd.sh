@@ -37,30 +37,45 @@ run_cmd() {
 # ══════════════════════════════════════════════════════════════
 suite "CMD: :to_flag суброутин (+/- → :+:/:-:)"
 # ══════════════════════════════════════════════════════════════
+# Раньше здесь стоял inline-пересказ одной строкой. Он не только мог разойтись с
+# production, но и молча терял ветку `if not defined _fv exit /b` — то есть
+# контракт «пустое значение сохраняет дефолт» не проверялся вовсе.
+# Теперь вырезаем НАСТОЯЩУЮ подпрограмму (как уже сделано для :resolve_hw и
+# :kbps_from_line ниже) и вызываем её через call.
+RUN_CMD_SCRIPT="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v15.cmd"
+if [ ! -f "$RUN_CMD_SCRIPT" ]; then
+    fail "CMD: production run-скрипт на месте" "$RUN_CMD_SCRIPT" "файл не найден"
+fi
+TO_FLAG_SRC=$(awk '/^:to_flag/{f=1} f&&/^:start_coding/{exit} f{print}' "$RUN_CMD_SCRIPT" | tr -d '\r')
+if [ -z "$TO_FLAG_SRC" ]; then
+    fail "CMD: подпрограмма :to_flag найдена в production-файле" "найдена" "не найдена"
+fi
 
-result=$(run_cmd '
-set "_fv=+libx264"
-set "_fn=video_codec"
-if "!_fv:~0,1!"=="+" (set "!_fn!=:+:!_fv:~1!") else if "!_fv:~0,1!"=="-" (set "!_fn!=:-:!_fv:~1!") else (set "!_fn!=:+:!_fv!")
-echo !video_codec!
-')
-assert_eq "to_flag: +libx264 → :+:libx264"  ":+:libx264"  "$result"
+to_flag_cmd() {
+    # $1 = значение из config.ini, $2 = предустановленный дефолт переменной
+    local body
+    body=$(printf '%s\n' \
+        "set \"video_codec=$2\"" \
+        "call :to_flag \"$1\" video_codec" \
+        "echo R=[!video_codec!]" \
+        "goto :done_to_flag" \
+        "$TO_FLAG_SRC" \
+        ":done_to_flag" | sed 's/$/\r/')
+    run_cmd "$body"
+}
 
-result=$(run_cmd '
-set "_fv=-libx264"
-set "_fn=video_codec"
-if "!_fv:~0,1!"=="+" (set "!_fn!=:+:!_fv:~1!") else if "!_fv:~0,1!"=="-" (set "!_fn!=:-:!_fv:~1!") else (set "!_fn!=:+:!_fv!")
-echo !video_codec!
-')
-assert_eq "to_flag: -libx264 → :-:libx264"  ":-:libx264"  "$result"
+result=$(to_flag_cmd "+libx264" "")
+assert_contains "to_flag: +libx264 → :+:libx264"     "R=[:+:libx264]"  "$result"
 
-result=$(run_cmd '
-set "_fv=libx264"
-set "_fn=video_codec"
-if "!_fv:~0,1!"=="+" (set "!_fn!=:+:!_fv:~1!") else if "!_fv:~0,1!"=="-" (set "!_fn!=:-:!_fv:~1!") else (set "!_fn!=:+:!_fv!")
-echo !video_codec!
-')
-assert_eq "to_flag: bare libx264 → :+:libx264"  ":+:libx264"  "$result"
+result=$(to_flag_cmd "-libx264" "")
+assert_contains "to_flag: -libx264 → :-:libx264"     "R=[:-:libx264]"  "$result"
+
+result=$(to_flag_cmd "libx264" "")
+assert_contains "to_flag: bare libx264 → :+:libx264" "R=[:+:libx264]"  "$result"
+
+# Ветка, которой в inline-копии не было совсем.
+result=$(to_flag_cmd "" ":+:default_codec")
+assert_contains "to_flag: пустое значение сохраняет дефолт" "R=[:+:default_codec]" "$result"
 
 # ══════════════════════════════════════════════════════════════
 suite "CMD: парсинг :+:value / :-:value"
@@ -200,72 +215,12 @@ echo codec=!set_video_codec!
 assert_contains "Bug6: encoder not found → use_hw_accel=no"  "hw=no"      "$result"
 assert_contains "Bug6: encoder not found → codec unchanged"   "codec=libx264" "$result"
 
-# ══════════════════════════════════════════════════════════════
-suite "CMD: config.ini парсинг (to_flag через config)"
-# ══════════════════════════════════════════════════════════════
-
-# Создаём временный config и тестовый CMD файл напрямую
-TMP_DIR=$(mktemp -d /tmp/test_cmd_config_XXXXXX)
-TMP_INI="$TMP_DIR/config.ini"
-printf '[audio]\ncodec = +libmp3lame\nbitrate = +192\n[video]\ncodec = +libx265\nquality = +28\n' > "$TMP_INI"
-
-WIN_INI=$(cygpath -w "$TMP_INI")
-
-# Напишем CMD файл напрямую (избегаем сложного экранирования в run_cmd)
-TMP_CMD="$TMP_DIR/parse_test.cmd"
-WIN_CMD=$(cygpath -w "$TMP_CMD")
-
-cat > "$TMP_CMD" << CMDEOF
-@echo off
-chcp 65001 >nul 2>&1
-setlocal enabledelayedexpansion
-set "CONFIG_FILE=$WIN_INI"
-set "audio_codec=:+:aac"
-set "video_codec=:+:libx264"
-set "video_quality=:-:23"
-set "_section="
-for /f "usebackq tokens=* delims=" %%A in ("%CONFIG_FILE%") do (
-    set "_line=%%A"
-    for /f "tokens=* delims= " %%T in ("!_line!") do set "_line=%%T"
-    if defined _line if not "!_line:~0,1!"=="#" (
-        echo !_line! | findstr /r "^\[.*\]" >nul 2>&1
-        if !errorlevel! equ 0 (
-            set "_section=!_line:~1,-1!"
-            if "!_section:~-1!"=="]" set "_section=!_section:~0,-1!"
-        ) else (
-            for /f "tokens=1,* delims==" %%K in ("!_line!") do (
-                set "_key=%%K"
-                set "_fv=%%L"
-                for /f "tokens=* delims= " %%T in ("!_key!") do set "_key=%%T"
-                for /l %%i in (1,1,5) do if "!_key:~-1!"==" " set "_key=!_key:~0,-1!"
-                for /f "tokens=1 delims=#" %%V in ("%%L") do for /f "tokens=* delims= " %%T in ("%%V") do set "_fv=%%T"
-                if "!_section!"=="audio" (
-                    if "!_key!"=="codec" (
-                        if "!_fv:~0,1!"=="+" (set "audio_codec=:+:!_fv:~1!") else (set "audio_codec=:-:!_fv:~1!")
-                    )
-                )
-                if "!_section!"=="video" (
-                    if "!_key!"=="codec" (
-                        if "!_fv:~0,1!"=="+" (set "video_codec=:+:!_fv:~1!") else (set "video_codec=:-:!_fv:~1!")
-                    )
-                    if "!_key!"=="quality" (
-                        if "!_fv:~0,1!"=="+" (set "video_quality=:+:!_fv:~1!") else (set "video_quality=:-:!_fv:~1!")
-                    )
-                )
-            )
-        )
-    )
-)
-echo audio_codec=!audio_codec!
-echo video_codec=!video_codec!
-echo video_quality=!video_quality!
-CMDEOF
-
-result=$(cmd //c "$WIN_CMD" 2>/dev/null)
-rm -rf "$TMP_DIR"
-assert_contains "config: audio codec = +libmp3lame → :+:libmp3lame"  ":+:libmp3lame"  "$result"
-assert_contains "config: video codec = +libx265 → :+:libx265"        ":+:libx265"     "$result"
-assert_contains "config: video quality = +28 → :+:28"                ":+:28"          "$result"
+# Сьюит «CMD: config.ini парсинг» удалён: это была 45-строчная inline-переделка
+# парсера из run_v15.cmd (:trim_val/:trim_key/:strip_inline_comment/:assign_var).
+# Настоящий парсер уже прогоняется в test_12_cmd_run_parser.sh через штатный хук
+# --print-config, причём строго шире: регистр секций, пустое значение → дефолт,
+# значения с & и #, резолвинг относительных путей. Копия проверяла подмножество
+# и при этом могла разойтись с production.
 
 # ══════════════════════════════════════════════════════════════
 suite "CMD: atempo каскад (milli-арифметика, без float)"

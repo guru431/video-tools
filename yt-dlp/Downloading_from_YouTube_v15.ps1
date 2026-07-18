@@ -60,6 +60,32 @@ if ($cfg_proxy_raw -match '^(https?|socks[45]?)://(?:([^:]+):([^@]+)@)?([^:/]+)(
     $cfg_proxyHost = $Matches[4]
     $cfg_proxyPort = if ($Matches[5]) { $Matches[5] } else { "" }
 }
+# ── Сеть: профиль устойчивости + необязательный потолок скорости ──────────
+# Значения раньше были зашиты литералами в строке сборки $command: подстроить их
+# под медленный/нестабильный канал было нельзя. Дефолт normal воспроизводит
+# прежний набор флагов ДОСЛОВНО, поэтому поведение по умолчанию не меняется.
+# Паритет с build_net_args в .sh — таблица профилей обязана совпадать.
+$cfg_speedProfile = Read-Config "speed_profile" "network" "normal"
+$cfg_limitRate    = Read-Config "limit_rate"    "network" ""
+
+function Build-NetArgs {
+    switch ($cfg_speedProfile) {
+        "careful" { $frags = 1; $retries = 20; $sock = 60; $sleepS = 5 }
+        "fast"    { $frags = 8; $retries = 5;  $sock = 15; $sleepS = 0 }
+        "normal"  { $frags = 4; $retries = 10; $sock = 30; $sleepS = 0 }
+        default   {
+            Write-Host "WARN: неизвестный speed_profile '$cfg_speedProfile', используется normal"
+            $frags = 4; $retries = 10; $sock = 30; $sleepS = 0
+        }
+    }
+    $a = @("--retries", "$retries", "--fragment-retries", "$retries",
+           "--file-access-retries", "5", "--socket-timeout", "$sock",
+           "--concurrent-fragments", "$frags")
+    if ($sleepS -gt 0) { $a += @("--retry-sleep", "$sleepS") }
+    if (-not [string]::IsNullOrWhiteSpace($cfg_limitRate)) { $a += @("--limit-rate", $cfg_limitRate) }
+    return $a
+}
+
 $cfg_quality      = Read-Config "default_quality" "download" "720"
 $cfg_baseDir      = Read-Config "base_dir"        "output"   "_video_"
 $cfg_template     = Read-Config "template"         "output"   '%(uploader)s/%(upload_date)s - %(title).100U.%(ext)s'
@@ -1005,6 +1031,8 @@ $btnStart.Add_Click({
     # Читаем очередь динамически — новые URL добавленные во время загрузки тоже будут обработаны
     $successCount  = 0
     $failCount     = 0
+    # Паритет с COUNT_SKIP в .sh: архивные пропуски не должны выдаваться за загрузки.
+    $skipCount     = 0
 
     try {
         $itemIdx = 0
@@ -1029,13 +1057,20 @@ $btnStart.Add_Click({
 
             # continue_on_error: true → -i (пропускать ошибки), false → --abort-on-error.
             $errFlag = if ($cfg_continueOnErr -eq "false") { "--abort-on-error" } else { "-i" }
-            $command = @("-c", $errFlag, "-w", "--windows-filenames", "--compat-options", "filename-sanitization", "--retries", "10", "--fragment-retries", "10", "--file-access-retries", "5", "--socket-timeout", "30", "--concurrent-fragments", "4")
+            $command = @("-c", $errFlag, "-w", "--windows-filenames", "--compat-options", "filename-sanitization") + (Build-NetArgs)
             # F13. Точный handshake вместо поиска по mtime: yt-dlp сам сообщает финальный
             # путь каждого готового файла (after_move — уже после post-processor'ов и move).
             # --print-to-file пишет в наш per-process файл, не смешиваясь с прогрессом.
             # Без этого перевод искал «самый свежий файл в дереве» и мог утащить чужую загрузку.
+            # Потребителей манифеста ДВА, как и в .sh:
+            #   1) перевод — нужны пути готовых файлов;
+            #   2) учёт archive-skip — пустой манифест при включённом архиве означает,
+            #      что видео уже скачано и yt-dlp ничего не переместил.
+            # Раньше манифест создавался ТОЛЬКО под перевод, поэтому (2) в GUI не
+            # работал вовсе: URL, целиком лежащий в архиве, попадал в successCount и
+            # печатался как «Готово» — сводка «N/M» завышала число реальных загрузок.
             $dlManifest = $null
-            if ($chkTranslate.Checked) {
+            if ($chkTranslate.Checked -or ($cfg_useArchive -eq "true" -and $qi -lt 7)) {
                 $dlManifest = Join-Path ([System.IO.Path]::GetTempPath()) ("ytdlp_manifest_{0}.txt" -f [System.Guid]::NewGuid().ToString('N'))
                 Set-Content -LiteralPath $dlManifest -Value $null -Encoding UTF8
                 $command += "--print-to-file", "after_move:filepath", $dlManifest
@@ -1270,6 +1305,20 @@ $btnStart.Add_Click({
 
             if ($exitCode -eq 0) {
                 $progressBar.Value = 100
+
+                # Архив включён, yt-dlp отработал успешно, но не переместил ни одного
+                # файла (пустой манифест) → видео уже было в архиве. Это ПРОПУСК, а не
+                # загрузка. Контракт дословно как у .sh (там это `return 2`): на пропуске
+                # перевод не запускается, потому что переводить нечего.
+                $archiveSkipped = $false
+                if ($dlManifest -and $cfg_useArchive -eq "true" -and $qi -lt 7 -and (Test-Path -LiteralPath $dlManifest)) {
+                    $archiveSkipped = ((Get-Item -LiteralPath $dlManifest).Length -eq 0)
+                }
+
+                if ($archiveSkipped) {
+                    $skipCount++
+                    Append-Output "Пропущено (уже в архиве): [$platform]  $currentUrl" ([System.Drawing.Color]::Yellow)
+                } else {
                 $successCount++
                 Append-Output "Готово: [$platform]  $currentUrl" ([System.Drawing.Color]::LightGreen)
 
@@ -1456,6 +1505,8 @@ $btnStart.Add_Click({
                         Append-Output "AI-перевод не выполнен — засчитано как ошибка." ([System.Drawing.Color]::Red)
                     }
                 }
+                } # конец ветки «реальная загрузка» (не archive-skip)
+                # Очистка манифеста — общая для обеих веток.
                 if ($dlManifest) { Remove-Item -LiteralPath $dlManifest -Force -ErrorAction SilentlyContinue }
             } elseif ($global:processRunning) {
                 $failCount++
@@ -1468,6 +1519,9 @@ $btnStart.Add_Click({
         Append-Output ""
         if ($global:processRunning) {
             $summary = "═══ Готово: $successCount/$totalItems"
+            # Паритет с print_summary в .sh: пропуски показываются отдельной строкой,
+            # иначе «Готово: 0/5» при полностью архивной очереди выглядит как провал.
+            if ($skipCount -gt 0) { $summary += "  |  Пропущено (в архиве): $skipCount" }
             if ($failCount -gt 0) { $summary += "  |  Ошибки: $failCount" }
             Append-Output $summary ([System.Drawing.Color]::LightGreen)
             $lblStatus.Text = "Завершено: $successCount/$totalItems"

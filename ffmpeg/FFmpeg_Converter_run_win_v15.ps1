@@ -40,9 +40,9 @@ if ([string]::IsNullOrEmpty($script:_appDir)) {
 # --- Чтение config.ini (один раз в хеш-таблицу) ---
 $configFile = Join-Path $script:_appDir "config.ini"
 $script:_configCache = @{}
-if (Test-Path $configFile) {
+if (Test-Path -LiteralPath $configFile) {
     $curSection = ""
-    foreach ($line in (Get-Content $configFile -Encoding UTF8)) {
+    foreach ($line in (Get-Content -LiteralPath $configFile -Encoding UTF8)) {
         $line = $line.Trim()
         if ([string]::IsNullOrEmpty($line) -or $line.StartsWith("#")) { continue }
         if ($line -match '^\[([^\]]+)\]$') {
@@ -1060,7 +1060,7 @@ $_goth = [System.Collections.Generic.List[System.Windows.Forms.Control]]::new()
 
 # ffmpeg path (авто: ./ffmpeg.exe рядом со скриптом, иначе из PATH)
 $_localFfmpeg = Join-Path $script:_appDir "ffmpeg.exe"
-$textFFmpegPath = [PSCustomObject]@{ Text = if (Test-Path $_localFfmpeg) { $_localFfmpeg } else { "ffmpeg" } }
+$textFFmpegPath = [PSCustomObject]@{ Text = if (Test-Path -LiteralPath $_localFfmpeg) { $_localFfmpeg } else { "ffmpeg" } }
 
 # Save Old Extension
 $checkSaveExtension = [System.Windows.Forms.CheckBox]::new()
@@ -1288,7 +1288,7 @@ $buttonRun.Add_Click({
     }
 
     # ---- Валидация ----
-    if ([string]::IsNullOrWhiteSpace($script:folder_sources) -or !(Test-Path $script:folder_sources)) {
+    if ([string]::IsNullOrWhiteSpace($script:folder_sources) -or !(Test-Path -LiteralPath $script:folder_sources)) {
         [System.Windows.Forms.MessageBox]::Show("Папка источника не найдена:`n$($script:folder_sources)", "Ошибка", "OK", "Error")
         return
     }
@@ -1372,7 +1372,7 @@ $buttonRun.Add_Click({
     # Загружаем скрипт: из встроенной переменной (EXE) или из файла (.ps1)
     if ($script:_embeddedScript) {
         $scriptContent = $script:_embeddedScript
-    } elseif (Test-Path $scriptPath) {
+    } elseif (Test-Path -LiteralPath $scriptPath) {
         $scriptContent = [System.IO.File]::ReadAllText($scriptPath, [System.Text.Encoding]::UTF8)
     } else {
         [System.Windows.Forms.MessageBox]::Show("Скрипт не найден:`n$scriptPath", "Ошибка", "OK", "Error") | Out-Null

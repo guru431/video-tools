@@ -353,8 +353,9 @@ download_url() {
 
     # continue_on_error: true → -i (пропускать ошибки), false → --abort-on-error.
     local _err_flag="-i"; [ "${CONTINUE_ON_ERROR:-true}" = "false" ] && _err_flag="--abort-on-error"
+    build_net_args
     local -a cmd=("$YTDLP" -c "$_err_flag" -w --windows-filenames --compat-options filename-sanitization
-                  --retries 10 --fragment-retries 10 --file-access-retries 5 --socket-timeout 30 --concurrent-fragments 4)
+                  "${NET_ARGS_ARR[@]}")
 
     # Deno рядом со скриптом (deno или deno.exe на Windows)
     local script_dir
@@ -614,8 +615,9 @@ download_batch() {
         fi
 
         local _err_flag="-i"; [ "${CONTINUE_ON_ERROR:-true}" = "false" ] && _err_flag="--abort-on-error"
+        build_net_args
         local -a cmd=("$YTDLP" -c "$_err_flag" -w --windows-filenames --compat-options filename-sanitization
-                  --retries 10 --fragment-retries 10 --file-access-retries 5 --socket-timeout 30 --concurrent-fragments 4)
+                  "${NET_ARGS_ARR[@]}")
         local sdir
         sdir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
         if [ -x "$sdir/deno" ]; then
@@ -633,6 +635,19 @@ download_batch() {
         # F3: архив не для «только субтитры» (хранит ID видео, а не наличие субтитров).
         [ "$USE_ARCHIVE" = "true" ] && [ "$subs_only" != "true" ] && cmd+=(--download-archive "${BASE_DIR}/${ARCHIVE_FILE}")
         cmd+=(-o "$template")
+
+        # Паритет с download_url: batch-ветка тоже получает манифест. Без него
+        # COUNT_SKIP в batch навсегда оставался 0, и канал, где все видео уже в
+        # архиве, засчитывался как успешно скачанный — сводка врала. Манифест
+        # per-канал (не per-запуск): пустой после успешного прохода = новых видео
+        # не было. Перевод в batch отключён guardrail'ом, поэтому единственный
+        # потребитель здесь — учёт пропусков.
+        local ch_manifest=""
+        if [ "$USE_ARCHIVE" = "true" ] && [ "$subs_only" != "true" ]; then
+            ch_manifest=$(mktemp 2>/dev/null) || ch_manifest="/tmp/ytdlp_batch_manifest_$$"
+            : > "$ch_manifest"
+            cmd+=(--print-to-file "after_move:filepath" "$ch_manifest")
+        fi
 
         # Дата
         local date_range
@@ -699,18 +714,28 @@ download_batch() {
             local proxy_note=""
             [ -n "${PROXY_URL:-}" ] && proxy_note="env HTTP_PROXY/HTTPS_PROXY/ALL_PROXY=$(mask_proxy "$PROXY_URL") "
             echo "[DRY-RUN] ${proxy_note}${cmd[*]}"
+            [ -n "$ch_manifest" ] && rm -f "$ch_manifest"
             continue
         fi
 
         log_info "Команда: ${cmd[*]}"
 
         if "${env_prefix[@]+"${env_prefix[@]}"}" "${cmd[@]}"; then
-            log_ok "Канал $handle завершён"
-            COUNT_OK=$((COUNT_OK + 1))
+            # Контракт тот же, что в download_url: архив включён, yt-dlp отработал
+            # успешно, но не переместил ни одного файла → все видео канала уже были
+            # в архиве. Это ПРОПУСК, а не загрузка.
+            if [ -n "$ch_manifest" ] && [ ! -s "$ch_manifest" ]; then
+                log_info "Пропущено (нет новых видео): $handle"
+                COUNT_SKIP=$((COUNT_SKIP + 1))
+            else
+                log_ok "Канал $handle завершён"
+                COUNT_OK=$((COUNT_OK + 1))
+            fi
         else
             log_error "Ошибка при загрузке канала $handle"
             COUNT_FAIL=$((COUNT_FAIL + 1))
         fi
+        [ -n "$ch_manifest" ] && rm -f "$ch_manifest"
     done < "$CHANNELS_FILE"
 }
 
@@ -759,6 +784,8 @@ COOKIES:
   --cookie-file PATH           Путь к файлу cookies
 
 ПРОКСИ:
+  --speed-profile P            Профиль сети: careful|normal|fast (по умолч. normal)
+  --limit-rate RATE            Потолок скорости, напр. 2M, 500K (пусто = без лимита)
   --proxy URL                  HTTP/HTTPS прокси
 
 ПЕРЕВОД (требует vot-cli-live, ffmpeg, Node.js 18+):
@@ -811,6 +838,11 @@ load_config() {
     elif [[ "$raw" == -* ]]; then TRIM_END_ON="false"; TRIM_END_VAL="${raw:1}"
     else TRIM_END_ON="false"; TRIM_END_VAL="$raw"; fi
     FORCE_KEYFRAMES=$(read_config "force_keyframes" "trim" "false")
+    # Сеть: профиль устойчивости + необязательный потолок скорости.
+    # Дефолт normal воспроизводит прежние зашитые значения дословно.
+    SPEED_PROFILE=$(read_config "speed_profile" "network" "normal")
+    LIMIT_RATE=$(read_config "limit_rate" "network" "")
+
     SUB_LANG=$(read_config "lang" "subtitles" "ru")
     SUB_FORMAT=$(read_config "format" "subtitles" "vtt")
     SUBS_WITH_VIDEO=$(read_config "download_with_video" "subtitles" "off")
@@ -869,6 +901,8 @@ parse_args() {
     TRANSLATE_CLI=""
     TRANSLATE_MODE_CLI=""
     TRANSLATE_VOICE_CLI=""
+    SPEED_PROFILE_CLI=""
+    LIMIT_RATE_CLI=""
     URL=""
 
     while [ $# -gt 0 ]; do
@@ -924,6 +958,15 @@ parse_args() {
                 validate_enum "$1" "$2" live tts
                 TRANSLATE_VOICE_CLI="$2"; shift 2
                 ;;
+            --speed-profile)
+                require_value "$1" "$#" "${2:-}"
+                validate_enum "$1" "$2" careful normal fast
+                SPEED_PROFILE_CLI="$2"; shift 2
+                ;;
+            --limit-rate)
+                require_value "$1" "$#" "${2:-}"
+                LIMIT_RATE_CLI="$2"; shift 2
+                ;;
             --mix)
                 TRANSLATE_MODE_CLI="mix"; shift
                 ;;
@@ -967,9 +1010,47 @@ parse_args() {
     fi
     [ -n "$TRANSLATE_MODE_CLI" ] && TRANSLATE_MODE="$TRANSLATE_MODE_CLI"
     [ -n "$TRANSLATE_VOICE_CLI" ] && TRANSLATE_VOICE="$TRANSLATE_VOICE_CLI"
+    [ -n "$SPEED_PROFILE_CLI" ] && SPEED_PROFILE="$SPEED_PROFILE_CLI"
+    [ -n "$LIMIT_RATE_CLI" ] && LIMIT_RATE="$LIMIT_RATE_CLI"
 
     # Сформировать cookie args (заполняет global COOKIE_ARGS_ARR)
     build_cookie_args "$COOKIE_METHOD" "$COOKIE_FILE_PATH" "$COOKIE_BROWSER"
+}
+
+# Собирает сетевые флаги yt-dlp по профилю SPEED_PROFILE в массив NET_ARGS_ARR.
+#
+# Раньше значения были зашиты литералами прямо в двух местах (download_url и
+# download_batch). Их нельзя было подстроить под медленный/нестабильный канал,
+# и две копии могли разойтись при правке. Профиль задаётся одним ключом:
+#   careful — щадящий: 1 фрагмент за раз, больше попыток, длинный таймаут
+#   normal  — прежнее поведение ДОСЛОВНО (дефолт, ничего не меняется)
+#   fast    — агрессивный: 8 фрагментов, меньше попыток, короткий таймаут
+# LIMIT_RATE ортогонален профилю: пустой = без ограничения.
+build_net_args() {
+    NET_ARGS_ARR=()
+    local frags retries sock sleep_s
+    case "${SPEED_PROFILE:-normal}" in
+        careful) frags=1; retries=20; sock=60; sleep_s=5 ;;
+        fast)    frags=8; retries=5;  sock=15; sleep_s=0 ;;
+        normal)  frags=4; retries=10; sock=30; sleep_s=0 ;;
+        *)
+            echo "WARN: неизвестный speed_profile '${SPEED_PROFILE}', используется normal" >&2
+            frags=4; retries=10; sock=30; sleep_s=0
+            ;;
+    esac
+    NET_ARGS_ARR=(--retries "$retries" --fragment-retries "$retries"
+                  --file-access-retries 5 --socket-timeout "$sock"
+                  --concurrent-fragments "$frags")
+    # Именно if, а не `[ ... ] && ...`: у идиомы со списком статус последней строки
+    # становится статусом функции, и при пустом LIMIT_RATE (обычный случай)
+    # build_net_args возвращала бы 1 — под `set -e` это уронило бы запуск.
+    if [ "$sleep_s" -gt 0 ]; then
+        NET_ARGS_ARR+=(--retry-sleep "$sleep_s")
+    fi
+    if [ -n "${LIMIT_RATE:-}" ]; then
+        NET_ARGS_ARR+=(--limit-rate "$LIMIT_RATE")
+    fi
+    return 0
 }
 
 # Маскирует credentials в proxy URL для вывода в лог:

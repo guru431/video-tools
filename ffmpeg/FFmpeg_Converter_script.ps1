@@ -10,9 +10,24 @@ trap {
 	break
 }
 
+# F1. У New-Item нет -LiteralPath ни в одной версии PowerShell, поэтому каталоги/файлы
+# по путям из пользовательского дерева создаём через .NET. GetUnresolvedProviderPathFromPSPath
+# разворачивает относительный путь по ТЕКУЩЕМУ $PWD провайдера (у голого [IO.Path]::GetFullPath
+# берётся process CWD, который в PowerShell расходится с $PWD) и не трогает [ ] ? * как маску.
+function New-DirLiteral {
+	param([string]$Path)
+	[System.IO.Directory]::CreateDirectory(
+		$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)) | Out-Null
+}
+function New-EmptyFileLiteral {
+	param([string]$Path)
+	[System.IO.File]::WriteAllText(
+		$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path), '')
+}
+
 # --- E1. Проверка окружения ---
 $_isGui = [bool]$env:FFMPEG_GUI_PROGRESS_FILE -or [bool]$guiProgressFile
-if ([string]::IsNullOrWhiteSpace($folder_sources) -or !(Test-Path $folder_sources)) {
+if ([string]::IsNullOrWhiteSpace($folder_sources) -or !(Test-Path -LiteralPath $folder_sources)) {
 	Write-Host "`n[ОШИБКА] Папка источника не найдена: $folder_sources`n"
 	if (-not $_isGui) { Read-Host "Нажмите [Enter], чтобы выйти..." }
 	exit 1
@@ -23,9 +38,8 @@ if ([string]::IsNullOrWhiteSpace($folder_destination)) {
 	if (-not $_isGui) { Read-Host "Нажмите [Enter], чтобы выйти..." }
 	exit 1
 }
-if (!(Test-Path $folder_destination)) {
-	New-Item -ItemType Directory $folder_destination -Force | Out-Null
-}
+# CreateDirectory идемпотентен — предварительный Test-Path не нужен
+New-DirLiteral $folder_destination
 
 try { & $ffmpeg -version 2>&1 | Out-Null } catch {
 	Write-Host "`n[ОШИБКА] ffmpeg не найден: $ffmpeg`n"
@@ -344,7 +358,13 @@ if ($audio_only -ne "yes" -and $copy_codecs -ne "yes" -and $merge_files -ne "yes
 }
 
 # --- Формат входных файлов ---
-$format_files_in_list = Get-ChildItem $folder_sources -Recurse -Include ($format_files_in -split "," | ForEach-Object { "*.$_" })
+# F1. Позиционный -Path глоббит: корень с [ ] ? * превращается в маску и обход даёт 0 файлов
+# (батч «успешно» завершается вхолостую). -LiteralPath отключает глоббинг, но при этом МОЛЧА
+# игнорирует -Include — поэтому фильтр по расширению перенесён в Where-Object. -File заодно
+# отсекает каталоги вида "season.mp4", которые старый -Include пропускал в Encode-File.
+$_in_exts = @($format_files_in -split "," | ForEach-Object { "." + $_.Trim().TrimStart('.') } | Where-Object { $_ -ne "." })
+$format_files_in_list = Get-ChildItem -LiteralPath $folder_sources -Recurse -File |
+	Where-Object { $_in_exts -contains $_.Extension }
 
 # F-collision. Если каталог назначения лежит СТРОГО ВНУТРИ источника, рекурсивный обход
 # подхватывает уже сконвертированные выходы и гонит их по кругу (или перекодирует поверх).
@@ -451,7 +471,7 @@ function Log-Msg {
 	$logLine = "[$timestamp] [$Level] $Msg"
 	Write-Host $logLine
 	if ($enable_log -eq "yes" -and $log_file) {
-		Add-Content -Path $log_file -Value $logLine
+		Add-Content -LiteralPath $log_file -Value $logLine
 	}
 }
 
@@ -536,7 +556,7 @@ function Encode-File {
 	$file_name = $input_stem
 	if ($save_old_extension -eq "yes") { $file_name = $file.Name }
 	$file_path = $file_path -replace [regex]::Escape($folder_sources), ''
-	if (!(Test-Path "$folder_destination$file_path")) { New-Item -ItemType Directory "$folder_destination$file_path" -Force | Out-Null }
+	New-DirLiteral "$folder_destination$file_path"
 
 	$script:fileNum++
 
@@ -561,7 +581,7 @@ function Encode-File {
 		$outAudio = "$folder_destination$file_path$file_name.$ext"
 		# Единый overwrite-контракт: при overwrite_existing=yes перезаписываем готовый файл,
 		# а не пропускаем молча (раньше пропуск был безусловным — overwrite не работал).
-		if (Test-Path $outAudio) {
+		if (Test-Path -LiteralPath $outAudio) {
 			if ($overwrite_existing -eq "yes") {
 				Remove-Item -LiteralPath $outAudio -Force -ErrorAction SilentlyContinue
 			} else {
@@ -583,12 +603,12 @@ function Encode-File {
 		& $ffmpeg -hide_banner -strict -2 -i $full_path -vn -c:a copy $outAudio -y
 		if ($LASTEXITCODE -ne 0) {
 			Log-Msg "FAIL" "$($file.Name)"
-			if (Test-Path $outAudio) { Remove-Item $outAudio -Force }
+			if (Test-Path -LiteralPath $outAudio) { Remove-Item -LiteralPath $outAudio -Force }
 			$script:countFail++
 		} else {
 			Log-Msg "OK" "$($file.Name) -> $(Split-Path $outAudio -Leaf)"
 			$script:countOk++
-			try { $script:totalInBytes += $file.Length; $script:totalOutBytes += (Get-Item $outAudio).Length } catch {}
+			try { $script:totalInBytes += $file.Length; $script:totalOutBytes += (Get-Item -LiteralPath $outAudio).Length } catch {}
 		}
 		Write-GUIProgress -FilePercent 100 -CurrentFile $file.Name
 		return
@@ -599,7 +619,7 @@ function Encode-File {
 		$frame_done = "$frame_dir\.frames_complete"
 		# Готовность каталога кадров — по маркеру завершения, а не по факту существования:
 		# прерванный прогон оставлял частичный каталог, который молча пропускался.
-		if ((Test-Path $frame_done) -and $overwrite_existing -ne "yes") {
+		if ((Test-Path -LiteralPath $frame_done) -and $overwrite_existing -ne "yes") {
 			$script:countSkip++
 			Write-GUIProgress -CurrentFile $file.Name
 			return
@@ -611,16 +631,16 @@ function Encode-File {
 			return
 		}
 		# Частичный каталог с прошлого прогона удаляем, чтобы кадры не смешивались.
-		if (Test-Path $frame_dir) { Remove-Item $frame_dir -Recurse -Force -ErrorAction SilentlyContinue }
-		New-Item -ItemType Directory $frame_dir -Force | Out-Null
+		if (Test-Path -LiteralPath $frame_dir) { Remove-Item -LiteralPath $frame_dir -Recurse -Force -ErrorAction SilentlyContinue }
+		New-DirLiteral $frame_dir
 		Log-Msg "INFO" "Извлечение кадров: $full_path"
 		& $ffmpeg -hide_banner -strict -2 -i $full_path -r 1/1 "$frame_dir\${file_name}_%05d.png"
 		if ($LASTEXITCODE -ne 0) {
 			Log-Msg "FAIL" "$($file.Name)"
-			Remove-Item $frame_dir -Recurse -Force -ErrorAction SilentlyContinue
+			Remove-Item -LiteralPath $frame_dir -Recurse -Force -ErrorAction SilentlyContinue
 			$script:countFail++
 		} else {
-			New-Item -ItemType File $frame_done -Force | Out-Null
+			New-EmptyFileLiteral $frame_done
 			Log-Msg "OK" "Кадры: $($file.Name)"
 			$script:countOk++
 		}
@@ -674,7 +694,7 @@ function Encode-File {
 	# F7. overwrite_existing=yes → готовый файл не считаем финальным и перекодируем с
 	# новыми настройками (ffmpeg -y перезапишет). Иначе валидный файл пропускается.
 	if ($overwrite_existing -ne "yes") {
-		if (Test-Path "$out_base.$current_format_out") {
+		if (Test-Path -LiteralPath "$out_base.$current_format_out") {
 			& $ffmpeg -v error -i "$out_base.$current_format_out" -f null - 2>&1 | Out-Null
 			if ($LASTEXITCODE -eq 0) {
 				$script:countSkip++
@@ -682,7 +702,7 @@ function Encode-File {
 				return
 			} else {
 				Log-Msg "WARN" "Удаление битого файла: $out_base.$current_format_out"
-				Remove-Item "$out_base.$current_format_out" -Force
+				Remove-Item -LiteralPath "$out_base.$current_format_out" -Force
 			}
 		}
 	}
@@ -857,7 +877,7 @@ function Encode-File {
 				if (-not $sub_found) {
 					# F32. Sidecar ищем по СТЕМУ входа: movie.srt рядом с movie.mp4.
 					$sub_file = "$folder_sources$file_path$input_stem.$ext"
-					if (Test-Path $sub_file) {
+					if (Test-Path -LiteralPath $sub_file) {
 						if ($video_subtitles_value -eq "burn") {
 							$sub_escaped = $sub_file -replace '\\','/' -replace "'","\'" -replace ':','\:' -replace '\[','\[' -replace '\]','\]' -replace ';','\;' -replace '%','\%'; $sub_burned = $true
 							# subtitles — CPU-фильтр: на GPU-кадрах (hwaccel_output_format cuda/qsv)
@@ -1027,7 +1047,7 @@ function Encode-File {
 				# F29. Вход — только с первой удавшейся части (см. $inReported выше).
 				try {
 					if (-not $inReported) { $script:totalInBytes += $file.Length; $inReported = $true }
-					$script:totalOutBytes += (Get-Item $out_file).Length
+					$script:totalOutBytes += (Get-Item -LiteralPath $out_file).Length
 				} catch {}
 				Write-GUIProgress -FilePercent 100 -CurrentFile $file.Name
 			}
@@ -1063,7 +1083,7 @@ if ($merge_files -eq "yes") {
 	} else {
 	$_mergeSorted = $format_files_in_list | Sort-Object FullName  # F10: паритет с .sh sort -z
 		$fname = $_mergeSorted[0].Name
-	if ($overwrite_existing -eq "yes" -or !(Test-Path "$folder_destination\$fname")) {
+	if ($overwrite_existing -eq "yes" -or !(Test-Path -LiteralPath "$folder_destination\$fname")) {
 		$tmpFile = [System.IO.Path]::GetTempFileName()
 		[System.IO.File]::WriteAllLines($tmpFile, ($_mergeSorted.FullName | ForEach-Object { "file '" + ($_ -replace "'", "'\''") + "'" }))
 		# Мержим в соседний temp, а не сразу поверх цели. Прежний вызов шёл без -y на

@@ -1,6 +1,6 @@
 # Video Tools
 
-ffmpeg/yt-dlp скрипты для загрузки и конвертации видео. Каждый инструмент реализован на 3 платформах (.sh, .cmd, .ps1), включая GUI (WinForms) и сборку PS1 в EXE через ps2exe. 1238 автоматических тестов на чистом Bash (на платформах без CMD/PowerShell часть suite'ов пропускается).
+ffmpeg/yt-dlp скрипты для загрузки и конвертации видео. Каждый инструмент реализован на 3 платформах (.sh, .cmd, .ps1), включая GUI (WinForms) и сборку PS1 в EXE через ps2exe. 1388 автоматических тестов на чистом Bash (на платформах без CMD/PowerShell часть suite'ов пропускается).
 
 ---
 
@@ -30,13 +30,13 @@ video/
 │   ├── vot-cli-live.exe                 # AI-перевод аудио через Яндекс (опционально)
 │   └── _VideoDownloader_v15.exe         # Скомпилированный GUI
 │
-├── tests/                               # Автоматические тесты (1238 шт.)
+├── tests/                               # Автоматические тесты (1388 шт.)
 │   ├── run_tests.sh                     # Точка входа
 │   ├── lib/framework.sh                 # Assert-функции, форматированный вывод
 │   ├── mocks/{ffmpeg,ffprobe,yt-dlp}    # Mock-бинарники
-│   ├── ffmpeg/test_01..16*.sh           # 16 тест-файлов (505 тестов)
-│   ├── yt-dlp/test_01..08*.sh           # 8 тест-файлов (369 тестов)
-│   └── common/test_*.sh                 # 7 файлов (364 теста): кодировки, паритет, guardrail'ы, pre-commit
+│   ├── ffmpeg/test_01..17*.sh           # 17 тест-файлов (587 тестов)
+│   ├── yt-dlp/test_01..10*.sh           # 10 тест-файлов (419 тестов)
+│   └── common/test_*.sh                 # 8 файлов (382 теста): кодировки, паритет, guardrail'ы, pre-commit
 │
 └── README.md
 ```
@@ -137,16 +137,16 @@ yt-dlp/_VideoDownloader_v15.exe
 
 ## Тестирование
 
-1238 тестов на чистом Bash, без внешних зависимостей. Mock-бинарники для ffmpeg, ffprobe, yt-dlp. На платформах без CMD/PowerShell соответствующие suite'ы пропускаются (в CI это ошибка на Windows-линии, ожидаемо на Linux).
+1388 тестов на чистом Bash, без внешних зависимостей. Mock-бинарники для ffmpeg, ffprobe, yt-dlp. На платформах без CMD/PowerShell соответствующие suite'ы пропускаются (в CI это ошибка на Windows-линии, ожидаемо на Linux).
 
 ```bash
-bash tests/run_tests.sh           # все тесты (1238)
-bash tests/run_tests.sh ffmpeg    # ffmpeg (505 тестов, 16 файлов)
-bash tests/run_tests.sh yt-dlp    # yt-dlp (369 тестов, 8 файлов)
-bash tests/run_tests.sh common    # кросс-платформенные инварианты (364 теста, 7 файлов)
+bash tests/run_tests.sh           # все тесты (1388)
+bash tests/run_tests.sh ffmpeg    # ffmpeg (587 тестов, 17 файлов)
+bash tests/run_tests.sh yt-dlp    # yt-dlp (419 тестов, 10 файлов)
+bash tests/run_tests.sh common    # кросс-платформенные инварианты (382 теста, 8 файлов)
 ```
 
-### Тест-модули FFmpeg (14 файлов)
+### Тест-модули FFmpeg (17 файлов)
 
 | Файл | Что тестирует |
 |------|---------------|
@@ -164,8 +164,11 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 | `test_12_cmd_run_parser` | CMD: парсер run-конфига |
 | `test_13_parser_parity` | Кросс-парсерный паритет SH/PS1 read_config |
 | `test_14_audio_only_codec` | audio_only: контейнер/кодек из `[audio] codec` |
+| `test_15_findings` | Фиксы аудита: dry-run спецрежимов, маркер кадров, overwrite, коллизии |
+| `test_16_gui_state` | GUI: воркер сообщает честный исход батча (success/failed/cancelled) |
+| `test_17_literal_paths` | PS1: пути с `[ ]` в именах (литеральные, без wildcard-глоббинга) |
 
-### Тест-модули YT-DLP (7 файлов)
+### Тест-модули YT-DLP (10 файлов)
 
 | Файл | Что тестирует |
 |------|---------------|
@@ -176,11 +179,15 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 | `test_05_cmd` | CMD-скрипт |
 | `test_06_ps1` | PS1-скрипт |
 | `test_07_new_features` | audio_format / sponsorblock / субтитры с видео |
+| `test_08_findings` | Фиксы аудита yt-dlp |
+| `test_09_speed_profile` | `[network]`: профили скорости/устойчивости, паритет SH↔PS1 |
+| `test_10_archive_skip_parity` | Archive-skip: batch (SH) и GUI (PS1) не выдают пропуск за загрузку |
 
-### Тест-модули Common (7 файлов)
+### Тест-модули Common (8 файлов)
 
 | Файл | Что тестирует |
 |------|---------------|
+| `test_framework_selfcheck` | Сам фреймворк: ассерты честны при `pipefail` (без ложной зелёнки) |
 | `test_encoding` | Кодировки: `.ps1`=BOM, `.sh`=без BOM, entry `.cmd`=chcp |
 | `test_config_keys` | Паритет ключей config.ini по платформам |
 | `test_config_contract` | Контракт `config-key-contract.yaml` ↔ реальность (CI-safe) |

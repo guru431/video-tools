@@ -87,11 +87,31 @@ assert_eq() {
     fi
 }
 
+# Поиск подстроки БЕЗ пайпа — это принципиально, а не стилистика.
+#
+# Раньше было `echo "$text" | grep -qF`. Тесты, которые дот-сорсят production
+# (а это теперь почти все), наследуют его `set -o pipefail`. Дальше `grep -q`
+# завершается на ПЕРВОМ совпадении, пишущий `echo` получает SIGPIPE и отдаёт
+# 141, и pipefail делает статусом всего пайплайна именно 141 — при том что
+# паттерн найден. Срабатывает только когда текст достаточно велик, чтобы grep
+# успел выйти раньше конца записи (~десятки КБ), поэтому на коротких строках
+# всё выглядело исправным.
+#
+# Последствия были в обе стороны, и вторая опаснее первой:
+#   • assert_contains     — ложный ПРОВАЛ на большом файле;
+#   • assert_not_contains — ложный УСПЕХ: запрещённый паттерн в файле есть,
+#     а guardrail зелёный. Проверено на .ps1 в 94 КБ.
+# Here-string читается grep'ом из временного файла, пайплайна нет вовсе,
+# поэтому ни SIGPIPE, ни pipefail на результат не влияют.
+_text_contains() {
+    grep -qF -- "$2" <<< "$1"
+}
+
 assert_contains() {
     local name="$1"
     local pattern="$2"
     local text="$3"
-    if echo "$text" | grep -qF -- "$pattern"; then
+    if _text_contains "$text" "$pattern"; then
         pass "$name"
     else
         fail "$name" "содержит: '$pattern'" "в: '$text'"
@@ -102,7 +122,7 @@ assert_not_contains() {
     local name="$1"
     local pattern="$2"
     local text="$3"
-    if ! echo "$text" | grep -qF -- "$pattern"; then
+    if ! _text_contains "$text" "$pattern"; then
         pass "$name"
     else
         fail "$name" "НЕ содержит: '$pattern'" "но нашли в: '$text'"

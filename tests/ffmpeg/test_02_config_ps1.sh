@@ -24,7 +24,24 @@ fi
 PS_CMD="powershell"
 command -v pwsh &>/dev/null && PS_CMD="pwsh"
 
-# ── Запуск PS1 функции через inline-скрипт ──────────────────────────────────
+# ── Обе функции — НАСТОЯЩИЕ из production ───────────────────────────────────
+# Раньше здесь лежали inline-копии Read-Config и To-Flag, и они успели разойтись
+# с оригиналом в четырёх местах: жадное '\s*#.*' вместо '\s+#.*' (значение
+# my#file.log обрезалось до my), отсутствие подстановки ${ENV_VAR}, '^\[(.+)\]$'
+# вместо '^\[([^\]]+)\]$' и потерянный .Trim() на возврате. Из-за этого сьюит
+# «PS1 vs Bash: паритет» сравнивал КОПИЮ с настоящим bash-парсером — то есть
+# не мог обнаружить расхождение, ради которого существовал.
+RUN_PS1="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v15.ps1"
+if [ ! -f "$RUN_PS1" ]; then
+    suite "PowerShell config parsing"
+    fail "production-скрипт на месте" "$RUN_PS1" "файл не найден — тест проверял бы копию, а не production"
+    summary
+    exit 1
+fi
+RUN_PS1_WIN=$(cygpath -w "$RUN_PS1" 2>/dev/null || echo "$RUN_PS1")
+
+# $env:FFCONV_TEST=1 — гард в run_v15.ps1: дот-сорсим только определения функций,
+# конвейер загрузки настроек не выполняется.
 run_ps1_readconfig() {
     local config_content="$1"
     local key="$2"
@@ -33,35 +50,16 @@ run_ps1_readconfig() {
     local config_file
     config_file=$(mktemp /tmp/test_config_XXXXXX.ini)
     printf '%s\n' "$config_content" > "$config_file"
-    # Нормализация пути для Windows
     local win_path
-    win_path=$(cygpath -w "$config_file" 2>/dev/null || echo "$config_file" | sed 's|/|\\|g' | sed 's|^s:|S:|')
+    win_path=$(cygpath -w "$config_file" 2>/dev/null || echo "$config_file")
 
     local result
     result=$($PS_CMD -NoProfile -NonInteractive -Command "
-\$CONFIG_FILE = '$win_path'
-
-function Read-Config {
-    param(\$key, \$section, \$default = '')
-    if (-not (Test-Path \$CONFIG_FILE)) { return \$default }
-    \$inSection = \$false
-    foreach (\$line in [System.IO.File]::ReadLines(\$CONFIG_FILE)) {
-        \$line = \$line.Trim()
-        if (\$line -eq '' -or \$line.StartsWith('#')) { continue }
-        if (\$line -match '^\[(.+)\]$') {
-            \$inSection = (\$matches[1] -eq \$section)
-            continue
-        }
-        if (\$inSection -and \$line -match \"^\$key\s*=\s*(.*)\") {
-            \$val = \$matches[1] -replace '\s*#.*', '' -replace '\s+$', ''
-            return \$val
-        }
-    }
-    return \$default
-}
-
+\$env:FFCONV_TEST = '1'
+. '$RUN_PS1_WIN'
+\$configFile = '$win_path'
 Read-Config '$key' '$section' '$default'
-" 2>/dev/null)
+" 2>/dev/null | tr -d '\r')
     rm -f "$config_file"
     echo "$result"
 }
@@ -70,19 +68,10 @@ run_ps1_toflag() {
     local val="$1"
     local default="$2"
     $PS_CMD -NoProfile -NonInteractive -Command "
-function To-Flag {
-    param(\$val, \$default)
-    if ([string]::IsNullOrEmpty(\$val)) { return \$default }
-    \$first = \$val[0]
-    \$rest = \$val.Substring(1)
-    switch (\$first) {
-        '+' { return \":\$([char]43):\$rest\" }
-        '-' { return \":-:\$rest\" }
-        default { return \":\$([char]43):\$val\" }
-    }
-}
+\$env:FFCONV_TEST = '1'
+. '$RUN_PS1_WIN'
 To-Flag '$val' '$default'
-" 2>/dev/null
+" 2>/dev/null | tr -d '\r'
 }
 
 # ══════════════════════════════════════════════════════════════
@@ -127,6 +116,31 @@ codec = +aac  # inline comment"
 
 result=$(run_ps1_readconfig "$CONFIG" "codec" "audio" "")
 assert_eq "Read-Config: inline comment срезается"  "+aac"  "$result"
+
+# ══════════════════════════════════════════════════════════════
+suite "PS1 Read-Config: поведение, которое скрывала inline-копия"
+# ══════════════════════════════════════════════════════════════
+# Каждая проверка ниже ПАДАЛА бы на старой копии — она и есть смысл миграции.
+
+# Копия резала по '\s*#.*' (жадно, любой '#'), production — по '\s+#.*' (только
+# ' #'). На my#file.log копия возвращала "my" и молча уводила лог не туда.
+CONFIG_HASH="[log]
+log_file = my#file.log"
+result=$(run_ps1_readconfig "$CONFIG_HASH" "log_file" "log" "")
+assert_eq "'#' внутри значения НЕ считается комментарием"  "my#file.log"  "$result"
+
+# Копия не умела ${ENV_VAR} вовсе и возвращала литерал.
+CONFIG_ENV="[folders]
+destination = \${FFCONV_TEST_VAR}/sub"
+result=$(FFCONV_TEST_VAR="D:\\out" run_ps1_readconfig "$CONFIG_ENV" "destination" "folders" "")
+assert_contains "\${ENV_VAR} подставляется из окружения"  "D:\\out"  "$result"
+assert_not_contains "\${ENV_VAR} не остаётся литералом"   '${FFCONV_TEST_VAR}'  "$result"
+
+# Копия теряла .Trim() на возврате — хвостовые пробелы уезжали в имя файла/кодека.
+CONFIG_SPACE="[video]
+codec =    +libx265   "
+result=$(run_ps1_readconfig "$CONFIG_SPACE" "codec" "video" "")
+assert_eq "значение обрезается с обеих сторон"  "+libx265"  "$result"
 
 # ══════════════════════════════════════════════════════════════
 suite "PS1 vs Bash: паритет значений"

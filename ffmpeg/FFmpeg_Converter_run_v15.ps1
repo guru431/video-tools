@@ -5,14 +5,14 @@
 $configFile = Join-Path $PSScriptRoot "config.ini"
 
 # --- Авто-определение ffmpeg рядом со скриптом ---
-$ffmpeg = if (Test-Path "$PSScriptRoot\ffmpeg.exe") { "$PSScriptRoot\ffmpeg.exe" } else { "ffmpeg" }
+$ffmpeg = if (Test-Path -LiteralPath "$PSScriptRoot\ffmpeg.exe") { "$PSScriptRoot\ffmpeg.exe" } else { "ffmpeg" }
 
 # --- Чтение config.ini ---
 function Read-Config {
 	param([string]$Key, [string]$Section, [string]$Default = "")
-	if (-not (Test-Path $configFile)) { return $Default }
+	if (-not (Test-Path -LiteralPath $configFile)) { return $Default }
 	$inSection = $false
-	foreach ($line in (Get-Content $configFile -Encoding UTF8)) {
+	foreach ($line in (Get-Content -LiteralPath $configFile -Encoding UTF8)) {
 		$line = $line.Trim()
 		if ([string]::IsNullOrEmpty($line) -or $line.StartsWith("#")) { continue }
 		if ($line -match '^\[([^\]]+)\]$') {

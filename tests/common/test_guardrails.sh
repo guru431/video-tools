@@ -178,6 +178,53 @@ for _t in "$TESTS_DIR"/ffmpeg/test_*.sh "$TESTS_DIR"/yt-dlp/test_*.sh "$TESTS_DI
 done
 assert_empty "ни один тест не переопределяет production-функцию" "$copy_offenders"
 
+# Та же проверка для PS1 и CMD. Прежняя версия знала только bash-синтаксис `name() {`,
+# поэтому мимо неё спокойно прошли:
+#   • test_02 — inline `function Read-Config`/`To-Flag`, разошедшиеся с production
+#     в четырёх местах (жадный '\s*#.*', нет ${ENV_VAR}, '^\[(.+)\]$', нет .Trim());
+#   • test_10 — inline-пересказ подпрограммы :to_flag, терявший ветку пустого значения.
+# Оба «зелёно» проверяли копию. Здесь ловим определения в тестах, а не вызовы.
+PROD_PS_FUNCS="Read-Config To-Flag Parse-Flag Quote-WinArg Join-WinArgs Get-Platform"
+PROD_CMD_LABELS="to_flag resolve_hw build_atempo kbps_from_line trim_val trim_key strip_inline_comment expand_env assign_var"
+ps_cmd_offenders=""
+for _t in "$TESTS_DIR"/ffmpeg/test_*.sh "$TESTS_DIR"/yt-dlp/test_*.sh "$TESTS_DIR"/common/test_*.sh; do
+    [ -f "$_t" ] || continue
+    case "$(basename "$_t")" in test_guardrails.sh) continue ;; esac
+    for _fn in $PROD_PS_FUNCS; do
+        # `function Read-Config {` — определение. Вызов `Read-Config 'k' 's'` не совпадёт.
+        if grep -qE "function[[:space:]]+\\\\?\$?${_fn}[[:space:]]*\{" "$_t" 2>/dev/null; then
+            ps_cmd_offenders="$ps_cmd_offenders $(basename "$_t"):PS1:${_fn}"
+        fi
+    done
+    for _lb in $PROD_CMD_LABELS; do
+        # Определение метки в теле теста (`:to_flag` в начале строки). Вырезание
+        # настоящей подпрограммы через awk из production-файла сюда не попадает:
+        # там метка приходит из переменной, а не написана literal'ом в тесте.
+        if grep -qE "^[[:space:]]*:${_lb}[[:space:]]*\$" "$_t" 2>/dev/null; then
+            ps_cmd_offenders="$ps_cmd_offenders $(basename "$_t"):CMD:${_lb}"
+        fi
+    done
+done
+assert_empty "ни один тест не держит PS1/CMD-копию production-подпрограммы" "$ps_cmd_offenders"
+
+# PS1-тесты парсера обязаны дот-сорсить production под гардом FFCONV_TEST/YTDLP_TEST.
+for _pair in "ffmpeg/test_02_config_ps1.sh:ffmpeg/FFmpeg_Converter_run_v15.ps1" \
+             "ffmpeg/test_13_parser_parity.sh:ffmpeg/FFmpeg_Converter_run_v15.ps1"; do
+    _tf="${_pair%%:*}"; _pf="${_pair#*:}"
+    if grep -q "$(basename "$_pf")" "$TESTS_DIR/$_tf" 2>/dev/null; then
+        pass "$(basename "$_tf") ссылается на настоящий $(basename "$_pf")"
+    else
+        fail "$(basename "$_tf") ссылается на настоящий $(basename "$_pf")" "дот-сорсинг production" "ссылки нет"
+    fi
+done
+
+# PS1-точка входа обязана иметь тест-гард, иначе дот-сорсинг запустит загрузку настроек.
+if grep -qE '\$env:FFCONV_TEST' "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v15.ps1" 2>/dev/null; then
+    pass "FFmpeg_Converter_run_v15.ps1: тест-гард FFCONV_TEST на месте"
+else
+    fail "FFmpeg_Converter_run_v15.ps1: тест-гард FFCONV_TEST на месте" '$env:FFCONV_TEST' "гарда нет — дот-сорсинг запустит конвейер"
+fi
+
 # Тесты, разбирающие config.ini, обязаны брать парсер из production, а не свой.
 for _pair in "ffmpeg/test_01_config_sh.sh:ffmpeg/FFmpeg_Converter_run_v15.sh" \
              "yt-dlp/test_01_read_config.sh:yt-dlp/Downloading_from_YouTube_v15.sh" \

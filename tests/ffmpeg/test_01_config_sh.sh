@@ -15,7 +15,7 @@ source "$TESTS_DIR/lib/framework.sh"
 # было подстановки ${ENV_VAR} и иначе обрезался инлайн-комментарий — то есть тест
 # «парсера config.ini» проверял НЕ ТОТ парсер, и сломать настоящий можно было незаметно.
 # Дот-сорсим production; его main-гард (BASH_SOURCE == $0) не даёт запустить конвейер.
-RUN_SH="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v15.sh"
+RUN_SH="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v16.sh"
 if [ ! -f "$RUN_SH" ]; then
     suite "Парсер config.ini (SH)"
     fail "production-скрипт на месте" "$RUN_SH" "файл не найден — тест проверял бы копию, а не production"
@@ -170,9 +170,9 @@ assert_contains "незаданная \${VAR} → WARN в stderr"     "FFCONV_TE
 unset FFCONV_TEST_SRC
 
 # ══════════════════════════════════════════════════════════════
-suite "run_v15.sh: Task 8 (анализ исходника)"
+suite "run_v16.sh: Task 8 (анализ исходника)"
 # ══════════════════════════════════════════════════════════════
-RUN_SH="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v15.sh"
+RUN_SH="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v16.sh"
 src_run="$(cat "$RUN_SH")"
 assert_contains "nocasematch для регистра ключей"  "shopt -s nocasematch"  "$src_run"
 assert_contains "backslash → slash в путях"  '${folder_sources//\\//}'  "$src_run"

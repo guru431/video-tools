@@ -10,9 +10,9 @@ TESTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
 source "$TESTS_DIR/lib/framework.sh"
 
-YT_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.ps1"
-YT_CMD="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.cmd"
-YT_SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.sh"
+YT_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.ps1"
+YT_CMD="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.cmd"
+YT_SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.sh"
 FF_CMD="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.cmd"
 
 ps1="$(cat "$YT_PS1")"
@@ -208,8 +208,8 @@ done
 assert_empty "ни один тест не держит PS1/CMD-копию production-подпрограммы" "$ps_cmd_offenders"
 
 # PS1-тесты парсера обязаны дот-сорсить production под гардом FFCONV_TEST/YTDLP_TEST.
-for _pair in "ffmpeg/test_02_config_ps1.sh:ffmpeg/FFmpeg_Converter_run_v15.ps1" \
-             "ffmpeg/test_13_parser_parity.sh:ffmpeg/FFmpeg_Converter_run_v15.ps1"; do
+for _pair in "ffmpeg/test_02_config_ps1.sh:ffmpeg/FFmpeg_Converter_run_v16.ps1" \
+             "ffmpeg/test_13_parser_parity.sh:ffmpeg/FFmpeg_Converter_run_v16.ps1"; do
     _tf="${_pair%%:*}"; _pf="${_pair#*:}"
     if grep -q "$(basename "$_pf")" "$TESTS_DIR/$_tf" 2>/dev/null; then
         pass "$(basename "$_tf") ссылается на настоящий $(basename "$_pf")"
@@ -219,16 +219,16 @@ for _pair in "ffmpeg/test_02_config_ps1.sh:ffmpeg/FFmpeg_Converter_run_v15.ps1" 
 done
 
 # PS1-точка входа обязана иметь тест-гард, иначе дот-сорсинг запустит загрузку настроек.
-if grep -qE '\$env:FFCONV_TEST' "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v15.ps1" 2>/dev/null; then
-    pass "FFmpeg_Converter_run_v15.ps1: тест-гард FFCONV_TEST на месте"
+if grep -qE '\$env:FFCONV_TEST' "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v16.ps1" 2>/dev/null; then
+    pass "FFmpeg_Converter_run_v16.ps1: тест-гард FFCONV_TEST на месте"
 else
-    fail "FFmpeg_Converter_run_v15.ps1: тест-гард FFCONV_TEST на месте" '$env:FFCONV_TEST' "гарда нет — дот-сорсинг запустит конвейер"
+    fail "FFmpeg_Converter_run_v16.ps1: тест-гард FFCONV_TEST на месте" '$env:FFCONV_TEST' "гарда нет — дот-сорсинг запустит конвейер"
 fi
 
 # Тесты, разбирающие config.ini, обязаны брать парсер из production, а не свой.
-for _pair in "ffmpeg/test_01_config_sh.sh:ffmpeg/FFmpeg_Converter_run_v15.sh" \
-             "yt-dlp/test_01_read_config.sh:yt-dlp/Downloading_from_YouTube_v15.sh" \
-             "yt-dlp/test_03_cookie_args.sh:yt-dlp/Downloading_from_YouTube_v15.sh"; do
+for _pair in "ffmpeg/test_01_config_sh.sh:ffmpeg/FFmpeg_Converter_run_v16.sh" \
+             "yt-dlp/test_01_read_config.sh:yt-dlp/Downloading_from_YouTube_v16.sh" \
+             "yt-dlp/test_03_cookie_args.sh:yt-dlp/Downloading_from_YouTube_v16.sh"; do
     _tf="${_pair%%:*}"; _pf="${_pair#*:}"
     if grep -q "$(basename "$_pf")" "$TESTS_DIR/$_tf" 2>/dev/null; then
         pass "$(basename "$_tf") ссылается на настоящий $(basename "$_pf")"
@@ -238,7 +238,7 @@ for _pair in "ffmpeg/test_01_config_sh.sh:ffmpeg/FFmpeg_Converter_run_v15.sh" \
 done
 
 # Обе точки входа обязаны иметь main-гард, иначе дот-сорсинг запустит конвейер.
-for _g in "ffmpeg/FFmpeg_Converter_run_v15.sh" "yt-dlp/Downloading_from_YouTube_v15.sh"; do
+for _g in "ffmpeg/FFmpeg_Converter_run_v16.sh" "yt-dlp/Downloading_from_YouTube_v16.sh"; do
     if grep -qE '\[ "\$\{BASH_SOURCE\[0\]\}" = "\$\{?0\}?" \]' "$PROJECT_DIR/$_g" 2>/dev/null; then
         pass "$(basename "$_g"): main-гард на месте (дот-сорсинг безопасен)"
     else

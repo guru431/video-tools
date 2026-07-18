@@ -14,8 +14,8 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 
 $exes = @(
-    @{ Path = 'ffmpeg/_VideoConverter_v15.exe';  Source = 'ffmpeg/FFmpeg_Converter_run_win_v15.ps1' },
-    @{ Path = 'yt-dlp/_VideoDownloader_v15.exe'; Source = 'yt-dlp/Downloading_from_YouTube_v15.ps1' }
+    @{ Path = 'ffmpeg/_VideoConverter_v16.exe';  Source = 'ffmpeg/FFmpeg_Converter_run_win_v16.ps1' },
+    @{ Path = 'yt-dlp/_VideoDownloader_v16.exe'; Source = 'yt-dlp/Downloading_from_YouTube_v16.ps1' }
 )
 function Get-Sha256([string]$p) { (Get-FileHash -Algorithm SHA256 $p).Hash }
 

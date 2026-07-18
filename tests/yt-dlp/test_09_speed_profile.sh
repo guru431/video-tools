@@ -21,8 +21,8 @@ TESTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
 source "$TESTS_DIR/lib/framework.sh"
 
-SH_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.sh"
-PS1_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.ps1"
+SH_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.sh"
+PS1_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.ps1"
 for _f in "$SH_SCRIPT" "$PS1_SCRIPT"; do
     if [ ! -f "$_f" ]; then
         suite "[network] speed_profile"

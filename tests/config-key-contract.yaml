@@ -23,7 +23,7 @@ yt-dlp:
   rule: "read in .sh OR .ps1 (no dead keys)"
   platforms: [sh, ps1]
   exceptions:
-    # CMD (Downloading_from_YouTube_v15.cmd) — интерактивный CLI, config.ini НЕ читает.
+    # CMD (Downloading_from_YouTube_v16.cmd) — интерактивный CLI, config.ini НЕ читает.
     cmd: "interactive-only CLI; does not read config.ini (sanctioned)"
     # Batch-режим (channels.txt) — только .sh; эти ключи в .ps1/.cmd не читаются.
     sh_only:

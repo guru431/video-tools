@@ -21,7 +21,7 @@ suite "ffmpeg: каждый ключ config.ini читается в run.sh/run.c
 FF="$PROJECT_DIR/ffmpeg"
 while IFS= read -r key; do
     [ -z "$key" ] && continue
-    for plat in FFmpeg_Converter_run_v15.sh FFmpeg_Converter_run_v15.cmd FFmpeg_Converter_run_v15.ps1; do
+    for plat in FFmpeg_Converter_run_v16.sh FFmpeg_Converter_run_v16.cmd FFmpeg_Converter_run_v16.ps1; do
         if grep -qw -- "$key" "$FF/$plat"; then pass "ffmpeg '$key' в $plat"
         else fail "ffmpeg '$key' в $plat" "читается" "отсутствует"; fi
     done
@@ -32,7 +32,7 @@ suite "yt-dlp: каждый ключ config.ini читается хотя бы �
 YT="$PROJECT_DIR/yt-dlp"
 while IFS= read -r key; do
     [ -z "$key" ] && continue
-    if grep -qw -- "$key" "$YT/Downloading_from_YouTube_v15.sh" || grep -qw -- "$key" "$YT/Downloading_from_YouTube_v15.ps1"; then
+    if grep -qw -- "$key" "$YT/Downloading_from_YouTube_v16.sh" || grep -qw -- "$key" "$YT/Downloading_from_YouTube_v16.ps1"; then
         pass "yt-dlp '$key' (есть читатель)"
     else
         fail "yt-dlp '$key' (есть читатель)" "читается в .sh или .ps1" "нигде не читается (мёртвый ключ)"

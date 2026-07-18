@@ -266,7 +266,7 @@ if ($env:YTDLP_TEST -eq '1') { return }
 
 # ── Создание формы ────────────────────────────────────────────────────────
 $form = [System.Windows.Forms.Form]::new()
-$form.Text = "Video Downloader (yt-dlp) v15"
+$form.Text = "Video Downloader (yt-dlp) v16"
 $form.Size = [System.Drawing.Size]::new(830, 807)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
@@ -1046,7 +1046,7 @@ $btnStart.Add_Click({
 
             $progressBar.Value = 0
             $lblStatus.Text    = "Загрузка $itemNum/$totalItems  [$platform]"
-            $form.Text         = "Video Downloader (yt-dlp) v15  [$itemNum/$totalItems]"
+            $form.Text         = "Video Downloader (yt-dlp) v16  [$itemNum/$totalItems]"
             Append-Output ""
             Append-Output "═══ [$itemNum/$totalItems] [$platform]  $currentUrl" ([System.Drawing.Color]::Cyan)
 
@@ -1258,7 +1258,7 @@ $btnStart.Add_Click({
                         $pct = [int][math]::Floor([double]$Matches[1])
                         $progressBar.Value = [math]::Min($pct, 100)
                         $lblStatus.Text    = "Загрузка $itemNum/$totalItems  [$platform]  $pct%"
-                        $form.Text         = "Video Downloader (yt-dlp) v15  [$itemNum/$totalItems]  $pct%"
+                        $form.Text         = "Video Downloader (yt-dlp) v16  [$itemNum/$totalItems]  $pct%"
                     } elseif ($line -match '\[download\] Destination:') {
                         Append-Output $line ([System.Drawing.Color]::LightGreen)
                     } elseif ($line -match '\[Merger\]|\[info\].*Merging') {
@@ -1525,7 +1525,7 @@ $btnStart.Add_Click({
             if ($failCount -gt 0) { $summary += "  |  Ошибки: $failCount" }
             Append-Output $summary ([System.Drawing.Color]::LightGreen)
             $lblStatus.Text = "Завершено: $successCount/$totalItems"
-            $form.Text      = "Video Downloader (yt-dlp) v15 — Готово!"
+            $form.Text      = "Video Downloader (yt-dlp) v16 — Готово!"
         } else {
             Append-Output "═══ Остановлено  |  Загружено: $successCount" ([System.Drawing.Color]::Yellow)
             $lblStatus.Text = "Остановлено"
@@ -1570,7 +1570,7 @@ $btnClear.Add_Click({
     $richOutput.Clear()
     $progressBar.Value = 0
     $lblStatus.Text    = "Готов к загрузке"
-    $form.Text         = "Video Downloader (yt-dlp) v15"
+    $form.Text         = "Video Downloader (yt-dlp) v16"
 })
 $_fc.Add($btnClear)
 

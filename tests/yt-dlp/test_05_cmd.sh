@@ -38,7 +38,7 @@ run_cmd_file() {
 # таблицы с битыми itag (20/18, 24, 26, 28). После фикса F21/F31 проверяем
 # непосредственно production-исходник, чтобы тест не расходился с кодом.
 PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
-DLP_CMD="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.cmd"
+DLP_CMD="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.cmd"
 CMD_SRC="$(cat "$DLP_CMD")"
 
 # ══════════════════════════════════════════════════════════════
@@ -231,7 +231,7 @@ assert_contains "Bug7: без фикса errorlevel=0 после set → naive_t
 suite "Task 10: CMD yt-dlp фиксы (анализ исходника)"
 # ══════════════════════════════════════════════════════════════
 PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
-DLP_CMD="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.cmd"
+DLP_CMD="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.cmd"
 src="$(cat "$DLP_CMD")"
 
 # URL через delayed expansion (!url!), не %url% — сохраняет ! и & в URL

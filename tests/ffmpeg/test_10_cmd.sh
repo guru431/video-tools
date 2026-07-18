@@ -42,7 +42,7 @@ suite "CMD: :to_flag суброутин (+/- → :+:/:-:)"
 # контракт «пустое значение сохраняет дефолт» не проверялся вовсе.
 # Теперь вырезаем НАСТОЯЩУЮ подпрограмму (как уже сделано для :resolve_hw и
 # :kbps_from_line ниже) и вызываем её через call.
-RUN_CMD_SCRIPT="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v15.cmd"
+RUN_CMD_SCRIPT="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v16.cmd"
 if [ ! -f "$RUN_CMD_SCRIPT" ]; then
     fail "CMD: production run-скрипт на месте" "$RUN_CMD_SCRIPT" "файл не найден"
 fi
@@ -216,7 +216,7 @@ assert_contains "Bug6: encoder not found → use_hw_accel=no"  "hw=no"      "$re
 assert_contains "Bug6: encoder not found → codec unchanged"   "codec=libx264" "$result"
 
 # Сьюит «CMD: config.ini парсинг» удалён: это была 45-строчная inline-переделка
-# парсера из run_v15.cmd (:trim_val/:trim_key/:strip_inline_comment/:assign_var).
+# парсера из run_v16.cmd (:trim_val/:trim_key/:strip_inline_comment/:assign_var).
 # Настоящий парсер уже прогоняется в test_12_cmd_run_parser.sh через штатный хук
 # --print-config, причём строго шире: регистр секций, пустое значение → дефолт,
 # значения с & и #, резолвинг относительных путей. Копия проверяла подмножество

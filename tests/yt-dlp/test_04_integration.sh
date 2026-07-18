@@ -11,7 +11,7 @@ MOCKS_DIR="$TESTS_DIR/mocks"
 
 source "$TESTS_DIR/lib/framework.sh"
 
-YTDLP_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.sh"
+YTDLP_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.sh"
 YTDLP_LOG="/tmp/mock_ytdlp_int_$$.txt"
 OUTPUT_DIR="/tmp/test_ytdlp_out_$$"
 FAKE_URL="https://www.youtube.com/watch?v=dQw4w9WgXcQ"

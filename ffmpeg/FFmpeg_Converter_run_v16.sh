@@ -35,7 +35,7 @@ read_config() {
 	shopt -s nocasematch
 	local in_section=false
 	while IFS= read -r line || [ -n "$line" ]; do
-		# Trim через bash parameter expansion (см. yt-dlp/Downloading_from_YouTube_v15.sh
+		# Trim через bash parameter expansion (см. yt-dlp/Downloading_from_YouTube_v16.sh
 		# — sed-fork на Windows Git Bash слишком медленный из-за cygwin overhead).
 		line="${line#"${line%%[![:space:]]*}"}"
 		line="${line%"${line##*[![:space:]]}"}"

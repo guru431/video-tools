@@ -58,7 +58,7 @@ tests/
 
 Тестирует функции `read_config()` и `to_flag()` из `FFmpeg_Converter_run.sh`.
 
-**Ключевой приём:** тест дот-сорсит настоящий `FFmpeg_Converter_run_v15.sh` (конвейер под
+**Ключевой приём:** тест дот-сорсит настоящий `FFmpeg_Converter_run_v16.sh` (конвейер под
 main-гардом `BASH_SOURCE == $0`), поэтому проверяется production-функция, а не её копия.
 Собственные копии production-функций **запрещены** и ловятся guardrail'ом в
 `tests/common/test_guardrails.sh`: копии тихо расходились с оригиналом и закрепляли
@@ -200,7 +200,7 @@ main-гардом `BASH_SOURCE == $0`), поэтому проверяется pr
 
 ### test_04_integration — Интеграционный
 
-Запускает `Downloading_from_YouTube_v15.sh` с mock yt-dlp через `YTDLP_BIN`.
+Запускает `Downloading_from_YouTube_v16.sh` с mock yt-dlp через `YTDLP_BIN`.
 
 | Suite | Что проверяет |
 |-------|---------------|

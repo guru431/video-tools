@@ -2,9 +2,9 @@
 # Dot-source из ffmpeg/build_exe.ps1 и yt-dlp/build_exe.ps1 — SHA-пин ps2exe и версия
 # определены здесь один раз (иначе при обновлении ps2exe/бампе версии легко забыть один файл).
 
-$script:Ps2ExeSha    = 'FAEA495151AF69D2AE78783D0071186F98DC568D7B7478F639DA0E74ECF01763'  # PS2EXE @ MScholtes/PS2EXE d32d5ce
+$script:Ps2ExeSha    = '45FDF8446FF7DE578B003FD62015B2CDFCE9EC56840249186396A26DCF856311'  # PS2EXE @ MScholtes/PS2EXE d32d5ce + локальный патч (экранирование кавычек в метаданных, 7591fc0)
 $script:Ps2ExeCommit = 'd32d5ce21c458696e860a7533943b1466d925be9'  # закреплённый commit ps2exe (провенанс)
-$script:BuildVersion = '15.0.0.0'
+$script:BuildVersion = '16.0.0.0'
 
 # Проверяет наличие вендоренного ps2exe и совпадение SHA256 (supply-chain).
 function Assert-Ps2Exe {

@@ -52,7 +52,7 @@ WIN_FFMPEG=$(cygpath -w "$TMP_DIR/bin/ffmpeg.exe")
 WIN_SCRIPT=$(cygpath -w "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.cmd")
 
 # ── Обёртка: все переменные окружения, которые ждёт script.cmd ──
-# (список из блока дефолтов FFmpeg_Converter_run_v15.cmd). $1 — доп. set-строки
+# (список из блока дефолтов FFmpeg_Converter_run_v16.cmd). $1 — доп. set-строки
 # для конкретного режима (создаются ПОСЛЕ дефолтов → переопределяют их).
 TMP_CMD="$TMP_DIR/run_smoke.cmd"
 build_and_run() {

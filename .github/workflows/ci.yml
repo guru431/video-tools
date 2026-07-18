@@ -72,7 +72,7 @@ jobs:
         shell: bash
         run: |
           rc=0
-          for exe in ffmpeg/_VideoConverter_v15.exe yt-dlp/_VideoDownloader_v15.exe; do
+          for exe in ffmpeg/_VideoConverter_v16.exe yt-dlp/_VideoDownloader_v16.exe; do
             sc="$exe.sha256"
             if [ ! -f "$exe" ] || [ ! -f "$sc" ]; then echo "MISSING: $exe or $sc"; rc=1; continue; fi
             want=$(awk '{print tolower($1)}' "$sc")

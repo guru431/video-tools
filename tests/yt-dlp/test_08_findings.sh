@@ -13,9 +13,9 @@ TESTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
 source "$TESTS_DIR/lib/framework.sh"
 
-SH_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.sh"
-CMD_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.cmd"
-PS1_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.ps1"
+SH_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.sh"
+CMD_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.cmd"
+PS1_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.ps1"
 MOCK_YTDLP="$TESTS_DIR/mocks/yt-dlp"
 chmod +x "$MOCK_YTDLP" 2>/dev/null
 

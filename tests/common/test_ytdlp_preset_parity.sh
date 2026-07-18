@@ -12,8 +12,8 @@ TESTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
 source "$TESTS_DIR/lib/framework.sh"
 
-YT_SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.sh"
-YT_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.ps1"
+YT_SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.sh"
+YT_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.ps1"
 
 PRESETS="avc1_best avc1_https avc1_m3u8 avc1_https_60fps avc1_m3u8_60fps avc1_https_60fps_hdr old_combo"
 # idx 0..6 ↔ имена качества

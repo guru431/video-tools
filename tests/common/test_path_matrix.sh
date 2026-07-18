@@ -12,7 +12,7 @@ TESTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
 source "$TESTS_DIR/lib/framework.sh"
 
-YT_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.ps1"
+YT_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.ps1"
 
 # ══════════════════════════════════════════════════════════════
 # Часть A — Quote-WinArg (production), широкая матрица.

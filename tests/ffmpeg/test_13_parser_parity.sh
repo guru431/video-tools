@@ -18,8 +18,8 @@ source "$TESTS_DIR/lib/framework.sh"
 # Хуже того, копии закрепляли ложное утверждение: тест уверял, что ffmpeg-парсер не
 # делает подстановку ${VAR} и оставляет её литералом. Оба production-парсера её делают.
 PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
-RUN_SH="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v15.sh"
-RUN_PS1="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v15.ps1"
+RUN_SH="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v16.sh"
+RUN_PS1="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v16.ps1"
 for _f in "$RUN_SH" "$RUN_PS1"; do
     if [ ! -f "$_f" ]; then
         suite "Кросс-парсерный паритет"
@@ -30,7 +30,7 @@ for _f in "$RUN_SH" "$RUN_PS1"; do
 done
 source "$RUN_SH"
 
-# ── PS1-сторона: настоящая Read-Config из run_v15.ps1 ──────────────────────
+# ── PS1-сторона: настоящая Read-Config из run_v16.ps1 ──────────────────────
 HAVE_PS1=true
 PS_CMD="powershell"
 if command -v pwsh &>/dev/null; then
@@ -40,7 +40,7 @@ elif ! command -v powershell &>/dev/null; then
 fi
 RUN_PS1_WIN=$(cygpath -w "$RUN_PS1" 2>/dev/null || echo "$RUN_PS1")
 
-# $env:FFCONV_TEST=1 — гард в run_v15.ps1: дот-сорсим только определения, конвейер
+# $env:FFCONV_TEST=1 — гард в run_v16.ps1: дот-сорсим только определения, конвейер
 # не запускаем (паритет с SH-гардом BASH_SOURCE == $0).
 run_ps1_readconfig() {
     local cfg_win="$1"
@@ -154,7 +154,7 @@ fi
 # CMD: штатный хук --print-config печатает разобранные переменные и выходит.
 if cmd //c "exit 0" &>/dev/null; then
     # Полный windows-путь: cmd //c не наследует cwd bash-субоболочки.
-    RUN_CMD_WIN=$(cygpath -w "$FF_DIR/FFmpeg_Converter_run_v15.cmd" 2>/dev/null || echo "$FF_DIR/FFmpeg_Converter_run_v15.cmd")
+    RUN_CMD_WIN=$(cygpath -w "$FF_DIR/FFmpeg_Converter_run_v16.cmd" 2>/dev/null || echo "$FF_DIR/FFmpeg_Converter_run_v16.cmd")
     cmd_log=$(cmd //c "$RUN_CMD_WIN --print-config" 2>/dev/null | tr -d '\r' | grep '^log_file=' | head -1 | sed 's/^log_file=//')
     case "$cmd_log" in
         /*|[A-Za-z]:*) pass "CMD: log_file абсолютный" ;;

@@ -14,9 +14,9 @@ PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
 source "$TESTS_DIR/lib/framework.sh"
 
 YAML="$TESTS_DIR/config-key-contract.yaml"
-YT_SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.sh"
-YT_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.ps1"
-YT_CMD="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.cmd"
+YT_SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.sh"
+YT_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.ps1"
+YT_CMD="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.cmd"
 YT_EXAMPLE="$PROJECT_DIR/yt-dlp/config.ini.example"
 
 keys_of() { grep -oE '^[[:space:]]*[a-z_]+[[:space:]]*=' "$1" | sed 's/[[:space:]=]//g'; }

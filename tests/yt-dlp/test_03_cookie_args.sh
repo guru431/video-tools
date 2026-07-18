@@ -19,7 +19,7 @@ PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
 
 source "$TESTS_DIR/lib/framework.sh"
 
-YT_SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v15.sh"
+YT_SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.sh"
 if [ ! -f "$YT_SH" ]; then
     suite "Cookies: build_cookie_args"
     fail "production-скрипт на месте" "$YT_SH" "файл не найден — тест проверял бы копию, а не production"

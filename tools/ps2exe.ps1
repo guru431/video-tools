@@ -343,6 +343,18 @@ function Invoke-ps2exe
 	$description = $description -replace "\\", "\\"
 	$company = $company -replace "\\", "\\"
 
+	# Local hardening (not upstream): the values above land inside C# string literals
+	# ([assembly:AssemblyTitle("$title")]). A double quote would close the literal and
+	# inject code into the generated assembly. Current callers pass hardcoded strings,
+	# so this is defence-in-depth for future parameterization. Must run AFTER the
+	# backslash doubling above, or the inserted \" would be re-escaped into \\".
+	$title = $title -replace '"', '\"'
+	$product = $product -replace '"', '\"'
+	$copyright = $copyright -replace '"', '\"'
+	$trademark = $trademark -replace '"', '\"'
+	$description = $description -replace '"', '\"'
+	$company = $company -replace '"', '\"'
+
 	if (![STRING]::IsNullOrEmpty($version))
 	{ # check for correct version number information
 		if ($version -notmatch "(^\d+\.\d+\.\d+\.\d+$)|(^\d+\.\d+\.\d+$)|(^\d+\.\d+$)|(^\d+$)")

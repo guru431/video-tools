@@ -62,8 +62,11 @@ run_script() {
         export MOCK_FFMPEG_LOG="$FFMPEG_LOG"
         default_vars
         for ov in "$@"; do eval "$ov"; done
-        _dump() { echo "done" > "$dump"; }
-        trap _dump EXIT
+        _dump() { echo "done" > "$1"; }
+        # Путь дампа передаём АРГУМЕНТОМ через строку trap (раскрывается здесь и сейчас),
+        # а не читаем $dump внутри хендлера: bash 3.2 (системный на macOS) сбрасывает
+        # local-контекст вызывающей функции ДО запуска EXIT-трапа, и $dump там пуст.
+        trap "_dump '$dump'" EXIT
         source "$SCRIPT" > /dev/null 2>&1
     ) < /dev/null
     rm -f "$dump"

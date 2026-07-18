@@ -296,6 +296,28 @@ touch "$IN/spd.mp4"
 
 # Каждый прогон под timeout: суть бага — бесконечный цикл, поэтому «не завис» это
 # часть проверки. Без фикса run_capture здесь не возвращался бы никогда.
+# GNU `timeout` есть не везде (на macOS его нет вовсе, brew ставит как `gtimeout`).
+# Просто выкинуть его нельзя — тест ловит именно зависание. Поэтому фолбэк: сторож
+# в фоне + kill -9, а код завершения приводим к 124, как у GNU timeout.
+if command -v timeout >/dev/null 2>&1; then
+    _timeout() { timeout "$@"; }
+elif command -v gtimeout >/dev/null 2>&1; then
+    _timeout() { gtimeout "$@"; }
+else
+    _timeout() {
+        local secs="$1"; shift
+        "$@" &
+        local pid=$!
+        ( sleep "$secs"; kill -9 "$pid" 2>/dev/null ) &
+        local watchdog=$!
+        wait "$pid"; local rc=$?
+        kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null
+        # >=128 = убит сигналом; для этого теста это и есть «завис и был снят».
+        [ "$rc" -ge 128 ] && rc=124
+        return "$rc"
+    }
+fi
+
 run_speed() {
     local val="$1"
     OUT_TEXT=$(
@@ -303,7 +325,7 @@ run_speed() {
         # set -a: скрипт запускается подпроцессом (иначе timeout не поймает зависание),
         # поэтому конфиг должен уехать в окружение.
         set -a; default_vars; playback_speed=":+:$val"; set +a
-        timeout 15 bash "$SCRIPT" 2>&1
+        _timeout 15 bash "$SCRIPT" 2>&1
     ) < /dev/null
     RC=$?
 }

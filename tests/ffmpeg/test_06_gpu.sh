@@ -47,9 +47,12 @@ run_script() {
                 echo "gpu_args=${gpu_args:-}"
                 echo "crf_args=${crf_args:-}"
                 echo "hw_decode_args=${hw_decode_args:-}"
-            } > "$dump"
+            } > "$1"
         }
-        trap _dump EXIT
+        # Путь дампа передаём АРГУМЕНТОМ через строку trap (раскрывается здесь и сейчас),
+        # а не читаем $dump внутри хендлера: bash 3.2 (системный на macOS) сбрасывает
+        # local-контекст вызывающей функции ДО запуска EXIT-трапа, и $dump там пуст.
+        trap "_dump '$dump'" EXIT
         source "$SCRIPT" > /dev/null 2>&1
     ) < /dev/null
     cat "$dump"; rm -f "$dump"

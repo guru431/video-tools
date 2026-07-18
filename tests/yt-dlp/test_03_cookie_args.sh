@@ -66,7 +66,10 @@ rm -f "$TMPFILE"
 
 # Путь с пробелами — то, ради чего массив и заведён. Строковая копия отдавала
 # `--cookies "путь с пробелами"`, и кавычки уезжали в yt-dlp литералами.
-SPACE_DIR=$(mktemp -d /tmp/test cookies_XXXXXX 2>/dev/null || mktemp -d "/tmp/test cookies_XXXXXX")
+# Шаблон обязан быть ОДНИМ закавыченным аргументом: BSD mktemp (macOS) принимает
+# несколько шаблонов сразу и на `mktemp -d /tmp/test cookies_XXXXXX` создаёт две
+# папки, отдавая их двумя строками — путь склеивался через перевод строки.
+SPACE_DIR=$(mktemp -d "/tmp/test cookies_XXXXXX")
 SPACE_FILE="$SPACE_DIR/my cookies.txt"
 echo "# Netscape HTTP Cookie File" > "$SPACE_FILE"
 space_res="$(cookie_call "file" "$SPACE_FILE" "")"

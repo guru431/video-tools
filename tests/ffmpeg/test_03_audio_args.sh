@@ -51,9 +51,12 @@ run_script() {
                 echo "af_chain=${af_chain:-}"
                 echo "video_settings=${video_settings:-}"
                 echo "format_files_out=${format_files_out:-}"
-            } > "$dump"
+            } > "$1"
         }
-        trap _dump EXIT
+        # Путь дампа передаём АРГУМЕНТОМ через строку trap (раскрывается здесь и сейчас),
+        # а не читаем $dump внутри хендлера: bash 3.2 (системный на macOS) сбрасывает
+        # local-контекст вызывающей функции ДО запуска EXIT-трапа, и $dump там пуст.
+        trap "_dump '$dump'" EXIT
 
         source "$SCRIPT" > /dev/null 2>&1
     ) < /dev/null

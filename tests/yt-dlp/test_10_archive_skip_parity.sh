@@ -96,7 +96,8 @@ assert_contains "batch передаёт --print-to-file after_move:filepath" \
     "--print-to-file after_move:filepath" "$(cat "$WORK/mock.log")"
 
 # Временный манифест не должен оставаться после прогона.
-_leftover=$(find /tmp -maxdepth 1 -name 'ytdlp_batch_manifest_*' 2>/dev/null | wc -l)
+# tr — BSD wc (macOS) выравнивает счётчик пробелами слева, сравнение строк ломается.
+_leftover=$(find /tmp -maxdepth 1 -name 'ytdlp_batch_manifest_*' 2>/dev/null | wc -l | tr -d '[:space:]')
 assert_eq "временный манифест batch удалён" "0" "$_leftover"
 
 # ══════════════════════════════════════════════════════════════

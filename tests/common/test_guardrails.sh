@@ -251,11 +251,26 @@ stale_refs=""
 for _t in "$TESTS_DIR"/ffmpeg/test_*.sh "$TESTS_DIR"/yt-dlp/test_*.sh "$TESTS_DIR"/common/test_*.sh; do
     [ -f "$_t" ] || continue
     case "$(basename "$_t")" in test_guardrails.sh) continue ;; esac
-    if grep -qE '_v1[0-4]\.(sh|ps1|cmd)' "$_t" 2>/dev/null; then
+    if grep -qE '_v1[0-5]\.(sh|ps1|cmd)' "$_t" 2>/dev/null; then
         stale_refs="$stale_refs $(basename "$_t")"
     fi
 done
-assert_empty "нет ссылок на устаревшие версии скриптов (v11..v14)" "$stale_refs"
+assert_empty "нет ссылок на устаревшие версии скриптов (v11..v15)" "$stale_refs"
+
+# Подстановка вплотную к не-ASCII символу («$var»). В локали, где старший байт считается
+# буквой (macOS + bash 3.2), он утягивается в имя переменной — та пуста, значение из
+# сообщения пропадает. Ловится только на macOS-джобе, поэтому нужен статический гард.
+_bare_subst=""
+# $'...' — чтобы табуляция попала в класс литералом (её после $var исключаем: это
+# разделитель полей, а не текст). LC_ALL=C: класс должен работать по байтам.
+_bare_re=$'\\$[A-Za-z_][A-Za-z0-9_]*[^\t -~]'
+for _s in "$PROJECT_DIR"/ffmpeg/*.sh "$PROJECT_DIR"/yt-dlp/*.sh; do
+    [ -f "$_s" ] || continue
+    if LC_ALL=C grep -qE "$_bare_re" "$_s" 2>/dev/null; then
+        _bare_subst="$_bare_subst $(basename "$_s")"
+    fi
+done
+assert_empty "нет \$var вплотную к не-ASCII символу (нужны скобки: \${var})" "$_bare_subst"
 
 # ══════════════════════════════════════════════════════════════
 suite "Допустимые значения config.ini задокументированы"
@@ -314,10 +329,10 @@ readme_txt="$(cat "$README_F")"
 # Устаревшие версии скриптов в документации: ссылка на v11 «объясняла» файл,
 # которого нет начиная с v12.
 for _d in "$README_F" "$TESTING_F"; do
-    if grep -qE '_v1[0-4]\.(sh|ps1|cmd)' "$_d" 2>/dev/null; then
-        fail "$(basename "$_d"): нет ссылок на версии v11..v14" "нет" "$(grep -oE '[A-Za-z_]+_v1[0-4]\.(sh|ps1|cmd)' "$_d" | head -1)"
+    if grep -qE '_v1[0-5]\.(sh|ps1|cmd)' "$_d" 2>/dev/null; then
+        fail "$(basename "$_d"): нет ссылок на версии v11..v15" "нет" "$(grep -oE '[A-Za-z_]+_v1[0-5]\.(sh|ps1|cmd)' "$_d" | head -1)"
     else
-        pass "$(basename "$_d"): нет ссылок на версии v11..v14"
+        pass "$(basename "$_d"): нет ссылок на версии v11..v15"
     fi
 done
 

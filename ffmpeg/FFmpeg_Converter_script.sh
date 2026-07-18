@@ -1011,7 +1011,10 @@ _active_modes=""
 _active_modes="${_active_modes# }"
 if [ "$(printf '%s' "$_active_modes" | wc -w)" -gt 1 ]; then
 	_mode_winner="${_active_modes%% *}"
-	log_msg "WARN" "Включено несколько взаимоисключающих режимов ($_active_modes). Активен «$_mode_winner» (приоритет merge>extract>frame>copy>audio), остальные проигнорированы."
+	# Здесь и в F-collision-map подстановка обязана быть в скобках: следом идёт «»», и в
+	# локали, где старший байт считается буквой (macOS + bash 3.2), он утягивается в имя
+	# переменной — та становится неопределённой, и значение из сообщения пропадает.
+	log_msg "WARN" "Включено несколько взаимоисключающих режимов ($_active_modes). Активен «${_mode_winner}» (приоритет merge>extract>frame>copy>audio), остальные проигнорированы."
 fi
 
 # F-collision-map. Два РАЗНЫХ входа могут претендовать на ОДИН выход: при
@@ -1053,7 +1056,7 @@ if [ "$merge_files" != "yes" ] && [ "$extract_audio_copy" != "yes" ] && [ "$crea
 	if [ -s "$collisions_file" ]; then
 		while IFS= read -r _col_key; do
 			_col_ins=$(LC_ALL=C awk -F'\t' -v k="$_col_key" '$1 == k {print "    " $2}' "$_cmap")
-			log_msg "FAIL" "Конфликт выходов: на «$_col_key» претендуют несколько входов — все пропущены (включите save_old_extension=yes либо разнесите файлы):"
+			log_msg "FAIL" "Конфликт выходов: на «${_col_key}» претендуют несколько входов — все пропущены (включите save_old_extension=yes либо разнесите файлы):"
 			printf '%s\n' "$_col_ins"
 		done < "$collisions_file"
 	fi

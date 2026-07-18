@@ -657,6 +657,48 @@ if log_has "own_output"; then fail "выход внутри dest не перек
 if log_has "real_src"; then pass "нормальный источник обработан"; else fail "нормальный источник обработан" "ffmpeg на real_src" "пропущен"; fi
 rm -rf "$IN/nested"; rm -f "$IN/real_src.mp4"
 
+# ══════════════════════════════════════════════════════════════
+suite "F-collision-map: два входа на один выход → вся группа FAIL, а не тихое затирание"
+# ══════════════════════════════════════════════════════════════
+# save_old_extension=no: movie.avi и movie.mp4 оба дают movie.mp4. Раньше второй молча
+# затирал результат первого — потеря данных без единого сообщения.
+touch "$IN/movie.avi" "$IN/movie.mp4" "$IN/solo.mkv"
+run_capture 'save_old_extension="no"'
+assert_contains "конфликт выходов назван явно" "Конфликт выходов" "$OUT_TEXT"
+assert_contains "оба конкурента перечислены (avi)" "movie.avi" "$OUT_TEXT"
+assert_contains "оба конкурента перечислены (mp4)" "movie.mp4" "$OUT_TEXT"
+if log_has "movie.avi"; then fail "конфликтующий вход не кодируется" "нет ffmpeg на movie.avi" "закодирован"; else pass "конфликтующий вход movie.avi не кодируется"; fi
+if log_has "solo.mkv"; then pass "неконфликтующий файл обработан"; else fail "неконфликтующий файл обработан" "ffmpeg на solo.mkv" "пропущен"; fi
+
+# save_old_extension=yes снимает коллизию: movie.avi.mp4 и movie.mp4.mp4 различны.
+run_capture 'save_old_extension="yes"'
+assert_not_contains "save_old_extension=yes → коллизии нет" "Конфликт выходов" "$OUT_TEXT"
+if log_has "movie.avi"; then pass "save_old_extension=yes → оба входа кодируются"; else fail "save_old_extension=yes → оба входа кодируются" "ffmpeg на movie.avi" "пропущен"; fi
+rm -f "$IN/movie.avi" "$IN/movie.mp4" "$IN/solo.mkv"
+
+# Один файл — карта не должна давать ложных срабатываний.
+touch "$IN/only.mp4"
+run_capture 'save_old_extension="no"'
+assert_not_contains "одиночный файл → нет ложной коллизии" "Конфликт выходов" "$OUT_TEXT"
+rm -f "$IN/only.mp4"
+
+# --- Паритет PS1/CMD (source-scan): карта обязана быть во всех трёх платформах ---
+src_ps1_col="$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1")"
+src_cmd_col="$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.cmd")"
+
+assert_contains "PS1: карта коллизий строится"        'collision_outputs'        "$src_ps1_col"
+assert_contains "PS1: группа конфликта помечается"    'Конфликт выходов'         "$src_ps1_col"
+assert_contains "PS1: проверка в Encode-File"         'ContainsKey($canon_out'   "$src_ps1_col"
+# Карта не должна строиться в режимах с другой формулой выхода.
+assert_contains "PS1: merge/extract/frame исключены"  '$merge_files -ne "yes" -and $extract_audio_copy -ne "yes" -and $create_frame -ne "yes"' "$src_ps1_col"
+
+assert_contains "CMD: карта коллизий строится"        '_col_file'                "$src_cmd_col"
+assert_contains "CMD: группа конфликта помечается"    'Конфликт выходов'         "$src_cmd_col"
+assert_contains "CMD: проверка через findstr /x"      'findstr /i /x /c:"!_canon_out!"' "$src_cmd_col"
+assert_contains "CMD: temp-файл карты удаляется"      'if defined _col_file del' "$src_cmd_col"
+# Отсутствие PowerShell не должно молча выключать защиту.
+assert_contains "CMD: нет PowerShell → явный WARN"    'Не удалось построить карту конфликтов' "$src_cmd_col"
+
 # ── Cleanup ───────────────────────────────────────────────────
 rm -rf "$WORK"
 

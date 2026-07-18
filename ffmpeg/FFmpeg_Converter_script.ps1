@@ -487,6 +487,39 @@ function Write-GUIProgress {
 }
 
 # --- A5. Функция кодирования одного файла (аргументы через массив, не Split) ---
+# F-collision-map. Два РАЗНЫХ входа могут претендовать на ОДИН выход: при
+# save_old_extension=no имена movie.avi и movie.mp4 оба дают movie.mp4. Раньше это
+# обнаруживалось только по факту — второй файл молча затирал результат первого, и
+# пользователь терял данные, не увидев ни одного сообщения. Считаем карту выходов ДО
+# кодирования и помечаем всю конфликтующую группу как FAIL (тот же контракт, что и у
+# F12 «выход == вход»: файл не обрабатывается, ошибка видна в сводке).
+#
+# Блок стоит ПОСЛЕ определений Get-CanonPath/Log-Msg: скрипт исполняется сверху вниз,
+# выше эти функции ещё не существуют.
+#
+# Режимы merge (один выход), extract (расширение известно только после probe каждого
+# файла) и frame (выход — каталог) сюда не попадают: там формула выхода другая.
+$collision_outputs = @{}
+if ($merge_files -ne "yes" -and $extract_audio_copy -ne "yes" -and $create_frame -ne "yes") {
+	$_cmap = @{}
+	foreach ($_f in $format_files_in_list) {
+		# Формула обязана совпадать с Encode-File, иначе карта врёт.
+		$_dir = "$($_f.DirectoryName)\" -replace [regex]::Escape($folder_sources), ''
+		$_name = if ($save_old_extension -eq "yes") { $_f.Name } else { $_f.BaseName }
+		$_fmt = if ($copy_codecs -eq "yes") { $_f.Extension.TrimStart('.') } else { $format_files_out }
+		$_out = (Get-CanonPath "$folder_destination$_dir$_name.$_fmt").ToLowerInvariant()
+		if (-not $_cmap.ContainsKey($_out)) { $_cmap[$_out] = @() }
+		$_cmap[$_out] += $_f.FullName
+	}
+	foreach ($_k in $_cmap.Keys) {
+		if ($_cmap[$_k].Count -gt 1) {
+			$collision_outputs[$_k] = $true
+			Log-Msg "FAIL" "Конфликт выходов: на «$_k» претендуют несколько входов — все пропущены (включите save_old_extension=yes либо разнесите файлы):"
+			foreach ($_in in $_cmap[$_k]) { Write-Host "    $_in" }
+		}
+	}
+}
+
 function Encode-File {
 	param([System.IO.FileInfo]$file)
 
@@ -605,8 +638,18 @@ function Encode-File {
 	# ниже готовый выход при провале валидации удаляется как «битый», а при in==out
 	# этим «битым файлом» оказался бы сам оригинал — ещё до кодирования.
 	# Разделения на части (part.N) коллизию снимают, поэтому сверяем базовое имя.
-	if ((Get-CanonPath "$out_base.$current_format_out") -ieq (Get-CanonPath $full_path)) {
+	$canon_out = Get-CanonPath "$out_base.$current_format_out"
+	if ($canon_out -ieq (Get-CanonPath $full_path)) {
 		Log-Msg "FAIL" "$($file.Name): выход совпадает с входом — файл пропущен (задайте другой destination, префикс или формат)"
+		$script:countFail++
+		Write-GUIProgress -CurrentFile $file.Name
+		return
+	}
+
+	# F-collision-map. Выход этого файла оспаривается другим входом (карта построена
+	# до кодирования). Обрабатывать нельзя: кто-то из группы затрёт чужой результат.
+	if ($collision_outputs.ContainsKey($canon_out.ToLowerInvariant())) {
+		Log-Msg "FAIL" "$($file.Name): конфликт выходов — файл пропущен"
 		$script:countFail++
 		Write-GUIProgress -CurrentFile $file.Name
 		return

@@ -380,6 +380,7 @@ _current_ffmpeg_pid=""
 _cleanup_on_int() {
 	[ -n "$_current_ffmpeg_pid" ] && kill "$_current_ffmpeg_pid" 2>/dev/null
 	[ -n "$results_dir" ] && rm -rf "$results_dir"
+	[ -n "${collisions_file:-}" ] && rm -f "$collisions_file"
 	exit 130
 }
 trap _cleanup_on_int INT TERM
@@ -597,8 +598,18 @@ encode_file() {
 	# ниже готовый выход при провале ffprobe-валидации удаляется как «битый», а при
 	# in==out этим «битым файлом» оказался бы сам оригинал — ещё до кодирования.
 	# Разделения на части (pref) коллизию снимают, поэтому сверяем базовое имя.
-	if [ "$(canon_path "${folder_destination}${file_path}${file_name}.${current_format_out}")" = "$(canon_path "$full_path")" ]; then
+	local canon_out="$(canon_path "${folder_destination}${file_path}${file_name}.${current_format_out}")"
+	if [ "$canon_out" = "$(canon_path "$full_path")" ]; then
 		log_msg "FAIL" "$(basename "$full_path"): выход совпадает с входом — файл пропущен (задайте другой destination, префикс или формат)"
+		echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+		return
+	fi
+
+	# F-collision-map. Выход этого файла оспаривается другим входом (карта построена
+	# до кодирования). Обрабатывать нельзя: кто-то из группы затрёт чужой результат.
+	if [ -n "${collisions_file:-}" ] && [ -s "${collisions_file:-/dev/null}" ] \
+		&& LC_ALL=C grep -qxF -- "$canon_out" "$collisions_file"; then
+		log_msg "FAIL" "$(basename "$full_path"): конфликт выходов — файл пропущен"
 		echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
 		return
 	fi
@@ -1003,6 +1014,52 @@ if [ "$(printf '%s' "$_active_modes" | wc -w)" -gt 1 ]; then
 	log_msg "WARN" "Включено несколько взаимоисключающих режимов ($_active_modes). Активен «$_mode_winner» (приоритет merge>extract>frame>copy>audio), остальные проигнорированы."
 fi
 
+# F-collision-map. Два РАЗНЫХ входа могут претендовать на ОДИН выход: при
+# save_old_extension=no имена movie.avi и movie.mp4 оба дают movie.mp4. Раньше это
+# обнаруживалось только по факту — второй файл молча затирал результат первого, и
+# пользователь терял данные, не увидев ни одного сообщения. Считаем карту выходов ДО
+# кодирования и помечаем всю конфликтующую группу как FAIL (тот же контракт, что и у
+# F12 «выход == вход»: файл не обрабатывается, ошибка видна в сводке).
+#
+# Режимы merge (один выход), extract (расширение известно только после ffprobe каждого
+# файла) и frame (выход — каталог) сюда не попадают: там формула выхода другая.
+collisions_file=""
+if [ "$merge_files" != "yes" ] && [ "$extract_audio_copy" != "yes" ] && [ "$create_frame" != "yes" ]; then
+	_cmap=$(mktemp "${TMPDIR:-/tmp}/ffconv_map.XXXXXXXX")
+	collisions_file=$(mktemp "${TMPDIR:-/tmp}/ffconv_col.XXXXXXXX")
+	while IFS= read -r -d '' _pf_path; do
+		# dest строго внутри source — собственные выходы в карту не берём (их и так пропустят).
+		if [ "$dest_inside_source" = "yes" ]; then
+			case "$(canon_path "$_pf_path")" in "$canon_destination"/*) continue ;; esac
+		fi
+		# Формула обязана совпадать с encode_file, иначе карта врёт.
+		_pf_dir="$(dirname "$_pf_path")/"
+		_pf_dir="${_pf_dir:${#folder_sources}}"
+		_pf_name="$(basename "$_pf_path" | sed 's/\.[^.]*$//')"
+		[ "$save_old_extension" = "yes" ] && _pf_name="$(basename "$_pf_path")"
+		_pf_fmt="$format_files_out"
+		[ "$copy_codecs" = "yes" ] && _pf_fmt="${_pf_path##*.}"
+		_pf_out="$(canon_path "${folder_destination}${_pf_dir}${_pf_name}.${_pf_fmt}")"
+		# TAB-разделитель: в путях он практически не встречается, а перевод строки
+		# ломал бы группировку — такие имена отсеиваем явно.
+		case "$_pf_out$_pf_path" in
+			*"$(printf '\t')"*) log_msg "WARN" "Табуляция в имени — файл исключён из карты коллизий: $_pf_path"; continue ;;
+		esac
+		printf '%s\t%s\n' "$_pf_out" "$_pf_path" >> "$_cmap"
+	done < <(find "$folder_sources" \( "${format_find_pred[@]}" \) -print0)
+
+	# Ключи, встретившиеся больше одного раза, — и есть коллизии.
+	LC_ALL=C sort "$_cmap" | LC_ALL=C awk -F'\t' '{c[$1]++} END {for (k in c) if (c[k] > 1) print k}' > "$collisions_file"
+	if [ -s "$collisions_file" ]; then
+		while IFS= read -r _col_key; do
+			_col_ins=$(LC_ALL=C awk -F'\t' -v k="$_col_key" '$1 == k {print "    " $2}' "$_cmap")
+			log_msg "FAIL" "Конфликт выходов: на «$_col_key» претендуют несколько входов — все пропущены (включите save_old_extension=yes либо разнесите файлы):"
+			printf '%s\n' "$_col_ins"
+		done < "$collisions_file"
+	fi
+	rm -f "$_cmap"
+fi
+
 # --- Основная логика ---
 if [ "$merge_files" = "yes" ]; then
 	# fname сбрасывается явно: переменная не локальна (merge — top-level, не функция),
@@ -1074,7 +1131,7 @@ else
 		export silence_threshold silence_duration dry_run enable_log log_file
 		export overwrite_existing sub_meta_codec settings_sig
 		export keep_aspect_ratio_status keep_aspect_ratio_value playback_speed_status playback_speed_value
-		export results_dir
+		export results_dir collisions_file
 		find "$folder_sources" \( "${format_find_pred[@]}" \) -print0 | xargs -0 -P "$parallel_count" -I {} bash -c 'encode_file "$@"' _ {}
 	else
 		find "$folder_sources" \( "${format_find_pred[@]}" \) -print0 | while IFS= read -r -d '' full_path; do
@@ -1101,6 +1158,7 @@ for f in "$results_dir"/r_*; do
 	esac
 done
 rm -rf "$results_dir"
+[ -n "$collisions_file" ] && rm -f "$collisions_file"
 
 end_time_global=$(date +%s)
 elapsed_global=$((end_time_global - start_time_global))

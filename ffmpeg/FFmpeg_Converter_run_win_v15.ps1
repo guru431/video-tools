@@ -1293,6 +1293,62 @@ $buttonRun.Add_Click({
         return
     }
 
+    # ---- F-modes (GUI). Взаимоисключающие режимы — сказать ДО запуска ----
+    # Скрипт и так выберет эффективный режим по приоритету и напишет WARN в лог, но
+    # пользователь GUI этот лог видит уже после старта. Здесь он узнаёт заранее и может
+    # отменить, а не обнаружить постфактум, что половина галок молча проигнорирована.
+    $_modes = @()
+    if ($checkMergeFiles.Checked)       { $_modes += "объединение файлов" }
+    if ($checkExtractAudioCopy.Checked) { $_modes += "извлечение аудио без перекодирования" }
+    if ($checkCreateFrames.Checked)     { $_modes += "извлечение кадров" }
+    if ($checkCopyCodecs.Checked)       { $_modes += "копирование кодеков" }
+    if ($checkSaveAudio.Checked)        { $_modes += "только аудио" }
+    if ($_modes.Count -gt 1) {
+        # Порядок $_modes уже соответствует приоритету merge>extract>frame>copy>audio.
+        $_msg = "Включено несколько взаимоисключающих режимов:`n`n  - " + ($_modes -join "`n  - ") +
+                "`n`nБудет применён только «$($_modes[0])», остальные проигнорированы.`n`nПродолжить?"
+        $_ans = [System.Windows.Forms.MessageBox]::Show($_msg, "Конфликт режимов", "YesNo", "Warning")
+        if ($_ans -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+    }
+
+    # ---- F33 (GUI). Точный энкодер проверяем ДО запуска ----
+    # Рантайм-защита в script.ps1 уже откатывается на CPU, но пользователь GUI узнавал
+    # об этом только из лога после старта — то есть выбрав GPU, тихо получал софтверное
+    # кодирование. Резолвинг кандидата обязан повторять логику script.ps1.
+    if ($hwIndex -gt 0) {
+        $_hwSuffix = if ($hwIndex -eq 1) { "_nvenc" } else { "_qsv" }
+        $_hwLabel  = if ($hwIndex -eq 1) { "NVENC" }  else { "QSV" }
+        $_swCodec  = $comboVideoCodec.Text
+        $_cand = switch -Regex ($_swCodec) {
+            '^libx264$'   { "h264$_hwSuffix"; break }
+            '^libx265$'   { "hevc$_hwSuffix"; break }
+            '^libsvtav1$' { "av1$_hwSuffix";  break }
+            ([regex]::Escape($_hwSuffix) + '$') { $_swCodec; break }
+            default       { "" }
+        }
+        $_probeWarn = $null
+        if (-not $_cand) {
+            $_probeWarn = "У кодека $_swCodec нет $_hwLabel-варианта."
+        } else {
+            try {
+                $_encList = & $script:ffmpeg -encoders 2>&1 | Out-String
+                # Якорение по границам столбца — как в script.ps1: подстрочный match
+                # поймал бы av1_nvenc в строке про av1_nvenc_hypothetical.
+                if ($_encList -notmatch "(?m)^\s*[A-Z.]+\s+$([regex]::Escape($_cand))(\s|$)") {
+                    $_probeWarn = "Энкодер $_cand отсутствует в этой сборке ffmpeg."
+                }
+            } catch {
+                $_probeWarn = "Не удалось опросить ffmpeg -encoders: $($_.Exception.Message)"
+            }
+        }
+        if ($_probeWarn) {
+            $_ans = [System.Windows.Forms.MessageBox]::Show(
+                "$_probeWarn`n`nБудет использовано программное (CPU) кодирование — заметно медленнее.`n`nПродолжить?",
+                "Аппаратное ускорение недоступно", "YesNo", "Warning")
+            if ($_ans -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+        }
+    }
+
     # ---- Подготовка прогресса ----
     # progressFile создаётся сразу (worker читает); cancelFile — только путь
     # (Guid: имя уникально без необходимости создавать-и-удалять).

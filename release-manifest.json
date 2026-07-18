@@ -1,21 +1,21 @@
 ﻿{
     "build_version":  "16.0.0.0",
-    "source_commit":  "b711667f2a0f6139df03b202a77dfa5c3b4aeca9",
+    "source_commit":  "85fd2474936a1d1058ffc23b2252106e6c16390e",
     "source_tree_dirty":  false,
     "ps2exe":  {
                    "commit":  "d32d5ce21c458696e860a7533943b1466d925be9",
-                   "sha256":  "FAEA495151AF69D2AE78783D0071186F98DC568D7B7478F639DA0E74ECF01763"
+                   "sha256":  "45FDF8446FF7DE578B003FD62015B2CDFCE9EC56840249186396A26DCF856311"
                },
     "artifacts":  [
                       {
                           "path":  "ffmpeg/_VideoConverter_v16.exe",
                           "source":  "ffmpeg/FFmpeg_Converter_run_win_v16.ps1",
-                          "sha256":  "3567621D182FFE10C3CEC6E8725DF93827CA4935667DAC51D3832416032CA395"
+                          "sha256":  "9580CC854F2327B18090DB8C2A63C02532B103C8A34ED9A6B651DE288AB6EFFA"
                       },
                       {
                           "path":  "yt-dlp/_VideoDownloader_v16.exe",
                           "source":  "yt-dlp/Downloading_from_YouTube_v16.ps1",
-                          "sha256":  "BBA3797EFC50E6BACA6DA47D2FE33DC711BCF47FA69F1F2CD115EF187C31F7F6"
+                          "sha256":  "AF59FD37950AB3E07ABFA471E611CA96C7942BABB955E85EDC572212FCE9E49D"
                       }
                   ]
 }

@@ -20,19 +20,28 @@ ip_re='(^|[^0-9.])(10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|192\.168\.[0-9]{1,3}\.
 # E-mail. Плейсхолдеры документации (example.com/org/net, user:pass@) исключаются ниже.
 email_re='[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
 
-# Файлы-исключения: бинарники, чек-суммы, картинки и намеренные ПРИМЕРЫ значений
-# (.sanitize-patterns.example демонстрирует, что denylist должен ловить, — там 10.10.10.10
-# и 192.168.100.100 стоят специально). Сам этот скрипт — тоже (несёт паттерны).
+# Файлы-исключения: бинарники, чек-суммы, картинки и ЕДИНСТВЕННЫЙ пример, которому
+# приватные значения нужны по определению — .sanitize-patterns.example (там 10.10.10.10
+# и 192.168.100.100 стоят специально как демонстрация формата denylist'а). Остальные
+# *.example (config.ini.example и т.п.) НЕ исключаем: blanket-исключение всего класса
+# example глушило IP/e-mail-скан ровно там, где по правилам допустимы лишь пустые/
+# фиктивные значения — случайная реальная вставка прошла бы CI. Сам этот скрипт — тоже
+# исключение (несёт паттерны).
 is_excluded() {
     case "$1" in
         *.exe|*.sha256|*.png|*.jpg|*.jpeg|*.ico|*.gif|*.pdf) return 0 ;;
-        *.example|*.example.*|.sanitize-patterns.example)    return 0 ;;
+        .sanitize-patterns.example)                          return 0 ;;
         tools/privacy-scan.sh)                               return 0 ;;
     esac
     return 1
 }
 
-for f in $(git ls-files); do
+# NUL-safe перебор tracked-путей. `for f in $(git ls-files)` бил путь по пробелам/табам
+# (word-splitting), поэтому файл с пробелом в имени сканировался по несуществующим
+# фрагментам — то есть не сканировался вовсе. `IFS= read -r` берёт строку целиком.
+# Ввод через heredoc (а не `| while`), чтобы присвоение fail=1 жило в текущей оболочке.
+while IFS= read -r f; do
+    [ -n "$f" ] || continue
     is_excluded "$f" && continue
     [ -f "$f" ] || continue
 
@@ -53,7 +62,9 @@ for f in $(git ls-files); do
         printf '%s\n' "$mail_hits" | sed 's/^/  /'
         fail=1
     fi
-done
+done <<EOF
+$(git ls-files)
+EOF
 
 if [ "$fail" -ne 0 ]; then
     echo ""

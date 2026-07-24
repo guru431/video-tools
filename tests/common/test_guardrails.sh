@@ -340,4 +340,21 @@ done
 # в тест — это прямо запрещено guardrail'ом выше.
 assert_not_contains "TESTING не рекомендует копировать функции в тест" "функции копируются прямо в тест-файл" "$(cat "$TESTING_F")"
 
+# ══════════════════════════════════════════════════════════════
+suite "release helper: явный Git-bash + STRICT_SKIP (не WSL, не partial)"
+# ══════════════════════════════════════════════════════════════
+# Находка: `& bash tests/run_tests.sh` на Windows резолвится в WSL (иное окружение —
+# release-проверка не работает), а без STRICT_SKIP=1 частичный прогон (пропущены
+# CMD/PS1 suite'ы) уходил бы зелёным — слабее Windows CI-гейта.
+CHK="$PROJECT_DIR/tools/check_release.ps1"
+if [ -f "$CHK" ]; then
+    chk="$(cat "$CHK")"
+    assert_not_contains "нет голого '& bash tests/' (резолвится в WSL)" '& bash tests/' "$chk"
+    assert_contains "есть резолвер Git-for-Windows bash" "function Resolve-GitBash" "$chk"
+    assert_contains "тесты запускаются через резолвнутый \$bash" '& $bash tests/run_tests.sh' "$chk"
+    assert_contains "STRICT_SKIP=1 выставляется как в CI" "STRICT_SKIP" "$chk"
+else
+    fail "check_release.ps1 на месте" "$CHK" "не найден"
+fi
+
 summary

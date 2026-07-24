@@ -43,14 +43,32 @@ echo     Stream #0:1: Audio: aac, 48000 Hz, stereo>&2
 
 if "%MOCK_FFMPEG_FAIL%"=="1" exit /b 1
 
-rem Создаём выходной файл: последний аргумент — путь выхода (перед возможным -y).
+rem Создаём выходной файл: путь выхода — последний токен, не равный -y (перед ним ffmpeg
+rem пишет результат). Настоящий ffmpeg при rc=0 НИКОГДА не оставляет отсутствующий/нулевой
+rem файл, а воркер справедливо проверяет публикацию (наличие цели после rename). Поэтому
+rem пишем непустой контент, а не создаём 0-байтовый «успех». Разбор идёт через :find_out —
+rem SHIFT-цикл надёжнее `for %%a in (%ARGS%)`, который глобит токены и терял выход.
 set "OUT="
-for %%a in (%ARGS%) do (
-    set "_tok=%%~a"
-    if not "!_tok!"=="-y" set "OUT=%%~a"
-)
+call :find_out %*
+rem Проверки — на delayed-expansion (enabledelayedexpansion включён выше), БЕЗ пайпа
+rem `echo !OUT! | find`: пайп порождает дочерний cmd без delayed-expansion, там !OUT! не
+rem раскрывается — проверка молча срабатывала «мимо», и выход не создавался. Спецвыходы
+rem (`-`, `null`, `pipe:N`, любой флаг) реальный ffmpeg файлом не делает — их не пишем.
 if defined OUT (
-    echo %OUT% | find ":" >nul
-    if not errorlevel 1 if not "!OUT:~0,1!"=="-" type nul >"!OUT!" 2>nul
+    set "_skip="
+    if "!OUT:~0,1!"=="-" set "_skip=1"
+    if /i "!OUT!"=="null" set "_skip=1"
+    if not "!OUT!"=="!OUT:pipe:=!" set "_skip=1"
+    if not defined _skip >"!OUT!" echo MOCK-FFMPEG-OUTPUT
 )
 exit /b 0
+
+:find_out
+if "%~1"=="" goto :eof
+rem Воркер дописывает `-progress <файл>` ПОСЛЕ выходного пути (script.ps1). Значение
+rem после -progress — не выход: пропускаем оба токена, иначе мок писал бы в progress-файл,
+rem а настоящий выход (out_tmp) не создавался бы (тогда rename в воркере не находил цель).
+if /i "%~1"=="-progress" (shift & shift & goto :find_out)
+if /i not "%~1"=="-y" set "OUT=%~1"
+shift
+goto :find_out

@@ -92,4 +92,41 @@ assert_not_contains "username:password@ (шаблон) не блокируетс
 assert_contains     "username:password@ → коммит создан" "RC=0" "$OUT"
 rm -rf "$R"
 
+# ══════════════════════════════════════════════════════════════
+suite "pre-commit: составное .env.*-имя блокируется"
+# ══════════════════════════════════════════════════════════════
+# .env.production.local — типовое имя с секретами (Next.js/Node). Старый filename-guard
+# (regex с одним alnum-суффиксом) его не ловил; если содержимое не похоже на токен-формат,
+# публичный репо принял бы файл. Содержимое НАРОЧНО не токен-формат — проверяем block 1.
+R=$(new_repo)
+printf 'DB_PASSWORD=plain-not-a-token-format\n' > "$R/.env.production.local"
+OUT=$(try_commit "$R" "add composite env")
+assert_contains     "добавление .env.production.local → BLOCKED" "BLOCKED" "$OUT"
+assert_not_contains ".env.production.local → коммит НЕ создан" "RC=0" "$OUT"
+rm -rf "$R"
+
+# .env.example остаётся разрешённым шаблоном (без секретов).
+R=$(new_repo)
+printf 'DB_PASSWORD=\n' > "$R/.env.example"
+OUT=$(try_commit "$R" "add env example")
+assert_not_contains ".env.example (шаблон) не блокируется" "BLOCKED" "$OUT"
+assert_contains     ".env.example → коммит создан" "RC=0" "$OUT"
+rm -rf "$R"
+
+# ══════════════════════════════════════════════════════════════
+suite "pre-commit: rename tracked-файла в чувствительное имя блокируется"
+# ══════════════════════════════════════════════════════════════
+# Статус R (не A), и чистый rename не даёт '+'-строк — content-скан (block 2) его не видит.
+# Filename-guard обязан ловить НАЗНАЧЕНИЕ rename через --diff-filter=ACR -M. Содержимое
+# нарочно не токен-формат, чтобы проверялся именно filename-guard, а не совпадение по токену.
+R=$(new_repo)
+printf 'DB_PASSWORD=plain-not-a-token-format\n' > "$R/notes.txt"
+git -C "$R" add -A >/dev/null 2>&1
+git -C "$R" commit -q --no-verify -m "seed notes" >/dev/null 2>&1
+git -C "$R" mv notes.txt .env >/dev/null 2>&1
+OUT=$(try_commit "$R" "rename to .env")
+assert_contains     "rename notes.txt → .env → BLOCKED" "BLOCKED" "$OUT"
+assert_not_contains "rename → .env → коммит НЕ создан" "RC=0" "$OUT"
+rm -rf "$R"
+
 summary

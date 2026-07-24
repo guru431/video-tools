@@ -10,11 +10,17 @@ set -eu
 repo_root=$(git rev-parse --show-toplevel)
 fail=0
 
-# 1) Block sensitive filenames being newly added (allow *.example* templates)
-added=$(git diff --cached --name-only --diff-filter=A || true)
+# 1) Block sensitive filenames being newly introduced (allow *.example* templates).
+#    --diff-filter=ACR (not just A): a plain rename of an already-tracked file into a
+#    sensitive name has status R (and a copy — C); with only A both slipped past the
+#    filename guard, and a pure rename has no '+' lines so the content scan below can't
+#    see it either. -M enables rename detection. --name-only prints the destination path.
+#    Env regex \.env(\.[^/]*)?$ matches any .env / .env.* basename (e.g. composite
+#    .env.production.local), not just a single alnum suffix — *.example still exempted.
+added=$(git diff --cached --name-only --diff-filter=ACR -M || true)
 if [ -n "$added" ]; then
   bad=$(printf '%s\n' "$added" \
-    | grep -iE '(^|/)(\.env(\.[A-Za-z0-9]+)?$|.*\.pem$|.*\.key$|.*\.p12$|.*\.pfx$|id_rsa|id_ed25519|id_dsa|vault\.env|\.sanitize-patterns$)' \
+    | grep -iE '(^|/)(\.env(\.[^/]*)?$|.*\.pem$|.*\.key$|.*\.p12$|.*\.pfx$|id_rsa|id_ed25519|id_dsa|vault\.env|\.sanitize-patterns$)' \
     | grep -ivE '\.example(\.|$)' || true)
   if [ -n "$bad" ]; then
     echo "BLOCKED: refusing to commit sensitive file(s):"

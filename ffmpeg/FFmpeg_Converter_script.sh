@@ -346,6 +346,12 @@ settings_sig=$(printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s' \
 	"$video_settings" "$audio_settings" "$vf_chain" "$af_chain" \
 	"$format_files_out" "$sub_meta_codec" "$video_subtitles" "$subtitles_style" \
 	"$start_coding" "$length_coding" "$split_by_silence")
+# При split_by_silence=yes границы частей задаются порогом/длительностью тишины: их смена
+# меняет содержимое выходов, поэтому они обязаны обесценивать manifest. Вне режима split
+# эти настройки на выход не влияют — в подпись их не добавляем (как потоки/overwrite).
+if [ "$split_by_silence" = "yes" ]; then
+	settings_sig="${settings_sig}|sil=${silence_threshold},${silence_duration}"
+fi
 
 # --- Формат входных файлов ---
 # Предикаты find собираем массивом с quoted-паттернами: строка с *.ext без
@@ -529,9 +535,12 @@ encode_file() {
 		# Единый overwrite-контракт: как и обычный режим, extract при overwrite_existing=yes
 		# перезаписывает готовый файл, а не пропускает его молча (раньше пропуск был
 		# безусловным — overwrite_existing=yes для этого режима не работал).
+		# D7. Удаление готового файла — мутация; при dry_run её делать нельзя, иначе режим,
+		# обещающий лишь показать команду, реально уничтожает данные (ffmpeg -y ниже и так
+		# перезапишет выход при настоящем прогоне).
 		if [ -f "$out_audio" ]; then
 			if [ "$overwrite_existing" = "yes" ]; then
-				rm -f "$out_audio"
+				[ "$dry_run" = "yes" ] || rm -f "$out_audio"
 			else
 				echo "skip" > "$(mktemp "$results_dir/r_XXXXXXXX")"
 				return
@@ -957,8 +966,10 @@ encode_file() {
 				rm -f "$out_tmp"
 				any_fail="yes"
 				echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
-			else
-				mv -f "$out_tmp" "$out_file"
+			# F-rename. Публикацию результата подтверждаем: успех mv И наличие файла-цели.
+			# Молчаливый провал rename (цель заблокирована, нет места) иначе выдал бы
+			# отсутствующий/старый результат за успех — с записью manifest поверх него.
+			elif mv -f "$out_tmp" "$out_file" 2>/dev/null && [ -f "$out_file" ]; then
 				log_msg "OK" "$(basename "$full_path") -> $(basename "$out_file") (${elapsed_min}m ${elapsed_sec}s)"
 				local out_sz in_sz
 				out_sz=$(file_size "$out_file")
@@ -970,6 +981,11 @@ encode_file() {
 				fi
 				produced+=("$out_file")
 				echo "ok:${out_sz}:${in_sz}" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+			else
+				log_msg "FAIL" "$(basename "$full_path"): не удалось опубликовать результат (rename)"
+				rm -f "$out_tmp"
+				any_fail="yes"
+				echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
 			fi
 			rm -f "$err_file"
 		fi
@@ -1078,6 +1094,13 @@ if [ "$merge_files" = "yes" ]; then
 	if [ -z "$fname" ]; then
 		log_msg "WARN" "Нет файлов для объединения в $folder_sources"
 	elif [ "$overwrite_existing" = "yes" ] || [ ! -f "${folder_destination}/${fname}" ]; then
+		# F-merge-inplace. Цель объединения = ${folder_destination}/${fname}. Если она
+		# канонически совпадает с одним из входов (dest == source, in-place), мерж затёр бы
+		# этот источник СОБОЙ ЖЕ: оригинал теряется, а следующий прогон снова возьмёт
+		# объединённый файл во вход и задублирует содержимое. Такой мерж невозможен без
+		# потери данных — отклоняем его так же явно, как F12 «выход == вход».
+		canon_merge_target="$(canon_path "${folder_destination}/${fname}")"
+		merge_target_collision="no"
 		concat_list=$(mktemp "${TMPDIR:-/tmp}/ffconv.XXXXXXXX")
 		# -printf — GNU-расширение (нет на macOS/BSD). Портативно: -print0 + read.
 		# Имена с ' экранируем для concat-формата ffmpeg: ' -> '\''
@@ -1086,8 +1109,16 @@ if [ "$merge_files" = "yes" ]; then
 			if [ "$dest_inside_source" = "yes" ]; then
 				case "$(canon_path "$mf")" in "$canon_destination"/*) continue ;; esac
 			fi
+			[ "$(canon_path "$mf")" = "$canon_merge_target" ] && merge_target_collision="yes"
 			printf "file '%s'\n" "${mf//\'/\'\\\'\'}" >> "$concat_list"
 		done < <(find "$folder_sources" \( "${format_find_pred[@]}" \) -print0 | sort_null)
+		if [ "$merge_target_collision" = "yes" ]; then
+			log_msg "FAIL" "Объединение отклонено: результат «${folder_destination}/${fname}» совпадает с одним из входов (in-place merge затёр бы источник). Задайте другой destination."
+			echo "fail" > "$results_dir/r_merge"
+			rm -f "$concat_list"
+			concat_list=""
+		fi
+		if [ -n "$concat_list" ]; then
 		# Мержим в соседний temp, а не сразу поверх цели. Прежний вызов шёл без -y на
 		# существующий файл: ffmpeg спрашивал «File exists. Overwrite? [y/N]» и висел,
 		# ожидая stdin, которого в batch/GUI нет. А упавший мерж оставлял partial под
@@ -1103,9 +1134,12 @@ if [ "$merge_files" = "yes" ]; then
 			merge_rc=$?
 			# rc=0 сам по себе не гарантирует читаемый контейнер — валидируем тем же
 			# `-f null -`, что и обычные выходные файлы, и только потом подменяем цель.
+			# F-rename. Результат mv проверяем: цель может быть заблокирована/недоступна.
+			# Молчаливый провал rename выдал бы отсутствующий результат за успех.
 			if [ "$merge_rc" -eq 0 ] && [ -s "$merge_tmp" ] && \
-			   "$ffmpeg" -nostdin -v error -i "$merge_tmp" -f null - 2>/dev/null; then
-				mv -f "$merge_tmp" "${folder_destination}/${fname}"
+			   "$ffmpeg" -nostdin -v error -i "$merge_tmp" -f null - 2>/dev/null \
+			   && mv -f "$merge_tmp" "${folder_destination}/${fname}" 2>/dev/null \
+			   && [ -f "${folder_destination}/${fname}" ]; then
 				log_msg "OK" "Объединение файлов -> ${folder_destination}/${fname}"
 				echo "ok:0:0" > "$results_dir/r_merge"
 			else
@@ -1114,6 +1148,7 @@ if [ "$merge_files" = "yes" ]; then
 				echo "fail" > "$results_dir/r_merge"
 			fi
 			rm -f "$concat_list"
+			fi
 		fi
 	fi
 else

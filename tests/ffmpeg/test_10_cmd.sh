@@ -418,7 +418,9 @@ assert_not_contains "CMD AMF: нет одиночного -qp mapping"  '_amf" s
 
 # F-modes/#7: конфликт спецрежимов → WARN; extract уважает overwrite_existing.
 assert_contains "CMD: WARN о взаимоисключающих режимах" "взаимоисключающих режимов" "$src_cmd"
-assert_contains "CMD: extract уважает overwrite_existing" 'if exist "!out_audio!" if "%overwrite_existing%"=="yes" del' "$src_cmd"
+# F1: удаление под guard'ом dry_run — extract при overwrite перезаписывает, но dry_run
+# только печатает команду и не трогает существующий выход.
+assert_contains "CMD: extract уважает overwrite_existing" 'if exist "!out_audio!" if "%overwrite_existing%"=="yes" if not "%dry_run%"=="yes" del' "$src_cmd"
 # F-collision (#6): skip файлов внутри каталога назначения
 assert_contains "CMD: dest-inside-source флаг" 'set "dest_inside_source=1"' "$src_cmd"
 

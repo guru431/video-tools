@@ -330,6 +330,12 @@ $settings_sig = @(
 	$format_files_out, $sub_meta_codec, $video_subtitles, $subtitles_style,
 	$start_coding, $length_coding, $split_by_silence
 ) -join '|'
+# При split_by_silence=yes границы частей задаются порогом/длительностью тишины: их смена
+# меняет содержимое выходов, поэтому они обязаны обесценивать manifest. Вне режима split
+# на выход не влияют — в подпись не добавляем (паритет с SH/CMD).
+if ($split_by_silence -eq "yes") {
+	$settings_sig = "$settings_sig|sil=$silence_threshold,$silence_duration"
+}
 
 # --- F8. Предпусковая проверка совместимости контейнера и кодеков ---
 # Несовместимую пару (напр. webm + libx264/aac) отклоняем ДО пакета с понятной причиной.
@@ -581,9 +587,11 @@ function Encode-File {
 		$outAudio = "$folder_destination$file_path$file_name.$ext"
 		# Единый overwrite-контракт: при overwrite_existing=yes перезаписываем готовый файл,
 		# а не пропускаем молча (раньше пропуск был безусловным — overwrite не работал).
+		# D7. Удаление — мутация; при dry_run её делать нельзя, иначе режим, обещающий лишь
+		# показать команду, реально уничтожает данные (ffmpeg -y ниже и так перезапишет).
 		if (Test-Path -LiteralPath $outAudio) {
 			if ($overwrite_existing -eq "yes") {
-				Remove-Item -LiteralPath $outAudio -Force -ErrorAction SilentlyContinue
+				if ($dry_run -ne "yes") { Remove-Item -LiteralPath $outAudio -Force -ErrorAction SilentlyContinue }
 			} else {
 				$script:countSkip++
 				Write-GUIProgress -CurrentFile $file.Name
@@ -1040,16 +1048,32 @@ function Encode-File {
 				$script:countFail++
 				Write-GUIProgress -FilePercent 0 -CurrentFile $file.Name
 			} else {
-				Move-Item -LiteralPath $out_tmp -Destination $out_file -Force
-				Log-Msg "OK" "$($file.Name) -> $(Split-Path $out_file -Leaf) ($elapsedStr)"
-				$script:countOk++
-				$produced += $out_file
-				# F29. Вход — только с первой удавшейся части (см. $inReported выше).
+				# F-rename. Публикацию подтверждаем: Move-Item -ErrorAction Stop + наличие
+				# файла-цели. Без -ErrorAction Stop сбой rename нетерминирующий — результат
+				# засчитался бы как OK, а manifest записался бы поверх отсутствующего файла.
+				$_published = $false
 				try {
-					if (-not $inReported) { $script:totalInBytes += $file.Length; $inReported = $true }
-					$script:totalOutBytes += (Get-Item -LiteralPath $out_file).Length
-				} catch {}
-				Write-GUIProgress -FilePercent 100 -CurrentFile $file.Name
+					Move-Item -LiteralPath $out_tmp -Destination $out_file -Force -ErrorAction Stop
+					if (Test-Path -LiteralPath $out_file -PathType Leaf) { $_published = $true }
+				} catch {
+					Log-Msg "FAIL" "$($file.Name): не удалось опубликовать результат (rename): $_"
+				}
+				if ($_published) {
+					Log-Msg "OK" "$($file.Name) -> $(Split-Path $out_file -Leaf) ($elapsedStr)"
+					$script:countOk++
+					$produced += $out_file
+					# F29. Вход — только с первой удавшейся части (см. $inReported выше).
+					try {
+						if (-not $inReported) { $script:totalInBytes += $file.Length; $inReported = $true }
+						$script:totalOutBytes += (Get-Item -LiteralPath $out_file).Length
+					} catch {}
+					Write-GUIProgress -FilePercent 100 -CurrentFile $file.Name
+				} else {
+					if (Test-Path -LiteralPath $out_tmp) { Remove-Item -LiteralPath $out_tmp -Force -ErrorAction SilentlyContinue }
+					$anyFail = $true
+					$script:countFail++
+					Write-GUIProgress -FilePercent 0 -CurrentFile $file.Name
+				}
 			}
 		}
 		$c++
@@ -1091,8 +1115,18 @@ if ($merge_files -eq "yes") {
 		# ожидая stdin, которого в batch/GUI нет. А упавший мерж оставлял partial под
 		# именем цели, и следующий запуск принимал его за готовый результат.
 		$mergeTarget = "$folder_destination\$fname"
+		# F-merge-inplace. Цель не может совпасть ни с одним входом (dest == source): мерж
+		# затёр бы источник собой, а следующий прогон задублировал бы объединённый файл.
+		$_canonMergeTarget = (Get-CanonPath $mergeTarget)
+		$_mergeTargetIsInput = $false
+		foreach ($_mi in $_mergeSorted) {
+			if ((Get-CanonPath $_mi.FullName) -ieq $_canonMergeTarget) { $_mergeTargetIsInput = $true; break }
+		}
 		$mergeTmp = Get-PartialPath $mergeTarget
-		if ($dry_run -eq "yes") {
+		if ($_mergeTargetIsInput) {
+			Log-Msg "FAIL" "Объединение отклонено: результат «$mergeTarget» совпадает с одним из входов (in-place merge затёр бы источник). Задайте другой destination."
+			$script:countFail++
+		} elseif ($dry_run -eq "yes") {
 			Write-Host "[DRY-RUN] $ffmpeg -hide_banner -nostdin -strict -2 -f concat -safe 0 -i `"$tmpFile`" -c copy -map 0 -y `"$mergeTmp`""
 			Remove-Item $tmpFile -Force
 		} else {
@@ -1108,9 +1142,18 @@ if ($merge_files -eq "yes") {
 				if ($LASTEXITCODE -eq 0) { $mergeOk = $true }
 			}
 			if ($mergeOk) {
-				Move-Item -LiteralPath $mergeTmp -Destination $mergeTarget -Force
-				Log-Msg "OK" "Объединение файлов -> $mergeTarget"
-				$script:countOk++
+				# F-rename. Публикацию подтверждаем: -ErrorAction Stop + наличие цели.
+				try {
+					Move-Item -LiteralPath $mergeTmp -Destination $mergeTarget -Force -ErrorAction Stop
+				} catch { $mergeOk = $false }
+				if ($mergeOk -and (Test-Path -LiteralPath $mergeTarget -PathType Leaf)) {
+					Log-Msg "OK" "Объединение файлов -> $mergeTarget"
+					$script:countOk++
+				} else {
+					Log-Msg "FAIL" "Объединение файлов: не удалось опубликовать результат (rename)"
+					if (Test-Path -LiteralPath $mergeTmp) { Remove-Item -LiteralPath $mergeTmp -Force -ErrorAction SilentlyContinue }
+					$script:countFail++
+				}
 			} else {
 				Log-Msg "FAIL" "Объединение файлов"
 				if (Test-Path -LiteralPath $mergeTmp) { Remove-Item -LiteralPath $mergeTmp -Force -ErrorAction SilentlyContinue }

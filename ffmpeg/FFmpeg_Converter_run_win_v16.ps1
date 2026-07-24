@@ -128,6 +128,11 @@ $_cfg_sub_style    = Read-Config "subtitles_style"    "other" "FontName=Arial,Fo
 $_cfg_dry_run      = Read-Config "dry_run"            "other" "no"
 $_cfg_log          = Read-Config "enable_log"         "other" "no"
 $_cfg_log_file     = Read-Config "log_file"           "other" "ffmpeg_convert.log"
+# F5. Относительный log_file резолвим от папки приложения — тем же правилом, что source/
+# destination выше и не-GUI wrappers (run.ps1 F28). Иначе Add-Content в worker'е пишет
+# относительно $PWD: при запуске EXE через ярлык лог уходит в неожиданный каталог,
+# нарушая контракт относительных путей и паритет с CLI-обёртками.
+if (-not [System.IO.Path]::IsPathRooted($_cfg_log_file)) { $_cfg_log_file = Join-Path $script:_appDir $_cfg_log_file }
 
 # Main Form
 $form = [System.Windows.Forms.Form]::new()

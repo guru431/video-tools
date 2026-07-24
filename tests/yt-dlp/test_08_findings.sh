@@ -125,6 +125,15 @@ touch "\$last" 2>/dev/null
 exit 0
 FFEOF
 chmod +x "$WORK/bin/ffmpeg"
+# mock ffprobe — отвечает на -version (F9: dual_track требует рабочий ffprobe) и на
+# запрос индексов дорожек (одна оригинальная дорожка).
+cat > "$WORK/bin/ffprobe" <<'FPEOF'
+#!/bin/bash
+case "$1" in -version) echo "ffprobe (mock)"; exit 0;; esac
+echo "1"
+exit 0
+FPEOF
+chmod +x "$WORK/bin/ffprobe"
 
 run_translate() {
     local mode="$1"

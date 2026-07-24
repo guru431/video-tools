@@ -19,6 +19,25 @@ $exes = @(
 )
 function Get-Sha256([string]$p) { (Get-FileHash -Algorithm SHA256 $p).Hash }
 
+# Явно находит bash из Git for Windows. Голый `& bash` на Windows с установленным WSL
+# резолвится в System32\bash.exe (WSL) — другое окружение: пути не транслируются, а
+# STRICT_SKIP не отрабатывает как в CI, и release-проверка молча зеленеет с пропущенными
+# CMD/PS1 suite'ами. Ищем msys-bash по расположению git.exe и стандартным путям установки.
+function Resolve-GitBash {
+    $cands = @()
+    $git = Get-Command git -ErrorAction SilentlyContinue
+    if ($git) {
+        $d = Split-Path -Parent $git.Source   # <root>\cmd или <root>\bin
+        $r = Split-Path -Parent $d            # <root>
+        $cands += (Join-Path $r 'bin\bash.exe')
+        $cands += (Join-Path $r 'usr\bin\bash.exe')
+    }
+    $cands += 'C:\Program Files\Git\bin\bash.exe'
+    $cands += 'C:\Program Files (x86)\Git\bin\bash.exe'
+    foreach ($c in $cands) { if ($c -and (Test-Path $c)) { return $c } }
+    return $null
+}
+
 Push-Location $root
 try {
     # Провенанс считаем по состоянию ДО сборки: сборка меняет tracked EXE/манифест, и
@@ -32,7 +51,15 @@ try {
         if ($dirty) { throw "рабочее дерево не чистое ДО сборки — зафиксируйте/уберите правки, иначе провенанс манифеста недостоверен" }
         if (-not $SkipTests) {
             Write-Host "== Тесты =="
-            & bash tests/run_tests.sh
+            $bash = Resolve-GitBash
+            if (-not $bash) {
+                throw "Git-for-Windows bash не найден (голый bash резолвится в WSL — иное окружение, STRICT_SKIP не отработает). Установите Git for Windows."
+            }
+            # STRICT_SKIP=1 — как Windows CI: падаем, если ЦЕЛЫЙ CMD/PS1 suite пропущен
+            # (cmd/powershell недоступны). Без него release-гейт слабее CI: частичный прогон
+            # уходил бы зелёным. run_tests.sh вернёт rc=1 при полностью пропущенном suite'е.
+            $env:STRICT_SKIP = '1'
+            & $bash tests/run_tests.sh
             if ($LASTEXITCODE -ne 0) { throw "тесты провалены (rc=$LASTEXITCODE)" }
         }
         Write-Host "== Сборка EXE =="

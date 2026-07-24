@@ -140,16 +140,27 @@ if (Test-Path $ffprobeLocal) { $ffprobeBin = $ffprobeLocal } else { $ffprobeBin 
 # ── Определение платформы по URL ──────────────────────────────────────────
 function Get-Platform {
     param([string]$Url)
-    # Домен якорим по границе (начало, '/', '.', '@'), иначе notyoutube.com и т.п.
-    # ошибочно матчатся как подстрока.
-    switch -Regex ($Url) {
-        '(^|[./@])(youtube\.com|youtu\.be)([/:?#]|$)' { return 'YouTube' }
-        '(^|[./@])rutube\.ru([/:?#]|$)'               { return 'RuTube' }
-        '(^|[./@])vk\.com([/:?#]|$)'                  { return 'VK Video' }
-        '(^|[./@])twitch\.tv([/:?#]|$)'               { return 'Twitch' }
-        '(^|[./@])vimeo\.com([/:?#]|$)'               { return 'Vimeo' }
-        '(^|[./@])dailymotion\.com([/:?#]|$)'         { return 'Dailymotion' }
-        default                                        { return 'Video' }
+    # F13. Платформу определяем по ХОСТУ, а не по всему URL: иначе youtube.com в пути
+    # (https://evil.tld/path/youtube.com/x) ложно распознавался как YouTube (подстрока).
+    # Host извлекаем через System.Uri; фолбэк — грубый разбор между // и первым /?:#.
+    $urlHost = ''
+    try {
+        $u = [System.Uri]$Url
+        if ($u.IsAbsoluteUri) { $urlHost = $u.Host }
+    } catch { $urlHost = '' }
+    if (-not $urlHost) {
+        if ($Url -match '^[a-zA-Z][a-zA-Z0-9+.-]*://([^/?#:@]+@)?([^/?#:]+)') { $urlHost = $Matches[2] }
+        else { $urlHost = ($Url -split '[/?#:]')[0] }
+    }
+    # Якорь по границе домена ('$' в конце): youtube.com.evil.tld тоже не матчится.
+    switch -Regex ($urlHost) {
+        '(^|\.)(youtube\.com|youtu\.be)$' { return 'YouTube' }
+        '(^|\.)rutube\.ru$'               { return 'RuTube' }
+        '(^|\.)vk\.com$'                  { return 'VK Video' }
+        '(^|\.)twitch\.tv$'               { return 'Twitch' }
+        '(^|\.)vimeo\.com$'               { return 'Vimeo' }
+        '(^|\.)dailymotion\.com$'         { return 'Dailymotion' }
+        default                            { return 'Video' }
     }
 }
 
@@ -1051,8 +1062,10 @@ $btnStart.Add_Click({
             Append-Output "═══ [$itemNum/$totalItems] [$platform]  $currentUrl" ([System.Drawing.Color]::Cyan)
 
             $folder = $textBoxFolder.Text
-            if (-not (Test-Path $folder)) {
-                New-Item -ItemType Directory -Path $folder -Force | Out-Null
+            # F12. -LiteralPath: путь с [ ] ? * иначе трактуется как wildcard —
+            # Test-Path «не находит» существующий каталог, а New-Item целит не туда.
+            if (-not (Test-Path -LiteralPath $folder)) {
+                New-Item -ItemType Directory -LiteralPath $folder -Force | Out-Null
             }
 
             # continue_on_error: true → -i (пропускать ошибки), false → --abort-on-error.
@@ -1108,7 +1121,8 @@ $btnStart.Add_Click({
                     if (-not [string]::IsNullOrWhiteSpace($textBoxCookieFile.Text)) {
                         $cookiePath = $textBoxCookieFile.Text
                         if (-not [System.IO.Path]::IsPathRooted($cookiePath)) { $cookiePath = Join-Path $scriptDir $cookiePath }
-                        if (Test-Path $cookiePath) {
+                        # F12. -LiteralPath: имя cookie-файла с [ ] ? * иначе — wildcard.
+                        if (Test-Path -LiteralPath $cookiePath) {
                             $command += "--cookies", $cookiePath
                         } else {
                             Append-Output "WARN: cookie-файл не найден: $cookiePath" ([System.Drawing.Color]::Yellow)
@@ -1368,6 +1382,16 @@ $btnStart.Add_Click({
                         Append-Output "ffmpeg не найден. Положите ffmpeg.exe рядом со скриптом или установите: https://ffmpeg.org" ([System.Drawing.Color]::Red)
                         $hasDeps = $false
                     }
+                    # F9. dual_track определяет индекс дорожки перевода через ffprobe
+                    # (число оригинальных дорожек). Без него индекс молча стал бы 1 — на
+                    # файле с 2+ дорожками перевод сел бы на неверный индекс/кодек.
+                    if ($transMode -eq 'dual_track') {
+                        $ffprobeOk = (Test-Path -LiteralPath $ffprobeLocal) -or [bool](Get-Command "ffprobe" -ErrorAction SilentlyContinue)
+                        if (-not $ffprobeOk) {
+                            Append-Output "Режим «2 дорожки» требует ffprobe (подсчёт аудиодорожек). Положите ffprobe.exe рядом со скриптом или установите ffmpeg с ffprobe." ([System.Drawing.Color]::Red)
+                            $hasDeps = $false
+                        }
+                    }
 
                     if ($hasDeps) {
                         $tempDir = Join-Path $env:TEMP "yt-dlp-translate-$(Get-Random)"
@@ -1409,11 +1433,13 @@ $btnStart.Add_Click({
                         # убивают vot — иначе зависший перевод держал бы GUI бессрочно.
                         $_votTimeoutMs = 900000
                         $_votSw = [System.Diagnostics.Stopwatch]::StartNew()
+                        $_votAborted = $false   # F8: отмена (Stop) или таймаут — vot не завершился сам
                         while (-not $votProc.HasExited) {
                             [System.Windows.Forms.Application]::DoEvents()
-                            if (-not $global:processRunning) { try { $votProc.Kill() } catch {}; break }
+                            if (-not $global:processRunning) { try { $votProc.Kill() } catch {}; $_votAborted = $true; break }
                             if ($_votSw.ElapsedMilliseconds -gt $_votTimeoutMs) {
                                 try { $votProc.Kill() } catch {}
+                                $_votAborted = $true
                                 Append-Output "AI-перевод: превышен таймаут vot-cli-live — прервано." ([System.Drawing.Color]::Red)
                                 break
                             }
@@ -1421,10 +1447,24 @@ $btnStart.Add_Click({
                         }
                         $votProc.WaitForExit()
                         $null = $outTask.Result; $null = $errTask.Result
+                        # F8. Сохраняем exit code ДО Dispose (после Dispose обращение к
+                        # ExitCode бросает исключение).
+                        $votExit = -1
+                        try { $votExit = $votProc.ExitCode } catch { $votExit = -1 }
                         if ($votProc) { $votProc.Dispose() }
                         $global:translateProcess = $null
 
-                        $transFile = Get-ChildItem -Path $tempDir -Filter "*.mp3" -File | Select-Object -First 1
+                        # F8. Наличие .mp3 больше не «достаточно»: частичный/пустой файл от
+                        # неуспешного, отменённого или убитого по таймауту vot не должен
+                        # уходить в ffmpeg и выдаваться за успех. Требуем чистый выход
+                        # (не прерван, код 0) и непустой файл.
+                        $transFile = $null
+                        if (-not $_votAborted -and $votExit -eq 0) {
+                            $transFile = Get-ChildItem -LiteralPath $tempDir -Filter "*.mp3" -File |
+                                Where-Object { $_.Length -gt 0 } | Select-Object -First 1
+                        } else {
+                            Append-Output "AI-перевод: vot-cli-live не завершился успешно (код $votExit) — перевод пропущен." ([System.Drawing.Color]::Red)
+                        }
 
                         if ($transFile) {
                             # F13. Источник пути — манифест самого yt-dlp, а не «самый свежий
@@ -1479,12 +1519,26 @@ $btnStart.Add_Click({
                                                      "-c:v", "copy", "-c:a", $mergeACodec, "-b:a", "192k", "-c:s", "copy", $outputFile) }
                                 }
                                 & $ffmpegBin @ffArgs 2>&1 | Out-Null
-                                if ($LASTEXITCODE -eq 0 -and (Test-Path $outputFile)) {
-                                    Move-Item -Path $outputFile -Destination $latestVideo.FullName -Force
-                                    Append-Output "Перевод добавлен!" ([System.Drawing.Color]::LightGreen)
-                                    $translateOk = $true
+                                if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $outputFile)) {
+                                    # F4/F12. Rename проверяем и целим по -LiteralPath: имя
+                                    # видео с [ ] ? * (частые в заголовках YouTube) иначе
+                                    # трактуется как wildcard, и «успех» рапортуется без
+                                    # реальной замены оригинала.
+                                    $moved = $false
+                                    try {
+                                        Move-Item -LiteralPath $outputFile -Destination $latestVideo.FullName -Force -ErrorAction Stop
+                                        $moved = $true
+                                    } catch {
+                                        Append-Output "Не удалось заменить оригинал переведённым файлом: $_" ([System.Drawing.Color]::Red)
+                                    }
+                                    if ($moved) {
+                                        Append-Output "Перевод добавлен!" ([System.Drawing.Color]::LightGreen)
+                                        $translateOk = $true
+                                    } else {
+                                        Remove-Item -LiteralPath $outputFile -Force -ErrorAction SilentlyContinue
+                                    }
                                 } else {
-                                    Remove-Item -Path $outputFile -Force -ErrorAction SilentlyContinue
+                                    Remove-Item -LiteralPath $outputFile -Force -ErrorAction SilentlyContinue
                                     Append-Output "Ошибка мержа аудиодорожек — оригинал сохранён" ([System.Drawing.Color]::Red)
                                 }
                             } else {

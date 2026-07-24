@@ -1,6 +1,6 @@
 # Video Tools
 
-ffmpeg/yt-dlp скрипты для загрузки и конвертации видео. Каждый инструмент реализован на 3 платформах (.sh, .cmd, .ps1), включая GUI (WinForms) и сборку PS1 в EXE через ps2exe. 1388 автоматических тестов на чистом Bash (на платформах без CMD/PowerShell часть suite'ов пропускается).
+ffmpeg/yt-dlp скрипты для загрузки и конвертации видео. Каждый инструмент реализован на 3 платформах (.sh, .cmd, .ps1), включая GUI (WinForms) и сборку PS1 в EXE через ps2exe. 1479 автоматических тестов на чистом Bash (на платформах без CMD/PowerShell часть suite'ов пропускается).
 
 ---
 
@@ -30,13 +30,13 @@ video/
 │   ├── vot-cli-live.exe                 # AI-перевод аудио через Яндекс (опционально)
 │   └── _VideoDownloader_v16.exe         # Скомпилированный GUI
 │
-├── tests/                               # Автоматические тесты (1388 шт.)
+├── tests/                               # Автоматические тесты (1479 шт.)
 │   ├── run_tests.sh                     # Точка входа
 │   ├── lib/framework.sh                 # Assert-функции, форматированный вывод
 │   ├── mocks/{ffmpeg,ffprobe,yt-dlp}    # Mock-бинарники
-│   ├── ffmpeg/test_01..17*.sh           # 17 тест-файлов (587 тестов)
-│   ├── yt-dlp/test_01..10*.sh           # 10 тест-файлов (419 тестов)
-│   └── common/test_*.sh                 # 8 файлов (382 теста): кодировки, паритет, guardrail'ы, pre-commit
+│   ├── ffmpeg/test_01..18*.sh           # 18 тест-файлов (617 тестов)
+│   ├── yt-dlp/test_01..11*.sh           # 11 тест-файлов (454 тестов)
+│   └── common/test_*.sh                 # 9 файлов (408 тестов): кодировки, паритет, guardrail'ы, pre-commit, privacy-scan
 │
 └── README.md
 ```
@@ -137,16 +137,16 @@ yt-dlp/_VideoDownloader_v16.exe
 
 ## Тестирование
 
-1388 тестов на чистом Bash, без внешних зависимостей. Mock-бинарники для ffmpeg, ffprobe, yt-dlp. На платформах без CMD/PowerShell соответствующие suite'ы пропускаются (в CI это ошибка на Windows-линии, ожидаемо на Linux).
+1479 тестов на чистом Bash, без внешних зависимостей. Mock-бинарники для ffmpeg, ffprobe, yt-dlp. На платформах без CMD/PowerShell соответствующие suite'ы пропускаются (в CI это ошибка на Windows-линии, ожидаемо на Linux).
 
 ```bash
-bash tests/run_tests.sh           # все тесты (1388)
-bash tests/run_tests.sh ffmpeg    # ffmpeg (587 тестов, 17 файлов)
-bash tests/run_tests.sh yt-dlp    # yt-dlp (419 тестов, 10 файлов)
-bash tests/run_tests.sh common    # кросс-платформенные инварианты (382 теста, 8 файлов)
+bash tests/run_tests.sh           # все тесты (1479)
+bash tests/run_tests.sh ffmpeg    # ffmpeg (617 тестов, 18 файлов)
+bash tests/run_tests.sh yt-dlp    # yt-dlp (454 тестов, 11 файлов)
+bash tests/run_tests.sh common    # кросс-платформенные инварианты (408 тестов, 9 файлов)
 ```
 
-### Тест-модули FFmpeg (17 файлов)
+### Тест-модули FFmpeg (18 файлов)
 
 | Файл | Что тестирует |
 |------|---------------|
@@ -167,8 +167,9 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 | `test_15_findings` | Фиксы аудита: dry-run спецрежимов, маркер кадров, overwrite, коллизии |
 | `test_16_gui_state` | GUI: воркер сообщает честный исход батча (success/failed/cancelled) |
 | `test_17_literal_paths` | PS1: пути с `[ ]` в именах (литеральные, без wildcard-глоббинга) |
+| `test_18_findings_audit` | Фиксы аудита: dry-run+overwrite не удаляет выход, merge in-place отклоняется, проверка финального rename, silence-настройки в signature |
 
-### Тест-модули YT-DLP (10 файлов)
+### Тест-модули YT-DLP (11 файлов)
 
 | Файл | Что тестирует |
 |------|---------------|
@@ -182,8 +183,9 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 | `test_08_findings` | Фиксы аудита yt-dlp |
 | `test_09_speed_profile` | `[network]`: профили скорости/устойчивости, паритет SH↔PS1 |
 | `test_10_archive_skip_parity` | Archive-skip: batch (SH) и GUI (PS1) не выдают пропуск за загрузку |
+| `test_11_findings_f4_f15` | Фиксы аудита F4/F6/F8/F9/F11/F13/F14/F15 (rename, dry-run+translate, vot exit code, ffprobe для dual_track, GUID-манифест, host-детект, схема URL, регистронезависимый config) |
 
-### Тест-модули Common (8 файлов)
+### Тест-модули Common (9 файлов)
 
 | Файл | Что тестирует |
 |------|---------------|
@@ -195,6 +197,7 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 | `test_path_matrix` | Adversarial имена/пути: Quote-WinArg + CMD `!`-детект |
 | `test_ytdlp_preset_parity` | Паритет таблиц форматов yt-dlp SH ↔ PS1 |
 | `test_pre_commit_hook` | pre-commit на реальном temp-репо: блок секрета, разрешение удаления утечки |
+| `test_privacy_scan` | privacy-scan на реальном temp-репо: RFC1918 IP / e-mail, файлы с пробелами, `*.example` |
 
 Подробное описание: [tests/TESTING.md](tests/TESTING.md)
 

@@ -117,6 +117,7 @@ FFMPEG_TESTS=(
     "$TESTS_DIR/ffmpeg/test_15_findings.sh"
     "$TESTS_DIR/ffmpeg/test_16_gui_state.sh"
     "$TESTS_DIR/ffmpeg/test_17_literal_paths.sh"
+    "$TESTS_DIR/ffmpeg/test_18_findings_audit.sh"
 )
 
 YTDLP_TESTS=(
@@ -130,6 +131,7 @@ YTDLP_TESTS=(
     "$TESTS_DIR/yt-dlp/test_08_findings.sh"
     "$TESTS_DIR/yt-dlp/test_09_speed_profile.sh"
     "$TESTS_DIR/yt-dlp/test_10_archive_skip_parity.sh"
+    "$TESTS_DIR/yt-dlp/test_11_findings_f4_f15.sh"
 )
 
 # Кросс-платформенные инварианты (кодировки, паритет ключей config.ini, guardrail'ы)
@@ -140,6 +142,7 @@ COMMON_TESTS=(
     "$TESTS_DIR/common/test_config_contract.sh"
     "$TESTS_DIR/common/test_guardrails.sh"
     "$TESTS_DIR/common/test_pre_commit_hook.sh"
+    "$TESTS_DIR/common/test_privacy_scan.sh"
     "$TESTS_DIR/common/test_path_matrix.sh"
     "$TESTS_DIR/common/test_ytdlp_preset_parity.sh"
 )

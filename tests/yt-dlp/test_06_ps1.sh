@@ -51,7 +51,7 @@ assert_not_contains "нет массового Stop-Process yt-dlp"  'Get-Proces
 null_cnt=$(grep -cF '$global:downloadProcess = $null' "$DLP_PS1")
 assert_eq "downloadProcess обнуляется только в init"  "1"  "$null_cnt"
 assert_contains "guard перед WaitForExit"  'if ($proc) { $proc.WaitForExit(); $exitCode = $proc.ExitCode }'  "$src"
-assert_contains "merge: проверка LASTEXITCODE"  '$LASTEXITCODE -eq 0 -and (Test-Path $outputFile)'  "$src"
+assert_contains "merge: проверка LASTEXITCODE"  '$LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $outputFile)'  "$src"
 assert_contains "vot stderr ReadToEndAsync (нет deadlock)"  "ReadToEndAsync()"  "$src"
 assert_contains "qualityMap audio=0"  '"audio" = 0'  "$src"
 assert_contains "translate исключает audio (qi>=1)"  '$qi -ge 1 -and $qi -le 6'  "$src"
@@ -127,6 +127,9 @@ Write-Output ("plat_tw=" + (Get-Platform 'https://twitch.tv/somestream'))
 Write-Output ("plat_vm=" + (Get-Platform 'https://vimeo.com/123456'))
 Write-Output ("plat_other=" + (Get-Platform 'https://example.com/video.mp4'))
 Write-Output ("plat_notyt=" + (Get-Platform 'https://notyoutube.com/watch'))
+# F13: youtube.com в ПУТИ чужого хоста не должен считаться YouTube.
+Write-Output ("plat_pathinj=" + (Get-Platform 'https://example.invalid/path/youtube.com/video'))
+Write-Output ("plat_suffix=" + (Get-Platform 'https://youtube.com.evil.tld/x'))
 
 # qualityMap → defaultQualityIdx
 foreach ($q in @('audio','720','360','480','1080','1440','2160','xxx','')) {
@@ -179,6 +182,8 @@ assert_eq "twitch.tv → Twitch"      "Twitch"      "$(get_field "$out" plat_tw)
 assert_eq "vimeo.com → Vimeo"       "Vimeo"       "$(get_field "$out" plat_vm)"
 assert_eq "example.com → Video"     "Video"       "$(get_field "$out" plat_other)"
 assert_eq "notyoutube.com → Video (граница!)"  "Video"  "$(get_field "$out" plat_notyt)"
+assert_eq "F13: youtube.com в пути чужого хоста → Video"  "Video"  "$(get_field "$out" plat_pathinj)"
+assert_eq "F13: youtube.com.evil.tld → Video (якорь конца)" "Video"  "$(get_field "$out" plat_suffix)"
 
 # ── qualityMap ────────────────────────────────────────────────
 suite "PS1 yt-dlp: qualityMap → defaultQualityIdx (production)"

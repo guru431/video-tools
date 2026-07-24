@@ -89,6 +89,11 @@ read_config() {
         return
     fi
 
+    # F15. Регистронезависимое сравнение ключей/секций — паритет с PS1 (хеш-таблица
+    # PowerShell регистронезависима) и с ffmpeg run.sh. Раньше [DOWNLOAD] или
+    # Default_Quality работали в GUI, но в SH молча давали default.
+    local saved_ncm; saved_ncm=$(shopt -p nocasematch)
+    shopt -s nocasematch
     local in_section=false
     local value=""
     while IFS= read -r line || [ -n "$line" ]; do
@@ -104,7 +109,7 @@ read_config() {
 
         # Секция
         if [[ "$line" =~ ^\[([^]]+)\]$ ]]; then
-            if [ "${BASH_REMATCH[1]}" = "$section" ]; then
+            if [[ "${BASH_REMATCH[1]}" == "$section" ]]; then
                 in_section=true
             else
                 in_section=false
@@ -129,11 +134,13 @@ read_config() {
                 [ -n "${!_vn:-}" ] || echo "WARN: переменная $_vn не задана" >&2
                 value="${value//\$\{$_vn\}/${!_vn:-}}"
             done
+            eval "$saved_ncm"
             echo "$value"
             return
         fi
     done < "$CONFIG_FILE"
 
+    eval "$saved_ncm"
     echo "$default"
 }
 
@@ -535,6 +542,16 @@ translate_audio() {
     # `-map 0:a` переносит ВСЕ оригинальные дорожки, поэтому индекс перевода равен их
     # числу, а не единице: при двух оригиналах metadata для a:1 села бы на второй
     # оригинал, а перевод (a:2) остался бы безымянным.
+    # F9: индекс дорожки перевода в dual_track определяется числом оригинальных
+    # аудиодорожек (ffprobe). Без рабочего ffprobe он молча стал бы 1 — на файле с
+    # 2+ дорожками перевод сел бы на неверный индекс/кодек. Для dual_track ffprobe
+    # обязателен: если его нет, честно завершаем перевод ошибкой, а не угадываем.
+    if [ "$mode" = "dual_track" ] && ! "$FFPROBE" -version >/dev/null 2>&1; then
+        log_error "Режим dual_track требует ffprobe для подсчёта аудиодорожек, но он недоступен: $FFPROBE"
+        rm -rf "$temp_dir"
+        return 1
+    fi
+
     local orig_a_count
     orig_a_count=$("$FFPROBE" -v error -select_streams a -show_entries stream=index \
         -of csv=p=0 "$video_file" 2>/dev/null | grep -c .)
@@ -575,9 +592,16 @@ translate_audio() {
 
     local ret=1
     if [ "$ff_rc" -eq 0 ] && [ -f "$output_file" ]; then
-        mv "$output_file" "$video_file"
-        log_ok "Перевод добавлен: $video_file"
-        ret=0
+        # F4: rename не считаем успехом вслепую — проверяем exit code mv. При отказе
+        # (заблокированный файл, нет прав на каталог) оригинал остаётся нетронутым, а
+        # перевод не выдаётся за успешный.
+        if mv "$output_file" "$video_file"; then
+            log_ok "Перевод добавлен: $video_file"
+            ret=0
+        else
+            log_error "Не удалось заменить оригинал переведённым файлом: $video_file"
+            [ -f "$output_file" ] && rm -f "$output_file"
+        fi
     else
         log_error "Ошибка мержа аудиодорожек"
         [ -f "$output_file" ] && rm -f "$output_file"
@@ -1143,7 +1167,12 @@ main() {
         # самый свежий; исход учитывается в COUNT_FAIL (F2). Плейлисты/batch/audio уже
         # отсеяны guardrail'ом выше, так что здесь обычно ровно один файл.
         # F13. Источник путей — манифест самого yt-dlp, а не «свежие файлы в дереве».
-        if [ "$dl_rc" -eq 0 ] && [ "$TRANSLATE_ENABLED" = "true" ] && [ "$SUBS_ONLY" != "true" ]; then
+        if [ "$dl_rc" -eq 0 ] && [ "$TRANSLATE_ENABLED" = "true" ] && [ "$SUBS_ONLY" != "true" ] && [ "$DRY_RUN" = "true" ]; then
+            # F6: dry-run — это проверка аргументов, а не реальный прогон. Манифест пуст
+            # (yt-dlp не запускался), медиафайлов для перевода нет по определению —
+            # печатаем план перевода и НЕ трактуем отсутствие файла как провал.
+            echo "[DRY-RUN] AI-перевод ($TRANSLATE_LANG, $TRANSLATE_VOICE, режим $TRANSLATE_MODE): vot-cli-live --reslang=$TRANSLATE_LANG -- \"$URL\", затем ffmpeg-мерж в скачанный файл"
+        elif [ "$dl_rc" -eq 0 ] && [ "$TRANSLATE_ENABLED" = "true" ] && [ "$SUBS_ONLY" != "true" ]; then
             local _tr_found=0
             while IFS= read -r media; do
                 [ -z "$media" ] && continue

@@ -25,13 +25,16 @@ email_re='[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
 # и 192.168.100.100 стоят специально как демонстрация формата denylist'а). Остальные
 # *.example (config.ini.example и т.п.) НЕ исключаем: blanket-исключение всего класса
 # example глушило IP/e-mail-скан ровно там, где по правилам допустимы лишь пустые/
-# фиктивные значения — случайная реальная вставка прошла бы CI. Сам этот скрипт — тоже
-# исключение (несёт паттерны).
+# фиктивные значения — случайная реальная вставка прошла бы CI. Сам этот скрипт и его
+# тест (tests/common/test_privacy_scan.sh) — тоже исключения: оба по назначению несут
+# фиктивные RFC1918/e-mail фикстуры для самопроверки детекции. Это КОНКРЕТНЫЕ файлы, а
+# не класс (в отличие от отвергнутого blanket-*.example).
 is_excluded() {
     case "$1" in
         *.exe|*.sha256|*.png|*.jpg|*.jpeg|*.ico|*.gif|*.pdf) return 0 ;;
         .sanitize-patterns.example)                          return 0 ;;
         tools/privacy-scan.sh)                               return 0 ;;
+        tests/common/test_privacy_scan.sh)                   return 0 ;;
     esac
     return 1
 }

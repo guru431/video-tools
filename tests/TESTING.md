@@ -18,9 +18,9 @@ bash tests/run_tests.sh ffmpeg
 bash tests/run_tests.sh yt-dlp
 ```
 
-**Актуальное число тестов — только из раннера:** `bash tests/run_tests.sh` (сейчас 1479: ffmpeg 617, yt-dlp 454, common 408). На платформах без CMD/PowerShell часть suite'ов пропускается.
+**Актуальное число тестов — только из раннера:** `bash tests/run_tests.sh`. Конкретные числа здесь не приводятся намеренно: они устаревают при каждом новом assert, а сверить их статически нечем — итог зависит от платформы (без CMD/PowerShell часть suite'ов пропускается целиком). Guardrail в `tests/common/test_guardrails.sh` следит, чтобы числа не вернулись в документы.
 
-> ⚠️ Ниже — подробный справочник по отдельным файлам; per-file counts могут отставать от текущего набора (единственный источник истины по числам — раннер). Полный список тест-файлов см. `tests/run_tests.sh`.
+> ⚠️ Ниже — подробный справочник по отдельным файлам. Отставать от кода могут не только счётчики, но и **подробности отдельных файлов**: перечни suite'ов, примеры формат-строк и имена флагов. Единственный источник истины — сами тест-файлы и `tests/run_tests.sh`; расхождение здесь считается дефектом документа, а не кода.
 
 ---
 
@@ -154,7 +154,8 @@ main-гардом `BASH_SOURCE == $0`), поэтому проверяется pr
 | `test_13_parser_parity.sh` | Паритет парсеров SH↔PS1↔CMD |
 | `test_14_audio_only_codec.sh` | audio_only + выбор кодека/контейнера |
 | `test_15_findings.sh` | Фиксы аудита ffmpeg (F5/F16/F17/F23/F25/F26/F32/F33 и др.) |
-| `test_16_gui_state.sh` | GUI: начальные значения контролов из config |
+| `test_16_gui_state.sh` | F17: воркер сообщает GUI честный исход батча (success/failed/cancelled) + GUI-preflight |
+| `test_17_literal_paths.sh` / `test_18_findings_audit.sh` / `test_19_findings_paths.sh` | Пути с `[ ]`, аудит-находки, нормализация source/destination и выборка входов |
 
 ---
 
@@ -179,10 +180,10 @@ main-гардом `BASH_SOURCE == $0`), поэтому проверяется pr
 
 | Suite | Что проверяет |
 |-------|---------------|
-| `avc1_best` | `bestaudio[ext=m4a]+bestvideo[height<=N][vcodec^=avc1]` |
+| `avc1_best` | `bestaudio[ext!=webm]+bestvideo[height<=N][vcodec^=avc1]/...` |
 | `avc1_https` | Числовые ID: 140+137, 140+136, ... |
 | `avc1_m3u8` | HLS ID: 234+233, 234+232, ... |
-| `avc1_https_60fps` | 60fps ID: 234+299, 234+298, ... |
+| `avc1_https_60fps` | 60fps ID: 140+298, 140+299/298, ... |
 | `avc1_m3u8_60fps` | M3U8 60fps ID |
 | `avc1_https_60fps_hdr` | HDR ID |
 | `old_combo` | Legacy: 18, 20/18, 22/20/18, ... |
@@ -204,11 +205,11 @@ main-гардом `BASH_SOURCE == $0`), поэтому проверяется pr
 
 | Suite | Что проверяет |
 |-------|---------------|
-| `Базовый: quality 720p` | `bestaudio[ext=m4a]+bestvideo[height<=720]...` |
-| `Только аудио (quality 0)` | `-f bestaudio[ext=m4a]/bestaudio` |
+| `Базовый: quality 720p` | `bestaudio[ext!=webm]+bestvideo[height<=720][vcodec^=avc1]/...` |
+| `Только аудио (quality 0)` | `-f bestaudio[ext!=webm]/bestaudio` |
 | `Cookies chrome` | `--cookies-from-browser chrome` |
 | `Прокси` | `--proxy http://proxy:3128` |
-| `Субтитры (quality 91/92)` | `--sub-lang ru/en --write-auto-sub --skip-download` |
+| `Субтитры (quality 91/92)` | `--write-subs --write-auto-subs --sub-langs ru/en --skip-download` |
 | `Ошибка yt-dlp` | `MOCK_YTDLP_FAIL=1` — exit code != 0 |
 
 ### Остальные yt-dlp-файлы

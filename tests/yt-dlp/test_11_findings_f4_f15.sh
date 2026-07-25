@@ -192,8 +192,12 @@ assert_contains "F13 (CMD): суффикс-якорь .youtube.com"    'if /I "!
 # ══════════════════════════════════════════════════════════════
 suite "F14 (CMD source-scan): только точные схемы http/https"
 # ══════════════════════════════════════════════════════════════
-assert_contains     "F14: точные /c:^http:// и /c:^https://" '/c:"^http://" /c:"^https://"' "$CMD_SRC"
-assert_not_contains "F14: убран нестрогий ^https*://"        '/c:"^https*://"'               "$CMD_SRC"
+# Схема сверяется срезом фиксированной длины: findstr и temp-файл убраны вовсе
+# (см. test_12_findings_cli.sh, suite Y3 — там же поведенческая проверка в реальном cmd).
+# Инвариант F14 остался тем же: только ТОЧНЫЕ http:// и https://, httpss:// отвергается.
+assert_contains     "F14: точный срез http://"        'if /i "!url:~0,7!"=="http://"'  "$CMD_SRC"
+assert_contains     "F14: точный срез https://"       'if /i "!url:~0,8!"=="https://"' "$CMD_SRC"
+assert_not_contains "F14: убран нестрогий ^https*://" '/c:"^https*://"'                "$CMD_SRC"
 
 # ══════════════════════════════════════════════════════════════
 suite "F13 (CMD behavioral): host-детект платформы в рантайме"

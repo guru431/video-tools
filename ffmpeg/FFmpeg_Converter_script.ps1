@@ -25,6 +25,28 @@ function New-EmptyFileLiteral {
 		$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path), '')
 }
 
+# --- F-path. Нормализация корневых путей ---
+# config.ini один на три платформы, но нормализация разделителей была односторонней
+# ('\' -> разделитель платформы). Два следствия, оба ловятся здесь:
+#   1) `source = C:/video/in` работал в SH и ронял PS1: $file.DirectoryName отдаёт
+#      'C:\video\in\sub', strip-префикс 'C:/video/in' не срабатывал и путь выхода
+#      становился мусором ('C:/video/out' + 'C:\video\in\sub\');
+#   2) хвостовой разделитель (`source = D:\video\in\`) съедал ведущий разделитель
+#      относительного пути, и выход уезжал в `D:\video\outsub\`.
+# Корень диска ('C:\') и корень UNC-шары трогать нельзя — там разделитель значащий.
+function Normalize-FolderPath {
+	param([string]$Path)
+	if ([string]::IsNullOrWhiteSpace($Path)) { return $Path }
+	$s = [string][System.IO.Path]::DirectorySeparatorChar
+	$p = $Path.Replace('/', $s).Replace('\', $s)
+	$trimmed = $p.TrimEnd($s[0])
+	if ($trimmed.Length -eq 0) { return $p }              # корень POSIX '/'
+	if ($trimmed -match '^[A-Za-z]:$') { return $trimmed + $s }   # корень диска 'C:\'
+	return $trimmed
+}
+$folder_sources     = Normalize-FolderPath $folder_sources
+$folder_destination = Normalize-FolderPath $folder_destination
+
 # --- E1. Проверка окружения ---
 $_isGui = [bool]$env:FFMPEG_GUI_PROGRESS_FILE -or [bool]$guiProgressFile
 if ([string]::IsNullOrWhiteSpace($folder_sources) -or !(Test-Path -LiteralPath $folder_sources)) {
@@ -149,6 +171,15 @@ if ($length_coding_status -eq "+") {
 	$set_length_coding = ""
 	$split_by_silence = "no"
 }
+
+# Суффикс " (part.N)", известный ЗАРАНЕЕ. При [split] start с ненулевым значением
+# $num = @(start), часть всегда одна, и суффикс " (part.1)" добавляется гарантированно —
+# значит имя выхода отличается от входа, и проверка «выход == вход» ниже обязана
+# сверять имя С суффиксом. Иначе при in-place конвертации (destination == source)
+# каждый файл получал ложный FAIL. Для [split] length число частей заранее неизвестно
+# (нужна длительность), там проверка остаётся консервативной — см. её комментарий.
+$part_suffix_known = ""
+if ($start_coding_status -eq "+" -and $start_coding_value -ne 0) { $part_suffix_known = " (part.1)" }
 
 # --- A1. Формат и настройки видео/аудио ---
 # Инициализируем ДО ветки audio_only: иначе при audio_only=yes $vf_parts остаётся
@@ -369,8 +400,11 @@ if ($audio_only -ne "yes" -and $copy_codecs -ne "yes" -and $merge_files -ne "yes
 # игнорирует -Include — поэтому фильтр по расширению перенесён в Where-Object. -File заодно
 # отсекает каталоги вида "season.mp4", которые старый -Include пропускал в Encode-File.
 $_in_exts = @($format_files_in -split "," | ForEach-Object { "." + $_.Trim().TrimStart('.') } | Where-Object { $_ -ne "." })
+# `.ffconv-partial-*` — недобитые temp-файлы прерванного прогона: они подпадают под
+# фильтр расширений и в in-place режиме (destination == source) становились входами
+# следующего запуска. Паритет с `! -name '.ffconv-partial-*'` в SH.
 $format_files_in_list = Get-ChildItem -LiteralPath $folder_sources -Recurse -File |
-	Where-Object { $_in_exts -contains $_.Extension }
+	Where-Object { $_in_exts -contains $_.Extension -and -not $_.Name.StartsWith('.ffconv-partial-') }
 
 # F-collision. Если каталог назначения лежит СТРОГО ВНУТРИ источника, рекурсивный обход
 # подхватывает уже сконвертированные выходы и гонит их по кругу (или перекодирует поверх).
@@ -411,6 +445,22 @@ function Get-CanonPath {
 function Get-FileSize {
 	param([string]$Path)
 	try { return (Get-Item -LiteralPath $Path -ErrorAction Stop).Length } catch { return 0 }
+}
+
+# --- Относительный путь подпапки источника (с ведущим и хвостовым разделителем) ---
+# Обе стороны канонизируем: прежнее regex-вычитание сырой строки $folder_sources
+# совпадало только при побайтово совпадающей форме пути. `source = C:/video/in` в SH
+# работал, а в PS1 $file.DirectoryName отдаёт 'C:\video\in\sub', вычитание не
+# срабатывало и путь выхода становился мусором ('C:/video/out' + 'C:\video\in\sub\').
+# Формула одна на Encode-File и на карту коллизий — иначе карта врёт.
+function Get-RelDir {
+	param([string]$Dir)
+	$canonDir = Get-CanonPath $Dir
+	if ($canonDir.Length -gt $canon_sources.Length -and
+	    $canonDir.StartsWith([string]$canon_sources + [string]$_sep, [System.StringComparison]::OrdinalIgnoreCase)) {
+		return $canonDir.Substring($canon_sources.Length) + [string]$_sep
+	}
+	return [string]$_sep
 }
 
 # --- Транзакционная запись: имя временного файла ---
@@ -530,10 +580,10 @@ if ($merge_files -ne "yes" -and $extract_audio_copy -ne "yes" -and $create_frame
 	$_cmap = @{}
 	foreach ($_f in $format_files_in_list) {
 		# Формула обязана совпадать с Encode-File, иначе карта врёт.
-		$_dir = "$($_f.DirectoryName)\" -replace [regex]::Escape($folder_sources), ''
+		$_dir = Get-RelDir $_f.DirectoryName
 		$_name = if ($save_old_extension -eq "yes") { $_f.Name } else { $_f.BaseName }
 		$_fmt = if ($copy_codecs -eq "yes") { $_f.Extension.TrimStart('.') } else { $format_files_out }
-		$_out = (Get-CanonPath "$folder_destination$_dir$_name.$_fmt").ToLowerInvariant()
+		$_out = (Get-CanonPath "$folder_destination$_dir$_name$part_suffix_known.$_fmt").ToLowerInvariant()
 		if (-not $_cmap.ContainsKey($_out)) { $_cmap[$_out] = @() }
 		$_cmap[$_out] += $_f.FullName
 	}
@@ -550,7 +600,6 @@ function Encode-File {
 	param([System.IO.FileInfo]$file)
 
 	$full_path = $file.FullName
-	$file_path = "$($file.DirectoryName)\"
 	# F32. Два РАЗНЫХ имени, их нельзя смешивать:
 	#   $input_stem — имя источника без расширения; по нему ищутся sidecar-субтитры;
 	#   $file_name  — базовое имя ВЫХОДА (при save_old_extension=yes несёт расширение
@@ -561,13 +610,16 @@ function Encode-File {
 	$input_stem = $file.BaseName
 	$file_name = $input_stem
 	if ($save_old_extension -eq "yes") { $file_name = $file.Name }
-	$file_path = $file_path -replace [regex]::Escape($folder_sources), ''
-	New-DirLiteral "$folder_destination$file_path"
+	$file_path = Get-RelDir $file.DirectoryName
+	# D7. Dry-run только печатает команды — каталоги зеркала не создаём. Иначе
+	# «безопасный» прогон оставлял дерево пустых подпапок в destination (и маскировал
+	# ошибки в самом пути: пользователь видел созданный каталог и считал путь верным).
+	if ($dry_run -ne "yes") { New-DirLiteral "$folder_destination$file_path" }
 
 	$script:fileNum++
 
 	# Проверка отмены из GUI
-	if ($guiCancelFile -and (Test-Path $guiCancelFile)) {
+	if ($guiCancelFile -and (Test-Path -LiteralPath $guiCancelFile)) {
 		return
 	}
 
@@ -665,10 +717,14 @@ function Encode-File {
 	# F12. Выход не имеет права совпасть со входом. Проверка стоит ДО всего остального:
 	# ниже готовый выход при провале валидации удаляется как «битый», а при in==out
 	# этим «битым файлом» оказался бы сам оригинал — ещё до кодирования.
-	# Разделения на части (part.N) коллизию снимают, поэтому сверяем базовое имя.
-	$canon_out = Get-CanonPath "$out_base.$current_format_out"
+	# Суффикс " (part.N)" коллизию снимает, поэтому заранее известный суффикс
+	# ($part_suffix_known — режим [split] start) в сравнение включён. При [split] length
+	# число частей зависит от длительности и здесь ещё неизвестно, поэтому сверяем
+	# базовое имя — сознательный консерватизм: лучше отклонить файл, чем закодировать
+	# его поверх самого себя.
+	$canon_out = Get-CanonPath "$out_base$part_suffix_known.$current_format_out"
 	if ($canon_out -ieq (Get-CanonPath $full_path)) {
-		Log-Msg "FAIL" "$($file.Name): выход совпадает с входом — файл пропущен (задайте другой destination, префикс или формат)"
+		Log-Msg "FAIL" "$($file.Name): выход совпадает с входом — файл пропущен (задайте другой destination, префикс или формат; при [split] length имя частей заранее неизвестно, поэтому in-place отклоняется)"
 		$script:countFail++
 		Write-GUIProgress -CurrentFile $file.Name
 		return
@@ -702,15 +758,15 @@ function Encode-File {
 	# F7. overwrite_existing=yes → готовый файл не считаем финальным и перекодируем с
 	# новыми настройками (ffmpeg -y перезапишет). Иначе валидный файл пропускается.
 	if ($overwrite_existing -ne "yes") {
-		if (Test-Path -LiteralPath "$out_base.$current_format_out") {
-			& $ffmpeg -v error -i "$out_base.$current_format_out" -f null - 2>&1 | Out-Null
+		if (Test-Path -LiteralPath "$out_base$part_suffix_known.$current_format_out") {
+			& $ffmpeg -v error -i "$out_base$part_suffix_known.$current_format_out" -f null - 2>&1 | Out-Null
 			if ($LASTEXITCODE -eq 0) {
 				$script:countSkip++
 				Write-GUIProgress -CurrentFile $file.Name
 				return
 			} else {
-				Log-Msg "WARN" "Удаление битого файла: $out_base.$current_format_out"
-				Remove-Item -LiteralPath "$out_base.$current_format_out" -Force
+				Log-Msg "WARN" "Удаление битого файла: $out_base$part_suffix_known.$current_format_out"
+				Remove-Item -LiteralPath "$out_base$part_suffix_known.$current_format_out" -Force
 			}
 		}
 	}
@@ -991,13 +1047,13 @@ function Encode-File {
 			while (!$proc.HasExited) {
 				Start-Sleep -Milliseconds 400
 				# Проверка отмены
-				if ($guiCancelFile -and (Test-Path $guiCancelFile)) {
+				if ($guiCancelFile -and (Test-Path -LiteralPath $guiCancelFile)) {
 					try { $proc.Kill() } catch {}
 					break
 				}
 				# Читаем прогресс-файл ffmpeg
 				$fpct = 0
-				if (Test-Path $progressTempFile) {
+				if (Test-Path -LiteralPath $progressTempFile) {
 					$fs = $null; $sr = $null
 					try {
 						$fs = [System.IO.FileStream]::new($progressTempFile, 'Open', 'Read', 'ReadWrite')
@@ -1169,7 +1225,7 @@ if ($merge_files -eq "yes") {
 	# всех переменных и функций через $using:, что несовместимо с текущей архитектурой
 	# (Encode-File использует $script:-переменные). Используется последовательная обработка.
 	foreach ($file in $format_files_in_list) {
-		if ($guiCancelFile -and (Test-Path $guiCancelFile)) { break }
+		if ($guiCancelFile -and (Test-Path -LiteralPath $guiCancelFile)) { break }
 		Encode-File -file $file
 	}
 }
@@ -1202,7 +1258,7 @@ if (-not $guiProgressFile) {
 } else {
 	# GUI: записываем финальное состояние. F17. Финал обязан назвать исход явно —
 	# GUI не видит наш exit code и по одному «Готово» не отличит провал от успеха.
-	if ($guiCancelFile -and (Test-Path $guiCancelFile)) {
+	if ($guiCancelFile -and (Test-Path -LiteralPath $guiCancelFile)) {
 		Write-GUIProgress -FilePercent 100 -CurrentFile "Отменено" -State "cancelled" -ExitCode 1 -Message "Отменено пользователем"
 	} elseif ($script:countFail -gt 0) {
 		Write-GUIProgress -FilePercent 100 -CurrentFile "Ошибки" -State "failed" -ExitCode 1 -Message "Файлов с ошибками: $($script:countFail)"

@@ -18,9 +18,9 @@ $configFile = if ($env:YTDLP_CONFIG) { $env:YTDLP_CONFIG } else { Join-Path $scr
 
 # ── Чтение config.ini (один раз в хеш-таблицу) ──────────────────────────
 $script:_configCache = @{}
-if (Test-Path $configFile) {
+if (Test-Path -LiteralPath $configFile) {
     $curSection = ""
-    foreach ($line in (Get-Content $configFile -Encoding UTF8)) {
+    foreach ($line in (Get-Content -LiteralPath $configFile -Encoding UTF8)) {
         $line = $line.Trim()
         if ([string]::IsNullOrEmpty($line) -or $line.StartsWith("#")) { continue }
         if ($line -match '^\[([^\]]+)\]$') {
@@ -127,15 +127,19 @@ $cfg_subFormat     = Read-Config "format"              "subtitles" "vtt"
 $qualityMap = @{ "audio" = 0; "720" = 3; "360" = 1; "480" = 2; "1080" = 4; "1440" = 5; "2160" = 6 }
 $defaultQualityIdx = if ($qualityMap.ContainsKey($cfg_quality)) { $qualityMap[$cfg_quality] } else { 3 }
 
+# F12/-LiteralPath: каталог установки может содержать [ ] ? * (типично для
+# распакованных архивов — video[1]). Без -LiteralPath Test-Path трактует их как
+# wildcard, портативный .exe рядом со скриптом «не находится» и молча
+# подменяется голым именем из PATH.
 $dlpLocal = Join-Path $scriptDir "yt-dlp.exe"
-if (Test-Path $dlpLocal) { $dlp = $dlpLocal } else { $dlp = "yt-dlp" }
+if (Test-Path -LiteralPath $dlpLocal) { $dlp = $dlpLocal } else { $dlp = "yt-dlp" }
 
 # ffmpeg для мержа AI-перевода: сначала рядом со скриптом (ffmpeg.exe), затем PATH —
 # паритет с $dlp и с задекларированным binary auto-detection.
 $ffmpegLocal = Join-Path $scriptDir "ffmpeg.exe"
-if (Test-Path $ffmpegLocal) { $ffmpegBin = $ffmpegLocal } else { $ffmpegBin = "ffmpeg" }
+if (Test-Path -LiteralPath $ffmpegLocal) { $ffmpegBin = $ffmpegLocal } else { $ffmpegBin = "ffmpeg" }
 $ffprobeLocal = Join-Path $scriptDir "ffprobe.exe"
-if (Test-Path $ffprobeLocal) { $ffprobeBin = $ffprobeLocal } else { $ffprobeBin = "ffprobe" }
+if (Test-Path -LiteralPath $ffprobeLocal) { $ffprobeBin = $ffprobeLocal } else { $ffprobeBin = "ffprobe" }
 
 # ── Определение платформы по URL ──────────────────────────────────────────
 function Get-Platform {
@@ -826,7 +830,7 @@ $comboCookies.Add_SelectedIndexChanged({
 # Проверка наличия ffmpeg (нужен для мержа AI-перевода). Зеркалит runtime-проверку
 # в блоке перевода ниже — сначала локальный ffmpeg.exe рядом со скриптом, потом PATH.
 function Test-FfmpegAvailable {
-    if (Test-Path $ffmpegLocal) { return $true }
+    if (Test-Path -LiteralPath $ffmpegLocal) { return $true }
     return [bool](Get-Command "ffmpeg" -ErrorAction SilentlyContinue)
 }
 
@@ -1026,6 +1030,25 @@ $btnStart.Add_Click({
         return
     }
 
+    # Preflight: AI-перевод несовместим с режимами «только субтитры» (qi 7/8) и
+    # «только аудио» (qi 0). Проверка режима была только ПОСТ-фактум, в цикле обработки
+    # очереди: пользователь ждал загрузку всего плейлиста и лишь потом видел, что
+    # перевод молча отключён для каждого URL. Здесь он узнаёт заранее и может отменить.
+    if ($chkTranslate.Checked) {
+        $_qiPre = $comboQuality.SelectedIndex
+        $_transWhy = $null
+        if ($_qiPre -ge 7)     { $_transWhy = "неприменим к режиму «только субтитры»" }
+        elseif ($_qiPre -eq 0) { $_transWhy = "не поддерживается для загрузки только аудио" }
+        if ($_transWhy) {
+            $_ans = [System.Windows.Forms.MessageBox]::Show(
+                "AI-перевод $_transWhy — он будет пропущен для всех URL в очереди.`n`nПродолжить без перевода?",
+                "AI-перевод несовместим с режимом",
+                [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                [System.Windows.Forms.MessageBoxIcon]::Warning)
+            if ($_ans -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+        }
+    }
+
     $btnStart.Enabled = $false
     $btnStop.Enabled  = $true
     # Очередь нельзя менять во время загрузки — иначе индексы съезжают.
@@ -1082,6 +1105,11 @@ $btnStart.Add_Click({
             # Раньше манифест создавался ТОЛЬКО под перевод, поэтому (2) в GUI не
             # работал вовсе: URL, целиком лежащий в архиве, попадал в successCount и
             # печатался как «Готово» — сводка «N/M» завышала число реальных загрузок.
+            # $qi нужен ДО манифеста: условие ниже отсекает режим «только субтитры».
+            # Раньше присваивание стояло в блоке «Формат» ниже — на первой итерации
+            # очереди $qi был $null, «$qi -lt 7» давало $true, и манифест создавался
+            # даже для qi 7/8, где archive-skip неприменим.
+            $qi          = $comboQuality.SelectedIndex
             $dlManifest = $null
             if ($chkTranslate.Checked -or ($cfg_useArchive -eq "true" -and $qi -lt 7)) {
                 $dlManifest = Join-Path ([System.IO.Path]::GetTempPath()) ("ytdlp_manifest_{0}.txt" -f [System.Guid]::NewGuid().ToString('N'))
@@ -1092,7 +1120,7 @@ $btnStart.Add_Click({
             # режима «только субтитры» (qi 7/8): архив хранит ID видео, а не наличие
             # субтитров, иначе субтитры молча пропускаются (F3, паритет с CMD).
             $denoExe = Join-Path $scriptDir "deno.exe"
-            if (Test-Path $denoExe) { $command += "--js-runtimes", "deno:$denoExe" }
+            if (Test-Path -LiteralPath $denoExe) { $command += "--js-runtimes", "deno:$denoExe" }
             $tpl = if ($currentUrl -match '[?&]list=') { $cfg_plTemplate } else { $cfg_template }
             $tpl = $tpl -replace '/', '\'
             $command += "-o", "$folder\$tpl"
@@ -1131,8 +1159,7 @@ $btnStart.Add_Click({
                 }
             }
 
-            # Формат
-            $qi          = $comboQuality.SelectedIndex
+            # Формат ($qi присвоен выше — до создания манифеста)
             $selectedFmt = $comboFormat.SelectedItem
             # auto: для YouTube -> avc1_best, для остальных платформ -> простой best[height<=N]
             $effectiveFmt = $selectedFmt
@@ -1370,7 +1397,7 @@ $btnStart.Add_Click({
 
                     $hasDeps = $true
                     $votExe  = Join-Path $scriptDir "vot-cli-live.exe"
-                    if (Test-Path $votExe) {
+                    if (Test-Path -LiteralPath $votExe) {
                         $votBin = $votExe
                     } elseif (Get-Command "vot-cli-live" -ErrorAction SilentlyContinue) {
                         $votBin = "vot-cli-live"

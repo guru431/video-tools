@@ -33,16 +33,16 @@ if not defined url (
     pause
     exit /b 1
 )
-rem Валидация URL: только схемы http(s):// и без кавычек. Запись через redirect
-rem (не pipe: pipe порождает дочерний cmd, ре-парсящий & ^| ^< ^>). Кавычку ловим
-rem substring-заменой через delayed expansion (findstr /c:"\"" ломает quote-tracking).
-set "_urlchk=%temp%\ytdlp_urlchk_%random%.txt"
->"!_urlchk!" echo(!url!
-set "_urlok=1"
-rem F14. Только точные схемы http:// и https:// (два /c: = OR). Прежний ^https*://
+rem Валидация URL: только схемы http(s):// и без кавычек. Всё делается средствами
+rem самого CMD через delayed expansion — ни temp-файла, ни внешнего процесса.
+rem Прежняя версия писала URL в %temp% и звала findstr: лишний I/O, зависимость от
+rem findstr и мусор в temp, если del не дошёл (падение между строками).
+rem F14. Схемы сверяем ТОЧНО (срез фиксированной длины). Прежний regex ^https*://
 rem принимал httpsss://, httpss:// и т.п. (s* = ноль-или-более 's').
-findstr /r /i /c:"^http://" /c:"^https://" "!_urlchk!" >nul || set "_urlok="
-del "!_urlchk!" 2>nul
+set "_urlok="
+if /i "!url:~0,7!"=="http://"  set "_urlok=1"
+if /i "!url:~0,8!"=="https://" set "_urlok=1"
+rem Кавычку ловим substring-заменой (findstr /c:"\"" ломает quote-tracking парсера).
 set "_nq=!url:"=!"
 if not "!url!"=="!_nq!" set "_urlok="
 if not defined _urlok (
@@ -169,9 +169,21 @@ if "%translate_choice%"=="2" (set "translate_lang=ru" & set "translate_mode=mix"
 if "%translate_choice%"=="3" (set "translate_lang=ru" & set "translate_mode=replace")
 if "%translate_choice%"=="4" (set "translate_lang=en" & set "translate_mode=dual_track")
 rem Громкости для режима mix (паритет с .sh/.ps1, где это original_volume/translation_volume).
-rem CMD-вариант интерактивный (без config.ini) — значения по умолчанию вынесены в переменные.
+rem CMD-вариант интерактивный (без config.ini), поэтому в режиме mix спрашиваем баланс
+rem дорожек, как и остальные параметры — раньше значения были захардкожены и настроить
+rem их из CLI было нельзя, в отличие от GUI. Enter = дефолт.
+rem Валидация: только неотрицательное десятичное число (^[0-9]+(\.[0-9]+)?$). Иначе
+rem ввод уходит в -filter_complex как есть и ffmpeg падает на каждом файле, а ввод с
+rem кавычкой/^&^| ломал бы разбор всей команды.
 set "translate_orig_vol=0.3"
 set "translate_trans_vol=1.0"
+if "%translate_mode%"=="mix" (
+    set /p "_ov=Громкость оригинала [0.3]: "
+    if defined _ov call :read_vol translate_orig_vol _ov
+    set /p "_tv=Громкость перевода [1.0]: "
+    if defined _tv call :read_vol translate_trans_vol _tv
+    echo Баланс mix: оригинал=!translate_orig_vol!, перевод=!translate_trans_vol!
+)
 set "translate_orig_lang=en"
 
 :: ── Определение платформы по URL ────────────────────────────────────────
@@ -642,4 +654,25 @@ echo.
 pause
 if not "%dl_errorlevel%"=="0" exit /b 1
 if defined translate_failed exit /b 1
+exit /b 0
+
+rem ── Чтение громкости для режима mix ──────────────────────────────────────
+rem %1 = имя целевой переменной, %2 = имя переменной с сырым вводом.
+rem Принимаем только неотрицательное десятичное число: цифры и максимум одна точка.
+rem Проверка — средствами самого CMD, без pipe/findstr: pipe порождает дочерний cmd,
+rem который ре-парсит & ^| ^< ^> из пользовательского ввода (та же причина, по которой
+rem без них обходится валидация URL выше). Невалидный ввод оставляет дефолт.
+:read_vol
+setlocal enabledelayedexpansion
+set "_rv=!%~2!"
+set "_probe=!_rv!"
+for %%d in (0 1 2 3 4 5 6 7 8 9 .) do if defined _probe set "_probe=!_probe:%%d=!"
+if defined _probe goto :read_vol_bad
+if "!_rv!"=="." goto :read_vol_bad
+for /f "tokens=1,2* delims=." %%a in ("!_rv!") do if not "%%c"=="" goto :read_vol_bad
+endlocal & set "%~1=%_rv%"
+exit /b 0
+:read_vol_bad
+echo [WARN] Неверное значение громкости "!_rv!" - оставляю значение по умолчанию.
+endlocal
 exit /b 0

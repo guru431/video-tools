@@ -25,14 +25,14 @@ $mainContent = [System.IO.File]::ReadAllText($src, [System.Text.Encoding]::UTF8)
 # Вставляем встроенный скрипт ПЕРЕД первой строкой кода (после комментариев)
 $combined = $embedBlock + "`n" + $mainContent
 [System.IO.File]::WriteAllText($tmpSrc, $combined, [System.Text.Encoding]::UTF8)
-Write-Host "Combined file: $([math]::Round((Get-Item $tmpSrc).Length / 1KB)) KB"
+Write-Host "Combined file: $([math]::Round((Get-Item -LiteralPath $tmpSrc).Length / 1KB)) KB"
 
 Write-Host "Loading ps2exe function..."
 . $ps2exePs
 
 # Удаляем прежний EXE ДО сборки: иначе при падении Invoke-ps2exe остался бы старый
 # файл и Test-Path ниже дал бы ложный SUCCESS.
-Remove-Item $out -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue
 
 Write-Host "Running Invoke-ps2exe..."
 $ErrorActionPreference = 'Stop'
@@ -47,14 +47,14 @@ try {
         -version $script:BuildVersion
 } catch {
     Write-Host "FAIL: $_"
-    Remove-Item $tmpSrc -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $tmpSrc -Force -ErrorAction SilentlyContinue
     exit 1
 }
 
-Remove-Item $tmpSrc -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $tmpSrc -Force -ErrorAction SilentlyContinue
 
-if (Test-Path $out) {
-    $size = [math]::Round((Get-Item $out).Length / 1KB)
+if (Test-Path -LiteralPath $out) {
+    $size = [math]::Round((Get-Item -LiteralPath $out).Length / 1KB)
     Write-Host "SUCCESS: $out ($size KB)"
     Write-ExeChecksum $out
 } else {

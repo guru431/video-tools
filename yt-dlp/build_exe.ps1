@@ -11,7 +11,7 @@ Write-Host "Loading ps2exe function..."
 
 # Удаляем прежний EXE ДО сборки: иначе при падении Invoke-ps2exe остался бы старый
 # файл и Test-Path ниже дал бы ложный SUCCESS.
-Remove-Item $out -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue
 
 Write-Host "Running Invoke-ps2exe..."
 $ErrorActionPreference = 'Stop'
@@ -29,8 +29,8 @@ try {
     exit 1
 }
 
-if (Test-Path $out) {
-    $size = [math]::Round((Get-Item $out).Length / 1KB)
+if (Test-Path -LiteralPath $out) {
+    $size = [math]::Round((Get-Item -LiteralPath $out).Length / 1KB)
     Write-Host "SUCCESS: $out ($size KB)"
     Write-ExeChecksum $out
 } else {

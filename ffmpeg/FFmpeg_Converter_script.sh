@@ -4,6 +4,23 @@
 # FFmpeg Converter Script (Bash)
 # ============================================================
 
+# --- F-path. Нормализация корневых путей ---
+# Хвостовой разделитель в [folders] source/destination — обычный пользовательский ввод,
+# но относительный путь подпапки считается ВЫЧИТАНИЕМ строки folder_sources из каталога
+# файла (${file_path:${#folder_sources}}). Лишний '/' съедал ведущий разделитель, и
+# склейка давала `.../outsub/movie.mp4` вместо `.../out/sub/movie.mp4` — каталог молча
+# создавался, файлы уезжали рядом с destination. Корень ('/' и 'C:/') не трогаем.
+norm_folder() {
+	local p="$1"
+	while [ ${#p} -gt 1 ] && [ "${p: -1}" = "/" ]; do
+		case "$p" in ?:/) break ;; esac
+		p="${p%/}"
+	done
+	printf '%s' "$p"
+}
+folder_sources="$(norm_folder "$folder_sources")"
+folder_destination="$(norm_folder "$folder_destination")"
+
 # --- E1. Проверка окружения ---
 if [ ! -d "$folder_sources" ]; then
 	echo -e "\n[ОШИБКА] Папка источника не найдена: $folder_sources\n"
@@ -127,6 +144,17 @@ if [ "$length_coding_status" = "+" ]; then
 else
 	set_length_coding=""
 	split_by_silence="no"
+fi
+
+# Суффикс " (part.N)", известный ЗАРАНЕЕ. При [split] start с ненулевым значением
+# num = (start), часть всегда одна, и суффикс " (part.1)" добавляется гарантированно —
+# значит имя выхода отличается от входа, и проверка «выход == вход» ниже обязана
+# сверять имя С суффиксом. Иначе при in-place конвертации (destination == source)
+# каждый файл получал ложный FAIL. Для [split] length число частей заранее неизвестно
+# (нужна длительность), там проверка остаётся консервативной — см. её комментарий.
+part_suffix_known=""
+if [ "$start_coding_status" = "+" ] && [ "${start_coding_value:-0}" -ne 0 ] 2>/dev/null; then
+	part_suffix_known=" (part.1)"
 fi
 
 # --- A1. Формат и настройки видео/аудио ---
@@ -363,6 +391,18 @@ for _ff_e in "${_ff_exts[@]}"; do
 	format_find_pred+=(-iname "*.${_ff_e}")
 done
 
+# Единая выборка входов для всех веток (карта коллизий, merge, параллель, цикл).
+#   -type f — каталог, чьё имя оканчивается на расширение из format_files_in
+#     ("season.mp4"), иначе попадал во вход: ffmpeg падал на нём лишним FAIL, а его
+#     «выход» занимал имя, под которым должен быть создан каталог зеркала.
+#     Фикс уже был в .ps1 (Get-ChildItem -File) — здесь паритет.
+#   ! -name '.ffconv-partial-*' — недобитые temp-файлы прерванного прогона подпадают
+#     под -iname "*.mp4" и в in-place режиме (destination == source) становились
+#     входами следующего запуска.
+find_inputs() {
+	find "$folder_sources" -type f ! -name '.ffconv-partial-*' \( "${format_find_pred[@]}" \) -print0
+}
+
 # --- D8. Логирование ---
 log_msg() {
 	local level="$1"
@@ -383,13 +423,26 @@ start_time_global=$(date +%s)
 # нормальное завершение чистит results_dir явно, а trap EXIT клобберил бы trap теста
 # (тесты ставят свой trap EXIT для дампа переменных при source).
 _current_ffmpeg_pid=""
+_current_out_tmp=""
 _cleanup_on_int() {
 	[ -n "$_current_ffmpeg_pid" ] && kill "$_current_ffmpeg_pid" 2>/dev/null
+	[ -n "$_current_out_tmp" ] && rm -f "$_current_out_tmp"
 	[ -n "$results_dir" ] && rm -rf "$results_dir"
 	[ -n "${collisions_file:-}" ] && rm -f "$collisions_file"
 	exit 130
 }
 trap _cleanup_on_int INT TERM
+
+# Cleanup для дочерних `bash -c` из параллельной ветки. Своего trap'а у них не было:
+# при SIGTERM (закрытие из GUI, kill по PID) родитель успевал снести results_dir, а
+# осиротевшие ffmpeg продолжали писать .ffconv-partial-* в destination. Ctrl-C спасала
+# только доставка сигнала всей process group. results_dir/collisions_file дочерний
+# процесс НЕ трогает — они общие, их чистит родитель.
+_cleanup_child_on_int() {
+	[ -n "${_current_ffmpeg_pid:-}" ] && kill "$_current_ffmpeg_pid" 2>/dev/null
+	[ -n "${_current_out_tmp:-}" ] && rm -f "$_current_out_tmp"
+	exit 130
+}
 
 file_size() { stat -c%s "$1" 2>/dev/null || stat -f%z "$1" 2>/dev/null || echo 0; }
 
@@ -516,7 +569,10 @@ encode_file() {
 	local file_name="$input_stem"
 	if [ "$save_old_extension" = "yes" ]; then file_name="$(basename "$full_path")"; fi
 	file_path="${file_path:${#folder_sources}}"
-	if [ ! -d "$folder_destination$file_path" ]; then mkdir -p "$folder_destination$file_path"; fi
+	# D7. Dry-run только печатает команды — каталоги зеркала не создаём. Иначе
+	# «безопасный» прогон оставлял дерево пустых подпапок в destination (и маскировал
+	# ошибки в самом пути: пользователь видел созданный каталог и считал путь верным).
+	if [ "$dry_run" != "yes" ] && [ ! -d "$folder_destination$file_path" ]; then mkdir -p "$folder_destination$file_path"; fi
 
 	# --- I. Извлечение аудио без перекодирования ---
 	if [ "$extract_audio_copy" = "yes" ]; then
@@ -606,10 +662,14 @@ encode_file() {
 	# F12. Выход не имеет права совпасть со входом. Проверка стоит ДО всего остального:
 	# ниже готовый выход при провале ffprobe-валидации удаляется как «битый», а при
 	# in==out этим «битым файлом» оказался бы сам оригинал — ещё до кодирования.
-	# Разделения на части (pref) коллизию снимают, поэтому сверяем базовое имя.
-	local canon_out="$(canon_path "${folder_destination}${file_path}${file_name}.${current_format_out}")"
+	# Суффикс " (part.N)" коллизию снимает, поэтому заранее известный суффикс
+	# (part_suffix_known — режим [split] start) в сравнение включён. При [split] length
+	# число частей зависит от длительности и здесь ещё неизвестно, поэтому сверяем
+	# базовое имя — сознательный консерватизм: лучше отклонить файл, чем закодировать
+	# его поверх самого себя.
+	local canon_out="$(canon_path "${folder_destination}${file_path}${file_name}${part_suffix_known}.${current_format_out}")"
 	if [ "$canon_out" = "$(canon_path "$full_path")" ]; then
-		log_msg "FAIL" "$(basename "$full_path"): выход совпадает с входом — файл пропущен (задайте другой destination, префикс или формат)"
+		log_msg "FAIL" "$(basename "$full_path"): выход совпадает с входом — файл пропущен (задайте другой destination, префикс или формат; при [split] length имя частей заранее неизвестно, поэтому in-place отклоняется)"
 		echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
 		return
 	fi
@@ -637,14 +697,14 @@ encode_file() {
 	# F7. overwrite_existing=yes → готовый файл не считаем финальным и перекодируем с
 	# новыми настройками (ffmpeg -y перезапишет). Иначе валидный файл пропускается.
 	if [ "$overwrite_existing" != "yes" ]; then
-		if [ -f "${folder_destination}${file_path}${file_name}.${current_format_out}" ]; then
+		if [ -f "${folder_destination}${file_path}${file_name}${part_suffix_known}.${current_format_out}" ]; then
 			# E3. Проверка валидности существующего файла
-			if "$ffmpeg" -nostdin -v error -i "${folder_destination}${file_path}${file_name}.${current_format_out}" -f null - 2>/dev/null; then
+			if "$ffmpeg" -nostdin -v error -i "${folder_destination}${file_path}${file_name}${part_suffix_known}.${current_format_out}" -f null - 2>/dev/null; then
 				echo "skip" > "$(mktemp "$results_dir/r_XXXXXXXX")"
 				return
 			else
-				log_msg "WARN" "Удаление битого файла: ${folder_destination}${file_path}${file_name}.${current_format_out}"
-				rm -f "${folder_destination}${file_path}${file_name}.${current_format_out}"
+				log_msg "WARN" "Удаление битого файла: ${folder_destination}${file_path}${file_name}${part_suffix_known}.${current_format_out}"
+				rm -f "${folder_destination}${file_path}${file_name}${part_suffix_known}.${current_format_out}"
 			fi
 		fi
 	fi
@@ -911,6 +971,9 @@ encode_file() {
 			local out_tmp
 			out_tmp="$(partial_path "$out_file")"
 			rm -f "$out_tmp"
+			# Регистрируем temp для trap'а: при INT/TERM он удаляет недобитый файл,
+			# иначе .ffconv-partial-* остаётся в destination после прерванного прогона.
+			_current_out_tmp="$out_tmp"
 
 			"$ffmpeg" -nostdin -hide_banner -strict -2 $hw_decode_args \
 				$in_seek -i "$full_path" "${subtitles_params[@]}" \
@@ -946,6 +1009,7 @@ encode_file() {
 			wait $ffmpeg_pid
 			local exit_code=$?
 			_current_ffmpeg_pid=""
+			_current_out_tmp=""
 			printf "\n"
 			rm -f "$progress_file"
 
@@ -1058,14 +1122,14 @@ if [ "$merge_files" != "yes" ] && [ "$extract_audio_copy" != "yes" ] && [ "$crea
 		[ "$save_old_extension" = "yes" ] && _pf_name="$(basename "$_pf_path")"
 		_pf_fmt="$format_files_out"
 		[ "$copy_codecs" = "yes" ] && _pf_fmt="${_pf_path##*.}"
-		_pf_out="$(canon_path "${folder_destination}${_pf_dir}${_pf_name}.${_pf_fmt}")"
+		_pf_out="$(canon_path "${folder_destination}${_pf_dir}${_pf_name}${part_suffix_known}.${_pf_fmt}")"
 		# TAB-разделитель: в путях он практически не встречается, а перевод строки
 		# ломал бы группировку — такие имена отсеиваем явно.
 		case "$_pf_out$_pf_path" in
 			*"$(printf '\t')"*) log_msg "WARN" "Табуляция в имени — файл исключён из карты коллизий: $_pf_path"; continue ;;
 		esac
 		printf '%s\t%s\n' "$_pf_out" "$_pf_path" >> "$_cmap"
-	done < <(find "$folder_sources" \( "${format_find_pred[@]}" \) -print0)
+	done < <(find_inputs)
 
 	# Ключи, встретившиеся больше одного раза, — и есть коллизии.
 	LC_ALL=C sort "$_cmap" | LC_ALL=C awk -F'\t' '{c[$1]++} END {for (k in c) if (c[k] > 1) print k}' > "$collisions_file"
@@ -1090,7 +1154,7 @@ if [ "$merge_files" = "yes" ]; then
 			case "$(canon_path "$full_path")" in "$canon_destination"/*) continue ;; esac
 		fi
 		if [ -z "$fname" ]; then fname=$(basename "$full_path"); break; fi
-	done < <(find "$folder_sources" \( "${format_find_pred[@]}" \) -print0 | sort_null)
+	done < <(find_inputs | sort_null)
 	if [ -z "$fname" ]; then
 		log_msg "WARN" "Нет файлов для объединения в $folder_sources"
 	elif [ "$overwrite_existing" = "yes" ] || [ ! -f "${folder_destination}/${fname}" ]; then
@@ -1111,7 +1175,7 @@ if [ "$merge_files" = "yes" ]; then
 			fi
 			[ "$(canon_path "$mf")" = "$canon_merge_target" ] && merge_target_collision="yes"
 			printf "file '%s'\n" "${mf//\'/\'\\\'\'}" >> "$concat_list"
-		done < <(find "$folder_sources" \( "${format_find_pred[@]}" \) -print0 | sort_null)
+		done < <(find_inputs | sort_null)
 		if [ "$merge_target_collision" = "yes" ]; then
 			log_msg "FAIL" "Объединение отклонено: результат «${folder_destination}/${fname}» совпадает с одним из входов (in-place merge затёр бы источник). Задайте другой destination."
 			echo "fail" > "$results_dir/r_merge"
@@ -1159,7 +1223,8 @@ else
 		# сравнения «выход == вход» становились пустыми строками — то есть равными, —
 		# и в параллельном режиме КАЖДЫЙ файл отклонялся как ложная коллизия.
 		export -f encode_file log_msg show_progress_bar human_size \
-			canon_path file_size partial_path manifest_write manifest_is_complete
+			canon_path file_size partial_path manifest_write manifest_is_complete \
+			_cleanup_child_on_int
 		export audio_only folder_sources folder_destination canon_destination dest_inside_source ffmpeg format_files_out video_settings audio_settings
 		export save_old_extension create_frame copy_codecs split_by_silence extract_audio_copy
 		export video_bitrate_status set_video_bitrate_orig video_quality_status
@@ -1170,9 +1235,10 @@ else
 		export overwrite_existing sub_meta_codec settings_sig
 		export keep_aspect_ratio_status keep_aspect_ratio_value playback_speed_status playback_speed_value
 		export results_dir collisions_file
-		find "$folder_sources" \( "${format_find_pred[@]}" \) -print0 | xargs -0 -P "$parallel_count" -I {} bash -c 'encode_file "$@"' _ {}
+		export part_suffix_known
+		find_inputs | xargs -0 -P "$parallel_count" -I {} bash -c 'trap _cleanup_child_on_int INT TERM; encode_file "$@"' _ {}
 	else
-		find "$folder_sources" \( "${format_find_pred[@]}" \) -print0 | while IFS= read -r -d '' full_path; do
+		find_inputs | while IFS= read -r -d '' full_path; do
 			encode_file "$full_path"
 		done
 	fi

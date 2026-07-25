@@ -336,24 +336,30 @@ function Invoke-ps2exe
 	}
 
 	# escape escape sequences in version info
-	$title = $title -replace "\\", "\\"
-	$product = $product -replace "\\", "\\"
-	$copyright = $copyright -replace "\\", "\\"
-	$trademark = $trademark -replace "\\", "\\"
-	$description = $description -replace "\\", "\\"
-	$company = $company -replace "\\", "\\"
-
-	# Local hardening (not upstream): the values above land inside C# string literals
-	# ([assembly:AssemblyTitle("$title")]). A double quote would close the literal and
-	# inject code into the generated assembly. Current callers pass hardcoded strings,
-	# so this is defence-in-depth for future parameterization. Must run AFTER the
-	# backslash doubling above, or the inserted \" would be re-escaped into \\".
-	$title = $title -replace '"', '\"'
-	$product = $product -replace '"', '\"'
-	$copyright = $copyright -replace '"', '\"'
-	$trademark = $trademark -replace '"', '\"'
-	$description = $description -replace '"', '\"'
-	$company = $company -replace '"', '\"'
+	# Local hardening (not upstream): these values land inside C# string literals in the
+	# generated source ([assembly:AssemblyTitle("$title")]). Exactly three things can
+	# break out of such a literal: '\' (starts an escape sequence), '"' (closes the
+	# literal — code injection) and a real CR/LF/TAB (an unterminated literal fails
+	# compilation). Order matters: backslash doubling must run FIRST, otherwise the
+	# backslashes inserted by the later rules get doubled again. Remaining C0 control
+	# characters have no textual escape here, so they are dropped. Current callers pass
+	# hardcoded strings — this is defence-in-depth for future parameterization.
+	$_escapeCS = {
+		param([string]$s)
+		if ([string]::IsNullOrEmpty($s)) { return $s }
+		$s = $s -replace '\\', '\\'
+		$s = $s -replace '"', '\"'
+		$s = $s -replace "`r", '\r'
+		$s = $s -replace "`n", '\n'
+		$s = $s -replace "`t", '\t'
+		return ([regex]::Replace($s, '[\x00-\x1F]', ''))
+	}
+	$title = & $_escapeCS $title
+	$product = & $_escapeCS $product
+	$copyright = & $_escapeCS $copyright
+	$trademark = & $_escapeCS $trademark
+	$description = & $_escapeCS $description
+	$company = & $_escapeCS $company
 
 	if (![STRING]::IsNullOrEmpty($version))
 	{ # check for correct version number information

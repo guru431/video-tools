@@ -311,18 +311,34 @@ TESTING_F="$TESTS_DIR/TESTING.md"
 # Дерево структуры (строки вида "# N тест-файлов" / "# N файлов (").
 readme_ff=$(grep -oE '# [0-9]+ тест-файлов' "$README_F" | sed -n 1p | grep -oE '[0-9]+')
 readme_yt=$(grep -oE '# [0-9]+ тест-файлов' "$README_F" | sed -n 2p | grep -oE '[0-9]+')
-readme_cm=$(grep -oE '# [0-9]+ файлов \(' "$README_F" | sed -n 1p | grep -oE '[0-9]+')
+readme_cm=$(grep -oE '# [0-9]+ файлов' "$README_F" | sed -n 1p | grep -oE '[0-9]+')
 assert_eq "README (дерево): ffmpeg-файлов = runner" "$n_ff" "${readme_ff:-НЕ_НАЙДЕНО}"
 assert_eq "README (дерево): yt-dlp-файлов = runner" "$n_yt" "${readme_yt:-НЕ_НАЙДЕНО}"
 assert_eq "README (дерево): common-файлов = runner" "$n_cm" "${readme_cm:-НЕ_НАЙДЕНО}"
 
 # Блок примеров запуска (строки "bash tests/run_tests.sh <модуль> ... N файлов").
-usage_ff=$(grep -oE 'run_tests\.sh ffmpeg[^#]*#[^)]*, [0-9]+ файлов' "$README_F" | grep -oE '[0-9]+ файлов' | grep -oE '[0-9]+')
-usage_yt=$(grep -oE 'run_tests\.sh yt-dlp[^#]*#[^)]*, [0-9]+ файлов' "$README_F" | grep -oE '[0-9]+ файлов' | grep -oE '[0-9]+')
-usage_cm=$(grep -oE 'run_tests\.sh common[^#]*#[^)]*, [0-9]+ файлов' "$README_F" | grep -oE '[0-9]+ файлов' | grep -oE '[0-9]+')
+# Запятая перед числом НЕ обязательна: раньше числа файлов стояли после числа тестов
+# ("(617 тестов, 18 файлов)"), теперь тестов в документах нет — см. проверку ниже.
+usage_ff=$(grep -oE 'run_tests\.sh ffmpeg[^#]*#[^)]*[0-9]+ файлов' "$README_F" | grep -oE '[0-9]+ файлов' | grep -oE '[0-9]+')
+usage_yt=$(grep -oE 'run_tests\.sh yt-dlp[^#]*#[^)]*[0-9]+ файлов' "$README_F" | grep -oE '[0-9]+ файлов' | grep -oE '[0-9]+')
+usage_cm=$(grep -oE 'run_tests\.sh common[^#]*#[^)]*[0-9]+ файлов' "$README_F" | grep -oE '[0-9]+ файлов' | grep -oE '[0-9]+')
 assert_eq "README (примеры): ffmpeg-файлов = runner" "$n_ff" "${usage_ff:-НЕ_НАЙДЕНО}"
 assert_eq "README (примеры): yt-dlp-файлов = runner" "$n_yt" "${usage_yt:-НЕ_НАЙДЕНО}"
 assert_eq "README (примеры): common-файлов = runner" "$n_cm" "${usage_cm:-НЕ_НАЙДЕНО}"
+
+# Числа ТЕСТОВ (в отличие от числа файлов) не сверяет никто и сверить статически нечем:
+# итог зависит от платформы — без CMD/PowerShell suite'ы пропускаются целиком, и один
+# `skip` заменяет десятки assert'ов. Поэтому контракт такой: конкретных чисел тестов в
+# документах нет вовсе, источник истины — вывод раннера. Раньше README трижды, TESTING
+# и CLAUDE.md повторяли «1479/617/454/408», и эти числа устаревали при каждом новом
+# assert — ровно тот дефект, ради которого писалась проверка числа файлов выше.
+_stale_counts=""
+for _d in "$README_F" "$TESTING_F" "$PROJECT_DIR/CLAUDE.md"; do
+    [ -f "$_d" ] || continue
+    _hit=$(grep -oiE '[0-9]{3,}[[:space:]]+(тест|test)[a-zа-я]*' "$_d" | head -1)
+    [ -n "$_hit" ] && _stale_counts="$_stale_counts $(basename "$_d"):$_hit"
+done
+assert_empty "в документах нет захардкоженных чисел тестов (источник — раннер)" "$_stale_counts"
 
 readme_txt="$(cat "$README_F")"
 
@@ -339,6 +355,52 @@ done
 # Доктрина инлайн-копий вычищена: TESTING больше не учит копировать production-функции
 # в тест — это прямо запрещено guardrail'ом выше.
 assert_not_contains "TESTING не рекомендует копировать функции в тест" "функции копируются прямо в тест-файл" "$(cat "$TESTING_F")"
+
+# ══════════════════════════════════════════════════════════════
+suite "PowerShell: Test-Path/Get-Content по пути только с -LiteralPath"
+# ══════════════════════════════════════════════════════════════
+# Класс дефекта разобран в wiki (solution-literalpath-square-brackets) и закрыт тестом
+# test_17, но фикс применялся точечно. Позиционный -Path глоббит: каталог установки с
+# [ ] ? * (типично для распакованных архивов — video[1], Downloads[2]) трактуется как
+# маска, Test-Path возвращает $false на существующем файле. Последствия по месту:
+# портативный yt-dlp.exe/ffmpeg.exe «не находится» и подменяется голым именем из PATH,
+# run_v16.ps1 печатает «не найден script.ps1» при существующем файле.
+# Контракт: в продуктовых .ps1 у Test-Path всегда -LiteralPath (вендоренный ps2exe.ps1
+# исключён — сторонний код со своим стилем).
+_np_hits=""
+while IFS= read -r _f; do
+    case "$(basename "$_f")" in ps2exe.ps1) continue ;; esac
+    # Ловим `Test-Path $var` / `Test-Path "..."` без -LiteralPath сразу после команды.
+    # Комментарии режем: строки вида «# Test-Path ниже дал бы ложный SUCCESS»
+    # описывают ровно этот класс дефекта и не являются вызовом.
+    _h=$(sed 's/#.*//' "$_f" | grep -nE 'Test-Path[[:space:]]+[^-]' | head -1)
+    [ -n "$_h" ] && _np_hits="$_np_hits $(basename "$_f"):${_h%%:*}"
+done < <(find "$PROJECT_DIR/ffmpeg" "$PROJECT_DIR/yt-dlp" "$PROJECT_DIR/tools" -name '*.ps1' 2>/dev/null)
+assert_empty "нет Test-Path без -LiteralPath в продуктовых .ps1" "$_np_hits"
+
+# ══════════════════════════════════════════════════════════════
+suite "yt-dlp SH: ffmpeg-мерж перевода с -nostdin"
+# ══════════════════════════════════════════════════════════════
+# Цикл перевода читает список медиафайлов со СВОЕГО stdin (< <(sort -u "$dl_manifest")),
+# а ffmpeg без -nostdin входит в transcode-режим и вычитывает stdin — остаток манифеста
+# съедался, и второй/третий файл молча оставался без перевода. Тот же инвариант уже
+# закреплён для главного вызова ffmpeg в ffmpeg/test_05_filters.sh.
+n_merge=$(printf '%s\n' "$ysh" | grep -cF -- '"$FFMPEG" -nostdin -y -i "$video_file"')
+assert_eq "все три ветки мержа (dual_track/replace/mix) с -nostdin" "3" "$n_merge"
+assert_not_contains "нет вызова мержа без -nostdin" '"$FFMPEG" -y -i "$video_file"' "$ysh"
+
+# ══════════════════════════════════════════════════════════════
+suite "ffmpeg CMD: пути в PowerShell-однострочники только через окружение"
+# ══════════════════════════════════════════════════════════════
+# Путь с апострофом (D:\it's video) рвал PS-строку при текстовой подстановке
+# ($src='%folder_sources%'): в лучшем случае синтаксическая ошибка и пустой результат,
+# в общем случае — исполнение произвольного PowerShell из значения config.ini.
+# Комментарии (rem/::) исключаем: они цитируют старый паттерн, объясняя дефект.
+ffcmd_code="$(grep -viE '^[[:space:]]*(rem|::)' "$FF_CMD")"
+assert_not_contains "нет \$src='%folder_sources%' (текстовая подстановка)" "\$src='%folder_sources%'" "$ffcmd_code"
+assert_not_contains "нет -LiteralPath '%folder_sources%'"                  "-LiteralPath '%folder_sources%'" "$ffcmd_code"
+assert_contains "пути уходят через \$env:FFCONV_SRC"                      '$env:FFCONV_SRC' "$ffcmd_code"
+assert_contains "проверка доступности PowerShell (_ps_ok)"                'set "_ps_ok=1"'  "$ffcmd_code"
 
 # ══════════════════════════════════════════════════════════════
 suite "release helper: явный Git-bash + STRICT_SKIP (не WSL, не partial)"

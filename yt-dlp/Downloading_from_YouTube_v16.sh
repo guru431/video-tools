@@ -562,9 +562,15 @@ translate_audio() {
     # F4: сохраняем субтитры (0:s?) и вложения/шрифты (0:t?) исходника — иначе
     # встроенные субтитры (download_with_video=embed) исчезают после мержа перевода.
     # ? делает map необязательным: если потоков нет, ffmpeg не падает.
+    #
+    # -nostdin обязателен во ВСЕХ трёх ветках: translate_audio вызывается из цикла
+    # `while read -r media … done < <(sort -u "$dl_manifest")`, то есть stdin цикла —
+    # это сам список медиафайлов. ffmpeg без -nostdin входит в transcode-режим и
+    # вычитывает stdin: остаток манифеста съедался, и второй/третий файл молча
+    # оставался без перевода (при обещании «перевод на КАЖДЫЙ созданный файл»).
     case "$mode" in
         dual_track)
-            "$FFMPEG" -y -i "$video_file" -i "$translation_file" \
+            "$FFMPEG" -nostdin -y -i "$video_file" -i "$translation_file" \
                 -map 0:v -map 0:a -map 1:a -map 0:s? -map 0:t? \
                 -c:v copy -c:a copy -c:a:$orig_a_count "$a_codec" -b:a:$orig_a_count 192k -c:s copy \
                 -metadata:s:a:0 language="$orig_lang" -metadata:s:a:0 title="Original" \
@@ -574,14 +580,14 @@ translate_audio() {
                 "$output_file" 2>/dev/null
             ;;
         replace)
-            "$FFMPEG" -y -i "$video_file" -i "$translation_file" \
+            "$FFMPEG" -nostdin -y -i "$video_file" -i "$translation_file" \
                 -map 0:v -map 1:a -map 0:s? -map 0:t? \
                 -c:v copy -c:a "$a_codec" -b:a 192k -c:s copy \
                 -metadata:s:a:0 language="$target_lang" -metadata:s:a:0 title="AI Translation" \
                 "$output_file" 2>/dev/null
             ;;
         mix)
-            "$FFMPEG" -y -i "$video_file" -i "$translation_file" \
+            "$FFMPEG" -nostdin -y -i "$video_file" -i "$translation_file" \
                 -filter_complex "[0:a]volume=${orig_vol}[a0];[1:a]volume=${trans_vol}[a1];[a0][a1]amix=inputs=2:duration=longest:normalize=0[aout]" \
                 -map 0:v -map "[aout]" -map 0:s? -map 0:t? \
                 -c:v copy -c:a "$a_codec" -b:a 192k -c:s copy \

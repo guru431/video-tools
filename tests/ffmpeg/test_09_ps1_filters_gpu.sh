@@ -335,10 +335,11 @@ suite "PS1 script.ps1: фиксы Task 6 (copy_codecs ext, Duration N/A)"
 # ══════════════════════════════════════════════════════════════
 # copy_codecs: current_format_out из источника ДО existence-check (Test-Path)
 cc_ln=$(grep -nF '$current_format_out = $file.Extension.TrimStart' "$SCRIPT_PS1" | head -1 | cut -d: -f1)
-# Локатор не привязан к параметрам Test-Path: раньше искалась точная строка
-# `Test-Path "$out_base..."`, и добавление -LiteralPath (F1) обнулило поиск —
-# инвариант порядка остался верным, а тест «падал» на своей же формулировке.
-chk_ln=$(grep -nE 'Test-Path .*\$out_base\.\$current_format_out' "$SCRIPT_PS1" | head -1 | cut -d: -f1)
+# Локатор не привязан ни к параметрам Test-Path, ни к точному составу имени выхода:
+# раньше искалась строка `Test-Path "$out_base..."`, и добавление -LiteralPath (F1)
+# обнулило поиск; затем в имя вошёл `$part_suffix_known` — и снова обнулило. Оба раза
+# инвариант порядка оставался верным, а тест «падал» на своей же формулировке.
+chk_ln=$(grep -nE 'Test-Path .*\$out_base.*\$current_format_out' "$SCRIPT_PS1" | head -1 | cut -d: -f1)
 order="bad"; [ -n "$cc_ln" ] && [ -n "$chk_ln" ] && [ "$cc_ln" -lt "$chk_ln" ] && order="ok"
 assert_eq "copy_codecs ext вычислен ДО existence-check"  "ok"  "$order"
 # Duration N/A → $num = @(0) fallback

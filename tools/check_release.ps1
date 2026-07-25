@@ -17,7 +17,7 @@ $exes = @(
     @{ Path = 'ffmpeg/_VideoConverter_v16.exe';  Source = 'ffmpeg/FFmpeg_Converter_run_win_v16.ps1' },
     @{ Path = 'yt-dlp/_VideoDownloader_v16.exe'; Source = 'yt-dlp/Downloading_from_YouTube_v16.ps1' }
 )
-function Get-Sha256([string]$p) { (Get-FileHash -Algorithm SHA256 $p).Hash }
+function Get-Sha256([string]$p) { (Get-FileHash -Algorithm SHA256 -LiteralPath $p).Hash }
 
 # Явно находит bash из Git for Windows. Голый `& bash` на Windows с установленным WSL
 # резолвится в System32\bash.exe (WSL) — другое окружение: пути не транслируются, а
@@ -34,7 +34,7 @@ function Resolve-GitBash {
     }
     $cands += 'C:\Program Files\Git\bin\bash.exe'
     $cands += 'C:\Program Files (x86)\Git\bin\bash.exe'
-    foreach ($c in $cands) { if ($c -and (Test-Path $c)) { return $c } }
+    foreach ($c in $cands) { if ($c -and (Test-Path -LiteralPath $c)) { return $c } }
     return $null
 }
 
@@ -74,11 +74,11 @@ try {
     $artifacts = @()
     foreach ($e in $exes) {
         $full = Join-Path $root $e.Path
-        if (-not (Test-Path $full)) { throw "не найден артефакт: $($e.Path)" }
+        if (-not (Test-Path -LiteralPath $full)) { throw "не найден артефакт: $($e.Path)" }
         $sha = Get-Sha256 $full
         $sc = "$full.sha256"
-        if (Test-Path $sc) {
-            $want = ((Get-Content $sc -Raw) -split '\s+')[0]
+        if (Test-Path -LiteralPath $sc) {
+            $want = ((Get-Content -LiteralPath $sc -Raw) -split '\s+')[0]
             if ($want.ToUpper() -ne $sha.ToUpper()) {
                 throw "sidecar не совпадает для $($e.Path): sidecar=$want факт=$sha"
             }

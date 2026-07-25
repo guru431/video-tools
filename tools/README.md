@@ -19,10 +19,10 @@ used by `ffmpeg/build_exe.ps1` and `yt-dlp/build_exe.ps1` to compile the PS1 GUI
 
 - **Source:** `https://raw.githubusercontent.com/MScholtes/PS2EXE/<commit>/Module/ps2exe.ps1`
 - **Upstream base commit:** `d32d5ce21c458696e860a7533943b1466d925be9` (2025-08-21)
-- **SHA256 (vendored, patched artifact):** `45FDF8446FF7DE578B003FD62015B2CDFCE9EC56840249186396A26DCF856311`
+- **SHA256 (vendored, patched artifact):** `E180C1264C131CAEDDFA37130A2F0EB826A3FFCA701B808DA3337689721FF45A`
 
-The vendored file is the upstream base commit **plus a local patch** (escaping quotes in the
-generated assembly metadata) — so its SHA256 does **not** match the raw upstream file; the hash
+The vendored file is the upstream base commit **plus a local patch** (escaping `\`, `"` and real
+CR/LF/TAB in the generated assembly metadata, so no value can break out of a C# string literal) — so its SHA256 does **not** match the raw upstream file; the hash
 above is of the patched artifact actually shipped in this repo, while the commit identifies the
 upstream base it was derived from.
 
@@ -38,6 +38,6 @@ dot-source it. The values quoted here **mirror** that file for documentation —
 ### Updating
 
 1. Download the new version from a specific commit/tag (not `master`).
-2. Review the diff; re-apply the local metadata-quote patch if still needed.
+2. Review the diff; re-apply the local metadata-escaping patch if still needed.
 3. Update the pin in `tools/_build_common.ps1` (`$script:Ps2ExeSha` / `$script:Ps2ExeCommit`) —
    the canonical source — then refresh the mirrored values in this README.

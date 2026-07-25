@@ -387,6 +387,16 @@ $checkKeepAspect.Text = "Сохранять пропорции"
 $checkKeepAspect.Checked = ($_cfg_keep_aspect.enabled -and $_cfg_keep_aspect.value -eq "yes")
 $_go.Add($checkKeepAspect)
 
+# overwrite_existing раньше не имел контрола: значение читалось из config.ini и молча
+# уходило в runspace. Пользователь GUI не видел его состояния и не мог перекодировать
+# файл с новыми настройками — готовый выход просто пропускался без объяснения причины.
+$checkOverwrite = [System.Windows.Forms.CheckBox]::new()
+$checkOverwrite.Location = [System.Drawing.Point]::new(575, 62)
+$checkOverwrite.Size = [System.Drawing.Size]::new(190, 20)
+$checkOverwrite.Text = "Перезаписывать существующие"
+$checkOverwrite.Checked = ($_cfg_overwrite_existing -eq "yes")
+$_go.Add($checkOverwrite)
+
 # Row 4: GPU Acceleration
 $labelHWAccelOpt = [System.Windows.Forms.Label]::new()
 $labelHWAccelOpt.Location = [System.Drawing.Point]::new(8, 86)
@@ -940,7 +950,7 @@ $_gsp.Add($textSpeed)
 $labelSpeedInfo = [System.Windows.Forms.Label]::new()
 $labelSpeedInfo.Location = [System.Drawing.Point]::new(158, 16)
 $labelSpeedInfo.Size = [System.Drawing.Size]::new(600, 16)
-$labelSpeedInfo.Text = "1.0 = норм, 2.0 = ускорение x2, 0.5 = замедление x2 (диапазон: 0.25 - 4.0)"
+$labelSpeedInfo.Text = "1.0 = норм, 2.0 = ускорение x2, 0.5 = замедление x2 (диапазон: больше 0 и не больше 100)"
 $labelSpeedInfo.Font = [System.Drawing.Font]::new($labelSpeedInfo.Font.FontFamily, 8, [System.Drawing.FontStyle]::Italic)
 $_gsp.Add($labelSpeedInfo)
 
@@ -1222,8 +1232,10 @@ $buttonRun.Add_Click({
     $script:enable_log          = if ($checkLog.Checked)         { "yes" } else { "no" }
     $script:log_file            = $_cfg_log_file
     $script:extract_audio_copy  = if ($checkExtractAudioCopy.Checked) { "yes" } else { "no" }
-    # overwrite_existing — без отдельного контрола: берём значение из config.ini (F7).
-    $script:overwrite_existing  = $_cfg_overwrite_existing
+    # overwrite_existing — из чекбокса «Перезаписывать существующие» (начальное
+    # значение он берёт из config.ini). Раньше контрола не было вовсе, и переключить
+    # поведение можно было только правкой config.ini.
+    $script:overwrite_existing  = if ($checkOverwrite.Checked)   { "yes" } else { "no" }
 
     # Audio settings
     $script:audio_codec          = if ($checkAudioCodec.Checked)      { ":+:$($comboAudioCodec.Text)" }    else { ":-:$($comboAudioCodec.Text)" }
@@ -1285,7 +1297,11 @@ $buttonRun.Add_Click({
     elseif ($checkFrameRate.Checked       -and $textFrameRate.Text       -notmatch '^\d+(\.\d+)?$')    { $numErr = "Кадры/с должны быть числом" }
     elseif ($checkVideoBitrate.Checked    -and $textVideoBitrate.Text    -notmatch '^\d+$')            { $numErr = "Видео битрейт должен быть целым числом (кбит/с)" }
     elseif ($checkVideoQuality.Checked    -and (($textVideoQuality.Text  -notmatch '^\d+$') -or ([int]$textVideoQuality.Text -gt 51))) { $numErr = "Качество (CRF/CQ) должно быть целым 0-51" }
-    elseif ($checkSpeed.Checked           -and (($textSpeed.Text -notmatch '^\d+(\.\d+)?$') -or ([double]$textSpeed.Text -lt 0.25) -or ([double]$textSpeed.Text -gt 4.0))) { $numErr = "Скорость должна быть 0.25 - 4.0 (точка как разделитель)" }
+    # Диапазон скорости — тот же, что у скрипта (0 < v <= 100, F15): каскад atempo
+    # написан под произвольные значения, а 100 — предел одного звена. Прежние 0.25-4.0
+    # были уже́е скриптовых: один и тот же config.ini CLI принимал, а GUI отвергал,
+    # причём диапазон не был назван нигде, кроме текста самой ошибки.
+    elseif ($checkSpeed.Checked           -and (($textSpeed.Text -notmatch '^\d+(\.\d+)?$') -or ([double]$textSpeed.Text -le 0) -or ([double]$textSpeed.Text -gt 100))) { $numErr = "Скорость должна быть больше 0 и не больше 100 (точка как разделитель)" }
     elseif ($checkSplitSilence.Checked    -and $textSilenceDuration.Text -notmatch '^\d+(\.\d+)?$')    { $numErr = "Мин. тишина должна быть числом (секунды)" }
     if ($numErr) {
         [System.Windows.Forms.MessageBox]::Show($numErr, "Проверка настроек", "OK", "Warning") | Out-Null
@@ -1486,7 +1502,7 @@ $buttonRun.Add_Click({
 
         # Читаем прогресс из JSON-файла
         try {
-            if ($global:_guiProgress -and (Test-Path $global:_guiProgress)) {
+            if ($global:_guiProgress -and (Test-Path -LiteralPath $global:_guiProgress)) {
                 $json = [System.IO.File]::ReadAllText($global:_guiProgress) | ConvertFrom-Json
                 $progressBarFile.Value  = [Math]::Min($json.filePercent,  100)
                 $progressBarTotal.Value = [Math]::Min($json.totalPercent, 100)

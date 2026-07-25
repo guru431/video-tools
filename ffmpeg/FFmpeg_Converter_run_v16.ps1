@@ -8,28 +8,45 @@ $configFile = Join-Path $PSScriptRoot "config.ini"
 $ffmpeg = if (Test-Path -LiteralPath "$PSScriptRoot\ffmpeg.exe") { "$PSScriptRoot\ffmpeg.exe" } else { "ffmpeg" }
 
 # --- Чтение config.ini ---
+# Файл разбирается ОДИН раз в хеш-таблицу «Секция::Ключ». Раньше каждый из ~30
+# вызовов Read-Config заново открывал config.ini и шёл по нему построчно —
+# 30-кратный I/O на старте (заметно, если конфиг лежит на сетевом диске).
+# Кэш привязан к пути: смена $configFile (так делают тесты) читает файл заново.
+# Хеш-таблица PowerShell регистронезависима — паритет с прежними `-eq`/`-match`,
+# которые тоже игнорировали регистр секции и ключа. Первое вхождение ключа
+# выигрывает: прежняя версия возвращалась на первом совпадении.
+$script:_cfgCache     = @{}
+$script:_cfgCacheFile = $null
 function Read-Config {
 	param([string]$Key, [string]$Section, [string]$Default = "")
-	if (-not (Test-Path -LiteralPath $configFile)) { return $Default }
-	$inSection = $false
-	foreach ($line in (Get-Content -LiteralPath $configFile -Encoding UTF8)) {
-		$line = $line.Trim()
-		if ([string]::IsNullOrEmpty($line) -or $line.StartsWith("#")) { continue }
-		if ($line -match '^\[([^\]]+)\]$') {
-			$inSection = ($Matches[1] -eq $Section)
-			continue
-		}
-		if ($inSection -and $line -match "^${Key}\s*=\s*(.*)") {
-			$val = $Matches[1] -replace '\s+#.*', ''
-			# Подстановка ${ENV_VAR} из окружения (паритет с yt-dlp). Не задана → пусто + WARN.
-			$val = [regex]::Replace($val, '\$\{(\w+)\}', {
-				param($m)
-				$ev = [Environment]::GetEnvironmentVariable($m.Groups[1].Value)
-				if ([string]::IsNullOrEmpty($ev)) { Write-Host "WARN: переменная $($m.Groups[1].Value) не задана"; "" } else { $ev }
-			})
-			return $val.Trim()
+	if ($script:_cfgCacheFile -ne $configFile) {
+		$script:_cfgCache     = @{}
+		$script:_cfgCacheFile = $configFile
+		if ($configFile -and (Test-Path -LiteralPath $configFile)) {
+			$curSection = ""
+			foreach ($line in (Get-Content -LiteralPath $configFile -Encoding UTF8)) {
+				$line = $line.Trim()
+				if ([string]::IsNullOrEmpty($line) -or $line.StartsWith("#")) { continue }
+				if ($line -match '^\[([^\]]+)\]$') {
+					$curSection = $Matches[1]
+					continue
+				}
+				if ($curSection -and $line -match '^([^=]+?)\s*=\s*(.*)') {
+					$val = $Matches[2] -replace '\s+#.*', ''
+					# Подстановка ${ENV_VAR} из окружения (паритет с yt-dlp). Не задана → пусто + WARN.
+					$val = [regex]::Replace($val, '\$\{(\w+)\}', {
+						param($m)
+						$ev = [Environment]::GetEnvironmentVariable($m.Groups[1].Value)
+						if ([string]::IsNullOrEmpty($ev)) { Write-Host "WARN: переменная $($m.Groups[1].Value) не задана"; "" } else { $ev }
+					})
+					$_k = "${curSection}::$($Matches[1].Trim())"
+					if (-not $script:_cfgCache.ContainsKey($_k)) { $script:_cfgCache[$_k] = $val.Trim() }
+				}
+			}
 		}
 	}
+	$_key = "${Section}::${Key}"
+	if ($script:_cfgCache.ContainsKey($_key)) { return $script:_cfgCache[$_key] }
 	return $Default
 }
 
@@ -118,7 +135,9 @@ if (-not [System.IO.Path]::IsPathRooted($log_file)) { $log_file = Join-Path $PSS
 # оригиналом, а тест паритета SH↔PS1 и вовсе сравнивал копию с копией.
 if ($env:FFCONV_TEST -ne '1') {
 	$scriptPath = Join-Path $PSScriptRoot "FFmpeg_Converter_script.ps1"
-	if (-not (Test-Path $scriptPath)) {
+	# -LiteralPath: каталог установки с [ ] ? * (video[1] после распаковки архива)
+	# иначе трактуется как wildcard — «не найден» при существующем файле.
+	if (-not (Test-Path -LiteralPath $scriptPath)) {
 		Write-Error "Ошибка: не найден FFmpeg_Converter_script.ps1 рядом с этим файлом."
 		exit 1
 	}

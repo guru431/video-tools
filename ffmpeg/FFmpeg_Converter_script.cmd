@@ -7,6 +7,17 @@ rem Известное ограничение: имена файлов с ! по
 rem символы % и ^ после call также могут искажаться. Для таких имён — SH/PS1.
 rem ============================================================
 
+rem --- F-path. Нормализация корневых путей ---
+rem Хвостовой разделитель в [folders] source/destination — обычный пользовательский
+rem ввод, но относительный путь подпапки считается ВЫЧИТАНИЕМ строки folder_sources
+rem из каталога файла (set "file_path=!file_path:%folder_sources%=!"). Лишний '\'
+rem съедал ведущий разделитель, и склейка давала "...\outsub\movie.mp4" вместо
+rem "...\out\sub\movie.mp4" — каталог молча создавался, файлы уезжали мимо destination.
+rem Заодно приводим '/' к '\': config.ini один на три платформы, а форма с прямыми
+rem слэшами валидна для .sh. Корень диска ("C:\") не трогаем.
+call :norm_folder folder_sources
+call :norm_folder folder_destination
+
 rem --- E1. Проверка окружения ---
 if not exist "%folder_sources%\" (
 	echo.
@@ -106,6 +117,15 @@ if "!start_coding_status!"=="+" (
 ) else (
 	set "set_start_coding="
 )
+
+rem Суффикс " (part.N)", известный ЗАРАНЕЕ. При [split] start с ненулевым значением
+rem часть всегда одна, и суффикс " (part.1)" добавляется гарантированно — значит имя
+rem выхода отличается от входа, и проверка «выход == вход» ниже обязана сверять имя
+rem С суффиксом. Иначе при in-place конвертации (destination == source) каждый файл
+rem получал ложный FAIL. Для [split] length число частей заранее неизвестно (нужна
+rem длительность), там проверка остаётся консервативной — см. её комментарий.
+set "part_suffix_known="
+if "!start_coding_status!"=="+" if not "!start_coding_value!"=="0" set "part_suffix_known= (part.1)"
 
 for /f "tokens=1,2 delims=:" %%a in ("%length_coding%") do (set "length_coding_status=%%a" & set "length_coding_value=%%b")
 if "!length_coding_status!"=="+" (
@@ -338,6 +358,30 @@ if defined _active_modes (
 	)
 )
 
+rem --- Зависимость от PowerShell (задокументирована в CLAUDE.md) ---
+rem Три участка .cmd-платформы требуют PowerShell: карта коллизий ниже, выбор имени
+rem цели в merge-ветке и сортировка concat-списка. Своих хеш-таблиц и надёжной
+rem сортировки путей у CMD нет. Проверяем доступность ОДИН раз, чтобы отличать
+rem «PowerShell недоступен» от «файлов нет» (раньше merge печатал «Нет файлов для
+rem объединения» — сообщение, прямо противоречащее реальности).
+set "_ps_ok="
+powershell -NoProfile -Command "exit 0" >nul 2>&1
+if not errorlevel 1 set "_ps_ok=1"
+
+rem Пути и значения config.ini уходят в PowerShell-однострочники. Раньше они
+rem подставлялись ТЕКСТОМ внутри одинарных кавычек ($src='%folder_sources%'), поэтому
+rem путь с апострофом (D:\it's video) рвал PS-строку: в лучшем случае синтаксическая
+rem ошибка и пустой результат, в общем случае — исполнение произвольного PowerShell из
+rem значения config.ini. Передаём через переменные окружения: PowerShell читает их как
+rem данные, разбора кавычек не происходит вовсе.
+set "FFCONV_SRC=%folder_sources%"
+set "FFCONV_DST=%folder_destination%"
+set "FFCONV_EXTS=%format_files_in%"
+set "FFCONV_FMT_OUT=%format_files_out%"
+set "FFCONV_SAVE_OLD=%save_old_extension%"
+set "FFCONV_COPY_CODECS=%copy_codecs%"
+set "FFCONV_PART_SUFFIX=%part_suffix_known%"
+
 rem F-collision-map. Два РАЗНЫХ входа могут претендовать на ОДИН выход: при
 rem save_old_extension=no имена movie.avi и movie.mp4 оба дают movie.mp4. Раньше это
 rem обнаруживалось только по факту — второй файл молча затирал результат первого.
@@ -352,7 +396,11 @@ rem frame (выход — каталог) сюда не попадают: там
 set "_col_file="
 if not "%merge_files%"=="yes" if not "%extract_audio_copy%"=="yes" if not "%create_frame%"=="yes" (
 	set "_col_file=%TEMP%\ffconv_col_%RANDOM%%RANDOM%.txt"
-	powershell -NoProfile -Command "$e='%format_files_in%'.Split(','); $src='%folder_sources%'; $dst='%folder_destination%'; Get-ChildItem -LiteralPath $src -Recurse -File | Where-Object { $e -contains $_.Extension.TrimStart('.') } | ForEach-Object { $dir = ($_.DirectoryName + '\') -replace [regex]::Escape($src), ''; $n = if ('%save_old_extension%' -eq 'yes') { $_.Name } else { $_.BaseName }; $f = if ('%copy_codecs%' -eq 'yes') { $_.Extension.TrimStart('.') } else { '%format_files_out%' }; [System.IO.Path]::GetFullPath(\"$dst$dir$n.$f\").ToLowerInvariant() } | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name }" > "!_col_file!" 2>nul
+	rem ВАЖНО: между парой \" CMD считает текст ВНЕ кавычек (он видит только сами "),
+	rem поэтому любые ( ) в этом участке закрыли бы скобочный блок и дали
+	rem «was unexpected at this time». Суффикс кладём в простую переменную $sfx —
+	rem подстановка $(...) внутри \"...\" здесь недопустима.
+	powershell -NoProfile -Command "$e=$env:FFCONV_EXTS.Split(','); $src=$env:FFCONV_SRC; $dst=$env:FFCONV_DST; $sfx=$env:FFCONV_PART_SUFFIX; Get-ChildItem -LiteralPath $src -Recurse -File | Where-Object { $e -contains $_.Extension.TrimStart('.') -and -not $_.Name.StartsWith('.ffconv-partial-') } | ForEach-Object { $dir = ($_.DirectoryName + '\') -replace [regex]::Escape($src), ''; $n = if ($env:FFCONV_SAVE_OLD -eq 'yes') { $_.Name } else { $_.BaseName }; $f = if ($env:FFCONV_COPY_CODECS -eq 'yes') { $_.Extension.TrimStart('.') } else { $env:FFCONV_FMT_OUT }; [System.IO.Path]::GetFullPath(\"$dst$dir$n$sfx.$f\").ToLowerInvariant() } | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name }" > "!_col_file!" 2>nul
 	if not exist "!_col_file!" (
 		rem PowerShell недоступен — карту построить нечем. Явно говорим об этом, а не
 		rem делаем вид, что конфликтов нет.
@@ -371,9 +419,16 @@ if not "%merge_files%"=="yes" if not "%extract_audio_copy%"=="yes" if not "%crea
 rem --- Основная логика ---
 if "%merge_files%"=="yes" (
 	rem F10. Имя выхода — по сортированному списку (паритет с .sh sort -z), а не по порядку обхода FS.
-	for /f "delims=" %%f in ('powershell -NoProfile -Command "$e='%format_files_in%'.Split(','); Get-ChildItem -LiteralPath '%folder_sources%' -Recurse -File ^| Where-Object { $e -contains $_.Extension.TrimStart('.') } ^| Sort-Object FullName ^| Select-Object -First 1 -ExpandProperty Name" 2^>nul') do set "fname=%%f"
+	for /f "delims=" %%f in ('powershell -NoProfile -Command "$e=$env:FFCONV_EXTS.Split(','); Get-ChildItem -LiteralPath $env:FFCONV_SRC -Recurse -File ^| Where-Object { $e -contains $_.Extension.TrimStart('.') -and -not $_.Name.StartsWith('.ffconv-partial-') } ^| Sort-Object FullName ^| Select-Object -First 1 -ExpandProperty Name" 2^>nul') do set "fname=%%f"
 	if not defined fname (
-		echo [WARN] Нет файлов для объединения в "%folder_sources%"
+		rem Два разных случая, и раньше они путались: без PowerShell имя цели вычислить
+		rem нечем, а печаталось «Нет файлов для объединения» — прямая ложь о состоянии FS.
+		if not defined _ps_ok (
+			echo [FAIL] Объединение невозможно: недоступен PowerShell ^(нужен для выбора имени цели и сортировки concat-списка^)& call :log_msg "FAIL" "Объединение невозможно: недоступен PowerShell"
+			set /a "total_fail+=1"
+		) else (
+			echo [WARN] Нет файлов для объединения в "%folder_sources%"
+		)
 	) else (
 		rem F7. overwrite_existing=yes → сливаем даже при существующем выходе.
 		set "_do_merge="
@@ -384,7 +439,13 @@ if "%merge_files%"=="yes" (
 			rem Шаг 1: сырые пути в UTF-16 (Unicode-имена). Шаг 2: PowerShell оборачивает в
 			rem concat-формат и экранирует апостроф в имени (паритет с .sh/.ps1).
 			cmd /u /c "(for /r "%folder_sources%" %%a in (%format_files_in_pattern%) do @echo %%a)" > "!full_path!.u16"
-			powershell -NoProfile "[System.IO.File]::WriteAllLines('!full_path!', @((Get-Content -Encoding unicode '!full_path!.u16') | Sort-Object | ForEach-Object { 'file ''' + ($_ -replace '''','''\''''') + '''' }))"
+			rem Пути temp-файлов тоже уходят через окружение: %TEMP% содержит имя
+			rem пользователя, а апостроф в нём (C:\Users\<user>'s name\...) рвал PS-строку.
+			rem Здесь же отсекаются каталоги вида "season.mp4" (for /r перечисляет и их —
+			rem паритет с -type f в SH) и недобитые .ffconv-partial-* прошлого прогона.
+			set "FFCONV_CONCAT=!full_path!"
+			set "FFCONV_CONCAT_U16=!full_path!.u16"
+			powershell -NoProfile "[System.IO.File]::WriteAllLines($env:FFCONV_CONCAT, @((Get-Content -Encoding unicode -LiteralPath $env:FFCONV_CONCAT_U16) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) -and -not ([System.IO.Path]::GetFileName($_)).StartsWith('.ffconv-partial-') } | Sort-Object | ForEach-Object { 'file ''' + ($_ -replace '''','''\''''') + '''' }))"
 			rem Мержим в соседний temp, а не сразу поверх цели. Прежний вызов шёл без -y на
 			rem существующий файл: ffmpeg спрашивал «File exists. Overwrite? [y/N]» и висел,
 			rem ожидая stdin, которого в batch/GUI нет. А упавший мерж оставлял partial под
@@ -459,6 +520,14 @@ rem Тело вынесено из блока for: label внутри скобо
 rem а goto из тела for обрывал бы перечисление файлов. Счётчики total_* общие.
 :process_file
 		set "full_path=!pf_full!"
+		rem Каталог, чьё имя оканчивается на расширение из format_files_in ("season.mp4"),
+		rem попадает в перечисление for /r наравне с файлами: ffmpeg падал на нём лишним
+		rem FAIL, а его «выход» — обычный файл — занимал имя, под которым должен быть
+		rem создан каталог зеркала. Паритет с -type f (SH) и Get-ChildItem -File (PS1).
+		if exist "!full_path!\" exit /b
+		rem Недобитый temp прерванного прогона подпадает под маску *.mp4 и в in-place
+		rem режиме (destination == source) становился входом следующего запуска.
+		if /i "!pf_nx:~0,16!"==".ffconv-partial-" exit /b
 		rem F-collision. Файл внутри каталога назначения — наш собственный выход
 		rem (dest строго внутри source). Пропускаем, иначе перекодируем по кругу.
 		if defined dest_inside_source (
@@ -483,7 +552,10 @@ rem а goto из тела for обрывал бы перечисление фа�
 
 		set "file_path=!file_path:%folder_sources%=!"
 		call set "file_path=!file_path:%%=%%%%!"
-		if not exist "%folder_destination%!file_path!" md "%folder_destination%!file_path!"
+		rem D7. Dry-run только печатает команды — каталоги зеркала не создаём. Иначе
+		rem «безопасный» прогон оставлял дерево пустых подпапок в destination (и маскировал
+		rem ошибки в самом пути: пользователь видел созданный каталог и считал путь верным).
+		if not "%dry_run%"=="yes" if not exist "%folder_destination%!file_path!" md "%folder_destination%!file_path!"
 
 		rem --- I. Извлечение аудио без перекодирования ---
 		if "%extract_audio_copy%"=="yes" (
@@ -569,11 +641,15 @@ rem а goto из тела for обрывал бы перечисление фа�
 		rem ниже готовый выход удаляется (overwrite_existing=yes — безусловно, ещё и при
 		rem dry_run; либо как «битый» после провала валидации), а при in==out этим файлом
 		rem оказался бы сам оригинал. %%~fI канонизирует путь; на Windows сверяем без регистра.
-		rem Разделения на части (part.N) коллизию снимают, поэтому сверяем базовое имя.
-		for %%I in ("%folder_destination%!file_path!!file_name!.!current_format_out!") do set "_canon_out=%%~fI"
+		rem Суффикс " (part.N)" коллизию снимает, поэтому заранее известный суффикс
+		rem (part_suffix_known — режим [split] start) в сравнение включён. При [split] length
+		rem число частей зависит от длительности и здесь ещё неизвестно, поэтому сверяем
+		rem базовое имя — сознательный консерватизм: лучше отклонить файл, чем закодировать
+		rem его поверх самого себя.
+		for %%I in ("%folder_destination%!file_path!!file_name!!part_suffix_known!.!current_format_out!") do set "_canon_out=%%~fI"
 		for %%I in ("!full_path!") do set "_canon_in=%%~fI"
 		if /i "!_canon_out!"=="!_canon_in!" (
-			echo [FAIL] !file_name!.!current_format_out!: выход совпадает с входом — файл пропущен& call :log_msg "FAIL" "!full_path!: выход совпадает с входом - файл пропущен (задайте другой destination, префикс или формат)"
+			echo [FAIL] !file_name!.!current_format_out!: выход совпадает с входом — файл пропущен& call :log_msg "FAIL" "!full_path!: выход совпадает с входом - файл пропущен (задайте другой destination, префикс или формат; при [split] length имя частей заранее неизвестно, поэтому in-place отклоняется)"
 			set /a "total_fail+=1"
 			goto :eof
 		)
@@ -600,7 +676,7 @@ rem а goto из тела for обрывал бы перечисление фа�
 
 		rem E3. Валидность существующего выхода (паритет с SH/PS1): битый файл удаляем,
 		rem чтобы перекодировать заново, а не пропустить как готовый.
-		set "_existing_out=%folder_destination%!file_path!!file_name!.!current_format_out!"
+		set "_existing_out=%folder_destination%!file_path!!file_name!!part_suffix_known!.!current_format_out!"
 		if exist "!_existing_out!" (
 			"%ffmpeg%" -v error -i "!_existing_out!" -f null - >nul 2>&1
 			if errorlevel 1 (
@@ -622,7 +698,7 @@ rem а goto из тела for обрывал бы перечисление фа�
 			goto :eof
 		)
 
-		if not exist "%folder_destination%!file_path!!file_name!.!current_format_out!" (
+		if not exist "%folder_destination%!file_path!!file_name!!part_suffix_known!.!current_format_out!" (
 				rem P3. Один вызов ffmpeg -i на файл — раньше было 2: bitrate + Duration.
 				rem ffmpeg печатает metadata в stderr → перенаправляем в файл, stdout → nul.
 				set "_ff_info_tmp=%temp%\ffinfo_!random!.txt"
@@ -889,6 +965,24 @@ echo.
 echo.
 pause
 if !total_fail! gtr 0 (exit /b 1)
+exit /b 0
+
+rem --- F-path. Нормализация пути-каталога: '/' -> '\', срез хвостовых '\' ---
+rem %1 = ИМЯ переменной (не значение): результат записывается обратно в неё.
+:norm_folder
+setlocal enabledelayedexpansion
+set "_nf=!%~1!"
+if not defined _nf goto :norm_folder_done
+set "_nf=!_nf:/=\!"
+:norm_folder_loop
+if "!_nf!"=="" goto :norm_folder_done
+if not "!_nf:~-1!"=="\" goto :norm_folder_done
+rem Корень диска "C:\" — разделитель значащий, срезать нельзя.
+if "!_nf:~1!"==":\" goto :norm_folder_done
+set "_nf=!_nf:~0,-1!"
+goto :norm_folder_loop
+:norm_folder_done
+endlocal & set "%~1=%_nf%"
 exit /b 0
 
 rem --- F33. Разрешение GPU-энкодера: сначала кандидат, потом ТОЧНАЯ проверка ---

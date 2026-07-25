@@ -6,3 +6,12 @@
 
 # Mock binaries have no extension; force LF so their shebangs work on Linux/WSL/CI
 tests/mocks/* text eol=lf
+
+# CMD batch files обязаны быть CRLF, и это правило стоит ПОСЛЕДНИМ — оно должно
+# перекрывать `tests/mocks/*` выше (тот glob написан для extension-less bash-моков,
+# но захватывал и tests/mocks/ffmpeg.cmd).
+# С LF-концами cmd.exe разбирает многострочные `( )`-блоки и goto-циклы неверно:
+# строки склеиваются, ссылки %1 раскрываются один раз, `shift` перестаёт двигать
+# аргументы — подпрограмма :find_out мока уходила в бесконечный цикл на 100% CPU
+# без дочерних процессов, и полный прогон вставал на test_16/test_17 намертво.
+*.cmd text eol=crlf

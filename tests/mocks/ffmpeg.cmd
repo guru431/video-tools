@@ -21,8 +21,10 @@ if not defined MOCK_FFMPEG_DURATION set "MOCK_FFMPEG_DURATION=00:01:00.00"
 if not defined MOCK_FFMPEG_BITRATE  set "MOCK_FFMPEG_BITRATE=2000"
 
 rem -encoders: список кодировщиков (скрипт грепает nvenc/qsv для выбора GPU-пути).
-echo %ARGS% | find "-encoders" >nul
-if not errorlevel 1 (
+rem Проверка подстрокой, а не `echo %ARGS% | find "-encoders"`: пайп порождает два
+rem дочерних cmd на КАЖДЫЙ вызов мока, а моков за прогон тысячи. Та же причина, по
+rem которой пайпы убраны из production-CMD (валидация URL, expand_env).
+if not "!ARGS:-encoders=!"=="!ARGS!" (
     echo Encoders:
     if /i "%MOCK_FFMPEG_ENCODERS%"=="nvenc" (
         echo  V....D h264_nvenc            NVIDIA NVENC H.264 encoder

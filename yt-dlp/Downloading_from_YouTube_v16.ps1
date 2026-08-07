@@ -16,6 +16,19 @@ $scriptDir = if ($MyInvocation.MyCommand.Path) {
 # $env:YTDLP_CONFIG — override пути config.ini (используют тесты); иначе рядом со скриптом.
 $configFile = if ($env:YTDLP_CONFIG) { $env:YTDLP_CONFIG } else { Join-Path $scriptDir "config.ini" }
 
+# F12b. У New-Item НЕТ -LiteralPath ни в одной версии PowerShell (у Test-Path есть, и
+# при правке F12 его дописали обеим командам разом) — вызов падает биндером параметров:
+# «Не удается найти параметр, соответствующий имени параметра "LiteralPath"». Ветка
+# создания срабатывает только когда каталога ещё нет, поэтому на машинах с уже созданной
+# папкой загрузок баг спал. Каталоги по пользовательским путям создаём через .NET, как в
+# ffmpeg-части (New-DirLiteral): GetUnresolvedProviderPathFromPSPath разворачивает
+# относительный путь по ТЕКУЩЕМУ $PWD провайдера и не трактует [ ] ? * как маску.
+function New-DirLiteral {
+    param([string]$Path)
+    [System.IO.Directory]::CreateDirectory(
+        $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)) | Out-Null
+}
+
 # ── Чтение config.ini (один раз в хеш-таблицу) ──────────────────────────
 $script:_configCache = @{}
 if (Test-Path -LiteralPath $configFile) {
@@ -1086,9 +1099,9 @@ $btnStart.Add_Click({
 
             $folder = $textBoxFolder.Text
             # F12. -LiteralPath: путь с [ ] ? * иначе трактуется как wildcard —
-            # Test-Path «не находит» существующий каталог, а New-Item целит не туда.
+            # Test-Path «не находит» существующий каталог, а создание целит не туда.
             if (-not (Test-Path -LiteralPath $folder)) {
-                New-Item -ItemType Directory -LiteralPath $folder -Force | Out-Null
+                New-DirLiteral $folder
             }
 
             # continue_on_error: true → -i (пропускать ошибки), false → --abort-on-error.
@@ -1422,7 +1435,7 @@ $btnStart.Add_Click({
 
                     if ($hasDeps) {
                         $tempDir = Join-Path $env:TEMP "yt-dlp-translate-$(Get-Random)"
-                        New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+                        New-DirLiteral $tempDir
 
                         # NODE_TLS_REJECT_UNAUTHORIZED=0 нужен только vot-cli-live (внутренний
                         # node.js процесс ходит к translate-сервису с самоподписанным сертификатом).

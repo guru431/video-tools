@@ -378,6 +378,21 @@ while IFS= read -r _f; do
 done < <(find "$PROJECT_DIR/ffmpeg" "$PROJECT_DIR/yt-dlp" "$PROJECT_DIR/tools" -name '*.ps1' 2>/dev/null)
 assert_empty "нет Test-Path без -LiteralPath в продуктовых .ps1" "$_np_hits"
 
+# Обратная сторона того же контракта. У Test-Path -LiteralPath есть, у New-Item — НЕТ
+# (ни в одной версии PowerShell). Точечная правка «дописать -LiteralPath рядом стоящим
+# командам» даёт ParameterBindingException прямо в рантайме: «Не удается найти параметр,
+# соответствующий имени параметра "LiteralPath"». Опаснее всего то, что ветка создания
+# каталога исполняется только когда его ещё нет — на машине с уже созданной папкой
+# загрузок баг невидим, на свежей установке GUI падает на первом же запуске.
+# Контракт: каталоги по пользовательским путям создаются через New-DirLiteral
+# ([IO.Directory]::CreateDirectory), New-Item в продуктовых .ps1 не используется вовсе.
+_ni_hits=""
+while IFS= read -r _f; do
+    _h=$(sed 's/#.*//' "$_f" | grep -nE 'New-Item' | head -1)
+    [ -n "$_h" ] && _ni_hits="$_ni_hits $(basename "$_f"):${_h%%:*}"
+done < <(find "$PROJECT_DIR/ffmpeg" "$PROJECT_DIR/yt-dlp" -name '*.ps1' 2>/dev/null)
+assert_empty "нет New-Item в продуктовых .ps1 (у него нет -LiteralPath)" "$_ni_hits"
+
 # ══════════════════════════════════════════════════════════════
 suite "yt-dlp SH: ffmpeg-мерж перевода с -nostdin"
 # ══════════════════════════════════════════════════════════════

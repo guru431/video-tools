@@ -62,6 +62,15 @@ assert_contains "Unregister-Event (утечка событий)"  "Unregister-Ev
 assert_contains "btnRemoveUrl дизейблится при загрузке"  '$btnRemoveUrl.Enabled = $false'  "$src"
 assert_contains "base_dir от scriptDir"  'Combine($scriptDir, $cfg_baseDir)'  "$src"
 
+# F12b. У New-Item нет -LiteralPath ни в одной версии PowerShell: правка F12 дописала
+# флаг обеим командам разом, и создание папки загрузок падало ParameterBindingException
+# («Не удается найти параметр, соответствующий имени параметра "LiteralPath"»). Ветка
+# создания работает только когда каталога ещё НЕТ — на машинах с уже созданной папкой
+# баг спал, поэтому воспроизводился «только на одном компьютере».
+assert_contains "New-DirLiteral определён"                "function New-DirLiteral"  "$src"
+assert_contains "папка загрузок создаётся через New-DirLiteral"  'New-DirLiteral $folder'  "$src"
+assert_not_contains "нет New-Item (у него нет -LiteralPath)"     "New-Item -ItemType"       "$src"
+
 # ══════════════════════════════════════════════════════════════
 # Часть B — реальные функции. Требует Windows PowerShell + WinForms.
 # ══════════════════════════════════════════════════════════════
@@ -159,6 +168,20 @@ Write-Output ("qa_quote=" + (Quote-WinArg 'a"b'))
 Write-Output ("qa_empty=" + (Quote-WinArg ''))
 Write-Output ("qa_pathsp=" + (Quote-WinArg 'C:\dir with space\f.txt'))
 Write-Output ("qa_tailbs=" + (Quote-WinArg 'a b\'))
+
+# F12b. New-DirLiteral vs New-Item: имя каталога с [ ] проверяет обе половины —
+# что вызов вообще биндится (у New-Item нет -LiteralPath) и что скобки не съедены
+# как wildcard. ni_binderr фиксирует ПРИЧИНУ: голый New-Item на том же пути падает
+# ParameterBindingException, поэтому возврат к нему запрещён.
+$ndDir = Join-Path $env:TEMP ("ytdlp-newdir-test[1]-" + $PID)
+Remove-Item -LiteralPath $ndDir -Recurse -Force -ErrorAction SilentlyContinue
+$niErr = ''
+try { New-Item -ItemType Directory -LiteralPath $ndDir -Force | Out-Null } catch { $niErr = $_.Exception.GetType().Name }
+Write-Output ("nd_binderr=" + $niErr)
+Write-Output ("nd_before=" + [System.IO.Directory]::Exists($ndDir))
+New-DirLiteral $ndDir
+Write-Output ("nd_after=" + [System.IO.Directory]::Exists($ndDir))
+Remove-Item -LiteralPath $ndDir -Recurse -Force -ErrorAction SilentlyContinue
 PS1EOF
 
 out=$($PS_CMD -NoProfile -NonInteractive -File "$win_harness" -Prod "$win_prod" -Cfg "$win_cfg" 2>/dev/null | tr -d '\r')
@@ -221,5 +244,11 @@ assert_eq "кавычка → \\\" внутри"  '"a\"b"'        "$(get_field "
 assert_eq "пустой → \"\""          '""'            "$(get_field "$out" qa_empty)"
 assert_eq "путь с пробелом"        '"C:\dir with space\f.txt"'  "$(get_field "$out" qa_pathsp)"
 assert_eq "хвостовой \\ удвоен перед кавычкой"  '"a b\\"'  "$(get_field "$out" qa_tailbs)"
+
+# ── New-DirLiteral (F12b) ─────────────────────────────────────
+suite "PS1 yt-dlp: New-DirLiteral (создание папки загрузок)"
+assert_eq "New-Item -LiteralPath падает биндером (причина фикса)"  "ParameterBindingException"  "$(get_field "$out" nd_binderr)"
+assert_eq "каталога до вызова нет"                 "False"  "$(get_field "$out" nd_before)"
+assert_eq "New-DirLiteral создал каталог с [ ] в имени"  "True"   "$(get_field "$out" nd_after)"
 
 summary

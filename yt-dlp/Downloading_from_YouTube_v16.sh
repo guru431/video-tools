@@ -342,6 +342,107 @@ build_format_args() {
     FMT_ARGS_ARR=(-f "$fmt")
 }
 
+# ── Лимит длины пути ───────────────────────────────────────────────────────
+# Windows обрывается на MAX_PATH = 260 символов вместе с NUL, то есть 259 на путь.
+# Папку yt-dlp создаёт успешно (она короче), а открыть файл уже не может: Win32
+# отдаёт ERROR_PATH_NOT_FOUND, Python переводит это в ENOENT, и сообщение врёт —
+# «unable to open for writing: [Errno 2] No such file or directory». Переполняют
+# путь именно промежуточные файлы: к финальному имени добавляются .fNNN, .m4a,
+# .part и -FragNNN, поэтому финальное имя может влезать, а закачка всё равно падать.
+#
+# Лимиты проставляются ЗДЕСЬ, а не в config.ini: защита обязана работать и без ini,
+# и с ini, где шаблон записан без лимитов. Длина полей %(title)s/%(playlist)s заранее
+# неизвестна, поэтому единственный способ удержать бюджет — задать им лимит принудительно.
+LIMIT_MAX_PATH=259
+LIMIT_RESERVE=32          # .fNNN + .m4a + .part + -FragNNN
+
+limit_output_template() {
+    local base="$1" tpl="$2"
+    local def_title=100 def_playlist=45 def_uploader=30
+    local min_title=25   min_playlist=15 min_uploader=10
+
+    local max_path=$LIMIT_MAX_PATH
+    case "$(uname -s 2>/dev/null)" in
+        MINGW*|MSYS*|CYGWIN*) ;;
+        # Вне Windows длина всего пути практически не ограничена, упирается лимит
+        # ОДНОГО компонента — 255 БАЙТ, а кириллица в UTF-8 занимает по два байта.
+        *) max_path=$(( ${#base} + 1 + 127 )) ;;
+    esac
+    local budget=$(( max_path - ${#base} - 1 - LIMIT_RESERVE ))
+
+    # Литеральная часть шаблона: разделители, дефисы, точки — всё, кроме полей.
+    local literals
+    literals=$(printf '%s' "$tpl" | sed 's/%([^)]*)[^a-zA-Z%]*[a-zA-Z]//g')
+    local used=${#literals}
+
+    # Прочие поля — консервативные оценки; неизвестное поле считаем длинным.
+    local field name lim
+    while read -r field; do
+        [ -z "$field" ] && continue
+        name=${field%%)*}; name=${name#%(}
+        case "$name" in
+            title|playlist|uploader|channel) continue ;;   # считаются отдельно ниже
+        esac
+        lim=$(printf '%s' "$field" | sed -n 's/.*)\.\([0-9][0-9]*\).*/\1/p')
+        if [ -n "$lim" ]; then used=$(( used + lim )); continue; fi
+        case "$name" in
+            ext)                       used=$(( used + 5 ))  ;;
+            playlist_index|autonumber) used=$(( used + 4 ))  ;;
+            upload_date|release_date)  used=$(( used + 8 ))  ;;
+            id)                        used=$(( used + 12 )) ;;
+            *)                         used=$(( used + 30 )) ;;
+        esac
+    done <<< "$(printf '%s' "$tpl" | grep -o '%([^)]*)[^a-zA-Z%]*[a-zA-Z]')"
+
+    # Присутствие длинных полей и уже заданные пользователем лимиты. Пользовательский
+    # лимит уважаем, но только в сторону уменьшения — иначе ini снова вернёт нас в MAX_PATH.
+    local t=0 p=0 u=0 user
+    if printf '%s' "$tpl" | grep -q '%(title)'; then
+        t=$def_title
+        user=$(printf '%s' "$tpl" | sed -n 's/.*%(title)\.\([0-9][0-9]*\).*/\1/p')
+        [ -n "$user" ] && [ "$user" -lt "$t" ] && t=$user
+    fi
+    if printf '%s' "$tpl" | grep -q '%(playlist)'; then
+        p=$def_playlist
+        user=$(printf '%s' "$tpl" | sed -n 's/.*%(playlist)\.\([0-9][0-9]*\).*/\1/p')
+        [ -n "$user" ] && [ "$user" -lt "$p" ] && p=$user
+    fi
+    if printf '%s' "$tpl" | grep -qE '%\((uploader|channel)\)'; then
+        u=$def_uploader
+        user=$(printf '%s' "$tpl" | sed -n 's/.*%(uploader)\.\([0-9][0-9]*\).*/\1/p')
+        [ -n "$user" ] && [ "$user" -lt "$u" ] && u=$user
+    fi
+
+    # Ужимаем по приоритету: сперва название ролика, потом плейлист, потом автор —
+    # обрезанное имя файла терпимо, потерянная структура папок хуже.
+    local deficit=$(( used + t + p + u - budget ))
+    local cut
+    if [ "$deficit" -gt 0 ] && [ "$t" -gt 0 ]; then
+        cut=$(( t - min_title )); [ "$cut" -gt "$deficit" ] && cut=$deficit
+        [ "$cut" -gt 0 ] && { t=$(( t - cut )); deficit=$(( deficit - cut )); }
+    fi
+    if [ "$deficit" -gt 0 ] && [ "$p" -gt 0 ]; then
+        cut=$(( p - min_playlist )); [ "$cut" -gt "$deficit" ] && cut=$deficit
+        [ "$cut" -gt 0 ] && { p=$(( p - cut )); deficit=$(( deficit - cut )); }
+    fi
+    if [ "$deficit" -gt 0 ] && [ "$u" -gt 0 ]; then
+        cut=$(( u - min_uploader )); [ "$cut" -gt "$deficit" ] && cut=$deficit
+        [ "$cut" -gt 0 ] && { u=$(( u - cut )); deficit=$(( deficit - cut )); }
+    fi
+    if [ "$deficit" -gt 0 ]; then
+        log_warn "Папка назначения слишком длинная (${#base} симв.) — путь может превысить лимит Windows даже с минимальными именами. Выберите папку короче." >&2
+    fi
+
+    # Подставляем лимиты, сохраняя тип конверсии (s/U/B) — он задан пользователем.
+    [ "$t" -gt 0 ] && tpl=$(printf '%s' "$tpl" | sed "s/%(title)\(\.[0-9][0-9]*\)\{0,1\}\([a-zA-Z]\)/%(title).${t}\2/g")
+    [ "$p" -gt 0 ] && tpl=$(printf '%s' "$tpl" | sed "s/%(playlist)\(\.[0-9][0-9]*\)\{0,1\}\([a-zA-Z]\)/%(playlist).${p}\2/g")
+    if [ "$u" -gt 0 ]; then
+        tpl=$(printf '%s' "$tpl" | sed "s/%(uploader)\(\.[0-9][0-9]*\)\{0,1\}\([a-zA-Z]\)/%(uploader).${u}\2/g")
+        tpl=$(printf '%s' "$tpl" | sed "s/%(channel)\(\.[0-9][0-9]*\)\{0,1\}\([a-zA-Z]\)/%(channel).${u}\2/g")
+    fi
+    printf '%s' "$tpl"
+}
+
 # ── Скачивание одного URL ──────────────────────────────────────────────────
 # Прокси-URL передаётся через global PROXY_URL (не в argv) — пароль не утекает
 # в `ps aux`. Cookies и формат — через global *_ARR массивы, заполненные
@@ -639,9 +740,9 @@ download_batch() {
 
         local template
         if [ "$mode" = "playlists" ]; then
-            template="${BASE_DIR}/${category}/${PLAYLIST_TEMPLATE}"
+            template="${BASE_DIR}/${category}/$(limit_output_template "${BASE_DIR}/${category}" "$PLAYLIST_TEMPLATE")"
         else
-            template="${BASE_DIR}/${category}/${OUTPUT_TEMPLATE}"
+            template="${BASE_DIR}/${category}/$(limit_output_template "${BASE_DIR}/${category}" "$OUTPUT_TEMPLATE")"
         fi
 
         local _err_flag="-i"; [ "${CONTINUE_ON_ERROR:-true}" = "false" ] && _err_flag="--abort-on-error"
@@ -1145,9 +1246,9 @@ main() {
         # Определить шаблон
         local template
         if echo "$URL" | grep -qi '[?&]list='; then
-            template="${BASE_DIR}/${PLAYLIST_TEMPLATE}"
+            template="${BASE_DIR}/$(limit_output_template "$BASE_DIR" "$PLAYLIST_TEMPLATE")"
         else
-            template="${BASE_DIR}/${OUTPUT_TEMPLATE}"
+            template="${BASE_DIR}/$(limit_output_template "$BASE_DIR" "$OUTPUT_TEMPLATE")"
         fi
 
         local archive_path=""

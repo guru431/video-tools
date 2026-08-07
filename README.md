@@ -35,7 +35,7 @@ video/
 │   ├── lib/framework.sh                 # Assert-функции, форматированный вывод
 │   ├── mocks/{ffmpeg,ffprobe,yt-dlp}    # Mock-бинарники
 │   ├── ffmpeg/test_01..19*.sh           # 19 тест-файлов
-│   ├── yt-dlp/test_01..12*.sh           # 12 тест-файлов
+│   ├── yt-dlp/test_01..14*.sh           # 14 тест-файлов
 │   └── common/test_*.sh                 # 9 файлов: кодировки, паритет, guardrail'ы, pre-commit, privacy-scan
 │
 └── README.md
@@ -142,7 +142,7 @@ yt-dlp/_VideoDownloader_v16.exe
 ```bash
 bash tests/run_tests.sh           # все тесты
 bash tests/run_tests.sh ffmpeg    # ffmpeg (19 файлов)
-bash tests/run_tests.sh yt-dlp    # yt-dlp (12 файлов)
+bash tests/run_tests.sh yt-dlp    # yt-dlp (14 файлов)
 bash tests/run_tests.sh common    # кросс-платформенные инварианты (9 файлов)
 ```
 
@@ -170,7 +170,7 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 | `test_18_findings_audit` | Фиксы аудита: dry-run+overwrite не удаляет выход, merge in-place отклоняется, проверка финального rename, silence-настройки в signature |
 | `test_19_findings_paths` | Пути и выборка входов: хвостовой разделитель source, прямые слэши, каталог «season.mp4», dry-run без mkdir, `.ffconv-partial-*`, суффикс `(part.1)` в проверке in==out, диапазон скорости и overwrite в GUI |
 
-### Тест-модули YT-DLP (12 файлов)
+### Тест-модули YT-DLP (14 файлов)
 
 | Файл | Что тестирует |
 |------|---------------|
@@ -186,6 +186,8 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 | `test_10_archive_skip_parity` | Archive-skip: batch (SH) и GUI (PS1) не выдают пропуск за загрузку |
 | `test_11_findings_f4_f15` | Фиксы аудита F4/F6/F8/F9/F11/F13/F14/F15 (rename, dry-run+translate, vot exit code, ffprobe для dual_track, GUID-манифест, host-детект, схема URL, регистронезависимый config) |
 | `test_12_findings_cli` | `$qi` до манифеста, preflight AI-перевода, URL-валидация и громкости mix в CMD |
+| `test_13_path_limit` | Лимит длины пути (MAX_PATH): бюджет от базовой папки, одинаковый результат в SH/PS1/CMD |
+| `test_14_stop_and_window` | «Остановить» снимает дерево процессов; свёрнутое окно не трогаем |
 
 ### Тест-модули Common (9 файлов)
 

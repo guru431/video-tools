@@ -219,6 +219,132 @@ function Join-WinArgs {
     return (($ArgList | ForEach-Object { Quote-WinArg $_ }) -join ' ')
 }
 
+# ── Остановка загрузки ────────────────────────────────────────────────────
+# Снимает процесс ВМЕСТЕ С ДОЧЕРНИМИ.
+# yt-dlp.exe собран PyInstaller в режиме onefile: запущенный нами процесс — это
+# bootloader, который распаковывает себя во временную папку и порождает ВТОРОЙ
+# yt-dlp.exe; качает именно дочерний. Process.Kill() убивает только родителя, и
+# после «Остановить» закачка продолжалась в фоне (проверено: после Kill в системе
+# остаётся живой yt-dlp.exe, после taskkill /T — ни одного). Kill(entireProcessTree)
+# появился только в .NET Core 3.0, а GUI работает на .NET Framework 4.x, поэтому
+# дерево снимаем через taskkill /T /F. Функция стоит здесь, выше тестового guard,
+# чтобы тест мог дёрнуть её на настоящем дереве процессов.
+function Stop-ProcessTree {
+    param($Proc)
+    if ($null -eq $Proc) { return }
+    try { if ($Proc.HasExited) { return } } catch { return }
+    try {
+        # Через ProcessStartInfo, а не `& taskkill`: EXE собран с -noConsole,
+        # и прямой вызов консольной утилиты мигал бы окном консоли.
+        $tk = New-Object System.Diagnostics.ProcessStartInfo
+        $tk.FileName        = "taskkill.exe"
+        $tk.Arguments       = "/PID $($Proc.Id) /T /F"
+        $tk.UseShellExecute = $false
+        $tk.CreateNoWindow  = $true
+        $p = [System.Diagnostics.Process]::Start($tk)
+        $p.WaitForExit(5000) | Out-Null
+        $p.Dispose()
+    } catch { }
+    # Подстраховка, если taskkill недоступен: хотя бы родитель будет снят.
+    try { if (-not $Proc.HasExited) { $Proc.Kill() } } catch { }
+}
+
+# ── Лимит длины пути ───────────────────────────────────────────────────────
+# Windows обрывается на MAX_PATH = 260 символов вместе с NUL, то есть 259 на путь.
+# Папку yt-dlp создаёт успешно (она короче), а открыть файл уже не может: Win32
+# отдаёт ERROR_PATH_NOT_FOUND, Python переводит это в ENOENT, и сообщение врёт —
+# «unable to open for writing: [Errno 2] No such file or directory». Переполняют
+# путь именно промежуточные файлы: к финальному имени добавляются .fNNN, .m4a,
+# .part и -FragNNN, поэтому финальное имя может влезать, а закачка всё равно падать.
+#
+# Лимиты проставляются ЗДЕСЬ, а не в config.ini: защита обязана работать и без ini,
+# и с ini, где шаблон записан без лимитов. Длина полей %(title)s/%(playlist)s заранее
+# неизвестна, поэтому единственный способ удержать бюджет — задать им лимит принудительно.
+# Контракт совпадает с limit_output_template в .sh (тест test_13_path_limit.sh сверяет).
+$script:LimitMaxPath = 259
+$script:LimitReserve = 32       # .fNNN + .m4a + .part + -FragNNN
+
+function Limit-OutputTemplate {
+    param([string]$BaseDir, [string]$Template)
+
+    $defTitle = 100; $defPlaylist = 45; $defUploader = 30
+    $minTitle = 25;  $minPlaylist = 15; $minUploader = 10
+
+    $budget = $script:LimitMaxPath - $BaseDir.Length - 1 - $script:LimitReserve
+
+    # Литеральная часть шаблона: разделители, дефисы, точки — всё, кроме полей.
+    $fieldRe = '%\([^)]*\)[^a-zA-Z%]*[a-zA-Z]'
+    $used = ([regex]::Replace($Template, $fieldRe, '')).Length
+
+    # Прочие поля — консервативные оценки; неизвестное поле считаем длинным.
+    foreach ($m in [regex]::Matches($Template, $fieldRe)) {
+        $field = $m.Value
+        $name  = $field.Substring(2, $field.IndexOf(')') - 2)
+        if ($name -in @('title', 'playlist', 'uploader', 'channel')) { continue }
+        $lim = [regex]::Match($field, '\)\.(\d+)')
+        if ($lim.Success) { $used += [int]$lim.Groups[1].Value; continue }
+        switch ($name) {
+            'ext'                   { $used += 5  }
+            'playlist_index'        { $used += 4  }
+            'autonumber'            { $used += 4  }
+            'upload_date'           { $used += 8  }
+            'release_date'          { $used += 8  }
+            'id'                    { $used += 12 }
+            default                 { $used += 30 }
+        }
+    }
+
+    # Присутствие длинных полей и уже заданные пользователем лимиты. Пользовательский
+    # лимит уважаем, но только в сторону уменьшения — иначе ini снова вернёт нас в MAX_PATH.
+    $t = 0; $p = 0; $u = 0
+    if ($Template -match '%\(title\)') {
+        $t = $defTitle
+        $m = [regex]::Match($Template, '%\(title\)\.(\d+)')
+        if ($m.Success -and [int]$m.Groups[1].Value -lt $t) { $t = [int]$m.Groups[1].Value }
+    }
+    if ($Template -match '%\(playlist\)') {
+        $p = $defPlaylist
+        $m = [regex]::Match($Template, '%\(playlist\)\.(\d+)')
+        if ($m.Success -and [int]$m.Groups[1].Value -lt $p) { $p = [int]$m.Groups[1].Value }
+    }
+    if ($Template -match '%\((uploader|channel)\)') {
+        $u = $defUploader
+        $m = [regex]::Match($Template, '%\(uploader\)\.(\d+)')
+        if ($m.Success -and [int]$m.Groups[1].Value -lt $u) { $u = [int]$m.Groups[1].Value }
+    }
+
+    # Ужимаем по приоритету: сперва название ролика, потом плейлист, потом автор —
+    # обрезанное имя файла терпимо, потерянная структура папок хуже.
+    $deficit = $used + $t + $p + $u - $budget
+    foreach ($step in @(@{v='t'; min=$minTitle}, @{v='p'; min=$minPlaylist}, @{v='u'; min=$minUploader})) {
+        if ($deficit -le 0) { break }
+        $cur = (Get-Variable -Name $step.v -Scope 0 -ValueOnly)
+        if ($cur -le 0) { continue }
+        $cut = [Math]::Min($cur - $step.min, $deficit)
+        if ($cut -gt 0) {
+            Set-Variable -Name $step.v -Scope 0 -Value ($cur - $cut)
+            $deficit -= $cut
+        }
+    }
+    if ($deficit -gt 0 -and $script:PathLimitWarned -ne $BaseDir) {
+        # Предупреждаем один раз на папку: очередь из 50 URL иначе зальёт лог одним и тем же.
+        $script:PathLimitWarned = $BaseDir
+        if (Get-Command Append-Output -ErrorAction SilentlyContinue) {
+            Append-Output "ВНИМАНИЕ: папка назначения слишком длинная ($($BaseDir.Length) симв.) — путь может превысить лимит Windows даже с минимальными именами. Выберите папку короче." ([System.Drawing.Color]::Yellow)
+        }
+    }
+
+    # Подставляем лимиты, сохраняя тип конверсии (s/U/B) — он задан пользователем.
+    $out = $Template
+    if ($t -gt 0) { $out = [regex]::Replace($out, '%\(title\)(\.\d+)?([a-zA-Z])',    "%(title).$t`$2") }
+    if ($p -gt 0) { $out = [regex]::Replace($out, '%\(playlist\)(\.\d+)?([a-zA-Z])', "%(playlist).$p`$2") }
+    if ($u -gt 0) {
+        $out = [regex]::Replace($out, '%\(uploader\)(\.\d+)?([a-zA-Z])', "%(uploader).$u`$2")
+        $out = [regex]::Replace($out, '%\(channel\)(\.\d+)?([a-zA-Z])',  "%(channel).$u`$2")
+    }
+    return $out
+}
+
 # ── Таблицы форматов (script scope: читаются из Add_Click и из тестов) ─────
 # Значения — сырые format-строки yt-dlp БЕЗ ручных кавычек: пробелов в них нет,
 # поэтому Quote-WinArg их не квотирует, а argv-токен остаётся цельным.
@@ -951,12 +1077,54 @@ $richOutput.ForeColor = [System.Drawing.Color]::White
 $_fc.Add($richOutput)
 
 # ── Функции вывода с цветом ───────────────────────────────────────────────
+# Пока окно свёрнуто, к контролам НЕ прикасаемся. Запись в них возвращает форму из
+# свёрнутого состояния (замерено: с обновлением $progressBar.Value или $form.Text в
+# цикле загрузки окно не остаётся свёрнутым, без них — остаётся). WinForms при этом
+# считает окно нормальным, а панель задач — свёрнутым, и клик по кнопке в панели
+# задач окно уже не возвращает. Строки копим и выливаем при разворачивании.
+$global:pendingOutput = New-Object System.Collections.Generic.List[object]
+
+function Test-WindowMinimized {
+    if (-not $form) { return $false }
+    try { return ($form.WindowState -eq [System.Windows.Forms.FormWindowState]::Minimized) } catch { return $false }
+}
+
 function Append-Output {
     param([string]$Text, [System.Drawing.Color]$Color = [System.Drawing.Color]::White)
+    if (Test-WindowMinimized) {
+        # Очередь из десятков URL за час копит десятки тысяч строк — держим потолок,
+        # выбрасывая самое старое (в RichTextBox всё равно интересен хвост).
+        [void]$global:pendingOutput.Add(@{ Text = $Text; Color = $Color })
+        if ($global:pendingOutput.Count -gt 2000) { $global:pendingOutput.RemoveRange(0, 1000) }
+        return
+    }
     $richOutput.SelectionStart  = $richOutput.TextLength
     $richOutput.SelectionLength = 0
     $richOutput.SelectionColor  = $Color
     $richOutput.AppendText($Text + "`n")
+    $richOutput.ScrollToCaret()
+}
+
+# Прогресс/статус/заголовок — та же защита. -1 означает «не трогать».
+function Set-UiProgress {
+    param([int]$Percent = -1, [string]$Status = $null, [string]$Title = $null)
+    if (Test-WindowMinimized) { return }
+    if ($Percent -ge 0) { $progressBar.Value = [Math]::Min($Percent, 100) }
+    if ($Status)        { $lblStatus.Text = $Status }
+    if ($Title)         { $form.Text = $Title }
+}
+
+# Выливает накопленное после разворачивания окна.
+function Flush-PendingOutput {
+    if ($global:pendingOutput.Count -eq 0) { return }
+    $items = $global:pendingOutput.ToArray()
+    $global:pendingOutput.Clear()
+    foreach ($it in $items) {
+        $richOutput.SelectionStart  = $richOutput.TextLength
+        $richOutput.SelectionLength = 0
+        $richOutput.SelectionColor  = $it.Color
+        $richOutput.AppendText($it.Text + "`n")
+    }
     $richOutput.ScrollToCaret()
 }
 
@@ -1001,13 +1169,9 @@ function Stop-Download {
     # НЕ обнуляем $global:downloadProcess и НЕ убиваем чужие yt-dlp — основной цикл
     # должен дождаться нашего процесса (WaitForExit) без NullReferenceException, а
     # массовый Stop-Process убивал бы параллельные загрузки других программ.
-    if ($global:downloadProcess -ne $null -and -not $global:downloadProcess.HasExited) {
-        try { $global:downloadProcess.Kill() } catch { }
-    }
+    Stop-ProcessTree $global:downloadProcess
     # AI-перевод: убиваем vot-cli-live, иначе Stop не прерывал бы сетевой перевод.
-    if ($global:translateProcess -ne $null -and -not $global:translateProcess.HasExited) {
-        try { $global:translateProcess.Kill() } catch { }
-    }
+    Stop-ProcessTree $global:translateProcess
     if (-not $silent) {
         Append-Output "Загрузка остановлена" ([System.Drawing.Color]::Yellow)
     }
@@ -1091,9 +1255,9 @@ $btnStart.Add_Click({
             $platform    = $queueItem.Platform
             $itemNum     = $itemIdx + 1
 
-            $progressBar.Value = 0
-            $lblStatus.Text    = "Загрузка $itemNum/$totalItems  [$platform]"
-            $form.Text         = "Video Downloader (yt-dlp) v16  [$itemNum/$totalItems]"
+            Set-UiProgress -Percent 0 `
+                -Status "Загрузка $itemNum/$totalItems  [$platform]" `
+                -Title  "Video Downloader (yt-dlp) v16  [$itemNum/$totalItems]"
             Append-Output ""
             Append-Output "═══ [$itemNum/$totalItems] [$platform]  $currentUrl" ([System.Drawing.Color]::Cyan)
 
@@ -1136,6 +1300,9 @@ $btnStart.Add_Click({
             if (Test-Path -LiteralPath $denoExe) { $command += "--js-runtimes", "deno:$denoExe" }
             $tpl = if ($currentUrl -match '[?&]list=') { $cfg_plTemplate } else { $cfg_template }
             $tpl = $tpl -replace '/', '\'
+            # Лимит MAX_PATH: проставляем принудительно, потому что длина полей
+            # %(title)s/%(playlist)s заранее неизвестна, а ini может задать шаблон без лимитов.
+            $tpl = Limit-OutputTemplate $folder $tpl
             $command += "-o", "$folder\$tpl"
 
             # Прокси: используем переменные окружения вместо --proxy,
@@ -1310,9 +1477,9 @@ $btnStart.Add_Click({
                 while ($stdoutQueue.TryDequeue([ref]$line)) {
                     if ($line -match '\[download\]\s+(\d+\.?\d*)%') {
                         $pct = [int][math]::Floor([double]$Matches[1])
-                        $progressBar.Value = [math]::Min($pct, 100)
-                        $lblStatus.Text    = "Загрузка $itemNum/$totalItems  [$platform]  $pct%"
-                        $form.Text         = "Video Downloader (yt-dlp) v16  [$itemNum/$totalItems]  $pct%"
+                        Set-UiProgress -Percent $pct `
+                            -Status "Загрузка $itemNum/$totalItems  [$platform]  $pct%" `
+                            -Title  "Video Downloader (yt-dlp) v16  [$itemNum/$totalItems]  $pct%"
                     } elseif ($line -match '\[download\] Destination:') {
                         Append-Output $line ([System.Drawing.Color]::LightGreen)
                     } elseif ($line -match '\[Merger\]|\[info\].*Merging') {
@@ -1326,7 +1493,14 @@ $btnStart.Add_Click({
                         Append-Output $line ([System.Drawing.Color]::Yellow)
                     }
                 }
-                Start-Sleep -Milliseconds 100
+                # Пауза с прокачкой очереди сообщений вместо сплошного Start-Sleep:
+                # раньше UI-поток замолкал на 100 мс подряд, и команды окна (свернуть,
+                # восстановить, перерисовать) обрабатывались рывками. Суммарная задержка
+                # та же, но окно остаётся отзывчивым.
+                for ($_pump = 0; $_pump -lt 10; $_pump++) {
+                    [System.Windows.Forms.Application]::DoEvents()
+                    [System.Threading.Thread]::Sleep(10)
+                }
             }
 
             # WaitForExit() гарантирует, что все OutputDataReceived события успели
@@ -1358,7 +1532,7 @@ $btnStart.Add_Click({
             if ($global:downloadProcess) { $global:downloadProcess.Dispose() }
 
             if ($exitCode -eq 0) {
-                $progressBar.Value = 100
+                Set-UiProgress -Percent 100
 
                 # Архив включён, yt-dlp отработал успешно, но не переместил ни одного
                 # файла (пустой манифест) → видео уже было в архиве. Это ПРОПУСК, а не
@@ -1394,7 +1568,7 @@ $btnStart.Add_Click({
                         -and -not ($currentUrl -match '[?&]list=') `
                         -and -not $chkTrimStart.Checked -and -not $chkTrimEnd.Checked `
                         -and $comboSponsorblock.SelectedItem -ne "remove") {
-                    $lblStatus.Text = "AI-перевод $itemNum/$totalItems..."
+                    Set-UiProgress -Status "AI-перевод $itemNum/$totalItems..."
                     Append-Output "Получение AI-перевода..." ([System.Drawing.Color]::Cyan)
 
                     # F14 (паритет с .sh). Запрошенный перевод, применимый к режиму, обязан
@@ -1476,9 +1650,9 @@ $btnStart.Add_Click({
                         $_votAborted = $false   # F8: отмена (Stop) или таймаут — vot не завершился сам
                         while (-not $votProc.HasExited) {
                             [System.Windows.Forms.Application]::DoEvents()
-                            if (-not $global:processRunning) { try { $votProc.Kill() } catch {}; $_votAborted = $true; break }
+                            if (-not $global:processRunning) { Stop-ProcessTree $votProc; $_votAborted = $true; break }
                             if ($_votSw.ElapsedMilliseconds -gt $_votTimeoutMs) {
-                                try { $votProc.Kill() } catch {}
+                                Stop-ProcessTree $votProc
                                 $_votAborted = $true
                                 Append-Output "AI-перевод: превышен таймаут vot-cli-live — прервано." ([System.Drawing.Color]::Red)
                                 break
@@ -1618,11 +1792,11 @@ $btnStart.Add_Click({
             if ($skipCount -gt 0) { $summary += "  |  Пропущено (в архиве): $skipCount" }
             if ($failCount -gt 0) { $summary += "  |  Ошибки: $failCount" }
             Append-Output $summary ([System.Drawing.Color]::LightGreen)
-            $lblStatus.Text = "Завершено: $successCount/$totalItems"
-            $form.Text      = "Video Downloader (yt-dlp) v16 — Готово!"
+            Set-UiProgress -Status "Завершено: $successCount/$totalItems" `
+                           -Title  "Video Downloader (yt-dlp) v16 — Готово!"
         } else {
             Append-Output "═══ Остановлено  |  Загружено: $successCount" ([System.Drawing.Color]::Yellow)
-            $lblStatus.Text = "Остановлено"
+            Set-UiProgress -Status "Остановлено"
         }
     }
     catch {
@@ -1687,6 +1861,16 @@ $btnExit.Add_Click({
     } else { $form.Close() }
 })
 $_fc.Add($btnExit)
+
+# ── Разворачивание окна ───────────────────────────────────────────────────
+# Пока окно свёрнуто, вывод копится в $global:pendingOutput (писать в контролы
+# свёрнутой формы нельзя — она выходит из свёрнутого состояния и рассинхронизируется
+# с панелью задач). При возврате доливаем накопленное и восстанавливаем заголовок.
+$form.Add_Resize({
+    if ($form.WindowState -ne [System.Windows.Forms.FormWindowState]::Minimized) {
+        Flush-PendingOutput
+    }
+})
 
 # ── Обработчик закрытия окна ──────────────────────────────────────────────
 $form.Add_FormClosing({

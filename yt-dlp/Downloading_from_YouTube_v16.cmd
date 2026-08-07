@@ -406,8 +406,12 @@ if "%subsvid_choice%"=="2" set "subsvid_arg=--write-subs --write-auto-subs --sub
 :extra_done
 
 :: ── Шаблон пути ──────────────────────────────────────────────────────────
-set "output_tpl=%%(uploader)s\%%(upload_date)s - %%(title).100U.%%(ext)s"
-set "playlist_tpl=%%(uploader)s\%%(playlist)s\%%(playlist_index)03d - %%(title).100U.%%(ext)s"
+:: Лимиты длины проставляются программно (:limit_template), а не записаны в шаблон
+:: константами: Windows обрывает путь на 259 символах (MAX_PATH без NUL), длина
+:: %(title)s/%(playlist)s заранее неизвестна, а к имени во время закачки ещё
+:: дописываются .fNNN/.m4a/.part/-FragNNN. Без этого yt-dlp падает на .part-файле
+:: с обманчивым «No such file or directory». Контракт тот же, что в .sh/.ps1.
+call :limit_template
 set "is_playlist="
 echo "!url!" | findstr /R /C:"[?&]list=" >nul && (
     set "is_playlist=1"
@@ -675,4 +679,61 @@ exit /b 0
 :read_vol_bad
 echo [WARN] Неверное значение громкости "!_rv!" - оставляю значение по умолчанию.
 endlocal
+exit /b 0
+
+rem ── Лимит длины пути (MAX_PATH) ──────────────────────────────────────────
+rem Считает бюджет от длины !folder! и собирает шаблоны с ужатыми лимитами.
+rem Без setlocal намеренно: значения нужны вызывающему, а вынести их через
+rem `endlocal & set "x=%tpl%"` нельзя — immediate-раскрытие сожрало бы %(uploader)s
+rem как имя переменной. Локальные имена с префиксом _lt_ вместо изоляции.
+:limit_template
+call :strlen folder _lt_flen
+set /a _lt_budget=259 - _lt_flen - 1 - 32
+rem Плейлист: литералы 6 + %(playlist_index)03d 4 + %(ext)s 5 = 15
+call :limit_calc 15 1
+set "playlist_tpl=%%(uploader).!_lt_u!s\%%(playlist).!_lt_p!s\%%(playlist_index)03d - %%(title).!_lt_t!U.%%(ext)s"
+rem Одиночное видео: литералы 5 + %(upload_date)s 8 + %(ext)s 5 = 18, плейлиста нет
+call :limit_calc 18 0
+set "output_tpl=%%(uploader).!_lt_u!s\%%(upload_date)s - %%(title).!_lt_t!U.%%(ext)s"
+exit /b 0
+
+rem %1 = размер фиксированной части шаблона, %2 = 1 если в шаблоне есть %(playlist)s.
+rem Ужимаем по приоритету title → playlist → uploader: обрезанное имя файла терпимо,
+rem потерянная структура папок хуже.
+:limit_calc
+set /a _lt_t=100, _lt_u=30, _lt_p=0
+if "%~2"=="1" set /a _lt_p=45
+set /a _lt_def=%~1 + _lt_t + _lt_p + _lt_u - _lt_budget
+if !_lt_def! gtr 0 (
+    set /a _lt_cut=75
+    if !_lt_def! lss 75 set /a _lt_cut=_lt_def
+    set /a _lt_t-=_lt_cut, _lt_def-=_lt_cut
+)
+if !_lt_def! gtr 0 if !_lt_p! gtr 0 (
+    set /a _lt_cut=30
+    if !_lt_def! lss 30 set /a _lt_cut=_lt_def
+    set /a _lt_p-=_lt_cut, _lt_def-=_lt_cut
+)
+if !_lt_def! gtr 0 (
+    set /a _lt_cut=20
+    if !_lt_def! lss 20 set /a _lt_cut=_lt_def
+    set /a _lt_u-=_lt_cut, _lt_def-=_lt_cut
+)
+if !_lt_def! gtr 0 echo [WARN] Папка назначения слишком длинная - путь может превысить лимит Windows. Выберите папку короче.
+exit /b 0
+
+rem Длина строки без внешних утилит: %1 = имя переменной, %2 = имя выходной.
+rem Значение читается через !%~1! (delayed): immediate-раскрытие %folder% съело бы
+rem восклицательные знаки в пути вроде C:\000\!_git\.
+:strlen
+set "_sl_s=!%~1!#"
+set "_sl_n=0"
+for %%A in (2048 1024 512 256 128 64 32 16 8 4 2 1) do (
+    set "_sl_t=!_sl_s:~%%A!"
+    if not "!_sl_t!"=="" (
+        set /a _sl_n+=%%A
+        set "_sl_s=!_sl_t!"
+    )
+)
+set "%~2=!_sl_n!"
 exit /b 0

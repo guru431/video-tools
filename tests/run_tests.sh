@@ -134,6 +134,8 @@ YTDLP_TESTS=(
     "$TESTS_DIR/yt-dlp/test_10_archive_skip_parity.sh"
     "$TESTS_DIR/yt-dlp/test_11_findings_f4_f15.sh"
     "$TESTS_DIR/yt-dlp/test_12_findings_cli.sh"
+    "$TESTS_DIR/yt-dlp/test_13_path_limit.sh"
+    "$TESTS_DIR/yt-dlp/test_14_stop_and_window.sh"
 )
 
 # Кросс-платформенные инварианты (кодировки, паритет ключей config.ini, guardrail'ы)

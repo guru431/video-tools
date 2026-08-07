@@ -480,7 +480,9 @@ assert_contains "PS1 F14: флаг успешного перевода"         
 assert_contains "PS1 F14: провал перевода инкрементит failCount" 'if (-not $translateOk) {' "$PS1_SRC"
 # #14: Stop отменяет перевод (убивает vot) + окно не висит бессрочно (DoEvents + таймаут).
 assert_contains "PS1 #14: vot-процесс отслеживается для Stop"   '$global:translateProcess = $votProc' "$PS1_SRC"
-assert_contains "PS1 #14: Stop убивает vot"                     '$global:translateProcess.Kill()'     "$PS1_SRC"
+# Голый Kill() снимал только родителя (yt-dlp.exe — PyInstaller onefile, качает
+# дочерний процесс), поэтому остановка идёт через Stop-ProcessTree — см. test_14.
+assert_contains "PS1 #14: Stop убивает vot"                     'Stop-ProcessTree $global:translateProcess' "$PS1_SRC"
 assert_contains "PS1 #14: message-loop прокачивается (не висит)" 'DoEvents()'                          "$PS1_SRC"
 assert_contains "PS1 #14: потолок времени на сетевой vot"        '$_votTimeoutMs'                      "$PS1_SRC"
 

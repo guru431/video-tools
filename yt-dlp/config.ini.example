@@ -21,6 +21,11 @@ base_dir = _video_
 template = %(uploader)s/%(upload_date)s - %(title).100U.%(ext)s
 # Шаблон для плейлистов
 playlist_template = %(uploader)s/%(playlist)s/%(playlist_index)03d - %(title).100U.%(ext)s
+# Лимиты (.100U и т.п.) — ВЕРХНЯЯ граница, а не гарантия: программа сама ужимает их
+# под лимит Windows в 259 символов на путь, считая бюджет от длины base_dir, и сама
+# проставляет лимиты полям, у которых их нет (иначе длина %(title)s/%(playlist)s
+# непредсказуема и yt-dlp падает на .part-файле с «No such file or directory»).
+# Задавать лимиты здесь имеет смысл только чтобы сделать имена ЕЩЁ короче.
 
 [download]
 # Качество по умолчанию: 360, 480, 720, 1080, 1440, 2160, audio

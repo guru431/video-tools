@@ -264,13 +264,16 @@ function Stop-ProcessTree {
 $script:LimitMaxPath = 259
 $script:LimitReserve = 32       # .fNNN + .m4a + .part + -FragNNN
 
+# Третий параметр — предел длины пути; production его не передаёт (берётся 259),
+# тест передаёт явно, чтобы сверять результат с .sh на любой ОС раннера.
 function Limit-OutputTemplate {
-    param([string]$BaseDir, [string]$Template)
+    param([string]$BaseDir, [string]$Template, [int]$MaxPath = 0)
 
     $defTitle = 100; $defPlaylist = 45; $defUploader = 30
     $minTitle = 25;  $minPlaylist = 15; $minUploader = 10
 
-    $budget = $script:LimitMaxPath - $BaseDir.Length - 1 - $script:LimitReserve
+    if ($MaxPath -le 0) { $MaxPath = $script:LimitMaxPath }
+    $budget = $MaxPath - $BaseDir.Length - 1 - $script:LimitReserve
 
     # Литеральная часть шаблона: разделители, дефисы, точки — всё, кроме полей.
     $fieldRe = '%\([^)]*\)[^a-zA-Z%]*[a-zA-Z]'

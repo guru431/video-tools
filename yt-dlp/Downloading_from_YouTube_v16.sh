@@ -356,18 +356,22 @@ build_format_args() {
 LIMIT_MAX_PATH=259
 LIMIT_RESERVE=32          # .fNNN + .m4a + .part + -FragNNN
 
+# Третий аргумент (предел длины пути) — необязательный: production его не передаёт и
+# получает платформенное значение, тест передаёт явно. Без него ожидания теста зависели
+# бы от ОС раннера — на Linux/macOS ветка ниже даёт другой бюджет, и CI падал.
 limit_output_template() {
-    local base="$1" tpl="$2"
+    local base="$1" tpl="$2" max_path="${3:-}"
     local def_title=100 def_playlist=45 def_uploader=30
     local min_title=25   min_playlist=15 min_uploader=10
 
-    local max_path=$LIMIT_MAX_PATH
-    case "$(uname -s 2>/dev/null)" in
-        MINGW*|MSYS*|CYGWIN*) ;;
-        # Вне Windows длина всего пути практически не ограничена, упирается лимит
-        # ОДНОГО компонента — 255 БАЙТ, а кириллица в UTF-8 занимает по два байта.
-        *) max_path=$(( ${#base} + 1 + 127 )) ;;
-    esac
+    if [ -z "$max_path" ]; then
+        case "$(uname -s 2>/dev/null)" in
+            MINGW*|MSYS*|CYGWIN*) max_path=$LIMIT_MAX_PATH ;;
+            # Вне Windows длина всего пути практически не ограничена, упирается лимит
+            # ОДНОГО компонента — 255 БАЙТ, а кириллица в UTF-8 занимает по два байта.
+            *) max_path=$(( ${#base} + 1 + 127 )) ;;
+        esac
+    fi
     local budget=$(( max_path - ${#base} - 1 - LIMIT_RESERVE ))
 
     # Литеральная часть шаблона: разделители, дефисы, точки — всё, кроме полей.

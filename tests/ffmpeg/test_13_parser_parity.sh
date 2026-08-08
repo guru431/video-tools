@@ -57,6 +57,10 @@ Read-Config '$key' '$section' '$default'
 
 # ── Единый каверзный config.ini (одинарные кавычки → ${VAR} не раскрывается) ─
 CONFIG_FILE="$MY_DIR/config.ini"
+# Уборка через trap, а не только в конце файла: config.ini создаётся ВНУТРИ репозитория
+# (парсеры читают его рядом со скриптом), и прерванный прогон оставлял его в рабочем
+# дереве — ночной auto-commit подобрал этот артефакт как исходник.
+trap 'rm -f "$CONFIG_FILE"' EXIT
 cat > "$CONFIG_FILE" << 'EOCONFIG'
 [tricky]
 embed_eq = a=b=c

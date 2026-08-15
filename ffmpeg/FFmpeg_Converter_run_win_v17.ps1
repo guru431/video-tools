@@ -136,7 +136,7 @@ if (-not [System.IO.Path]::IsPathRooted($_cfg_log_file)) { $_cfg_log_file = Join
 
 # Main Form
 $form = [System.Windows.Forms.Form]::new()
-$form.Text = "Video Converter (ffmpeg) v16"
+$form.Text = "Video Converter (ffmpeg) v17"
 $form.Size = [System.Drawing.Size]::new(820, 850)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
@@ -1303,6 +1303,11 @@ $buttonRun.Add_Click({
     # причём диапазон не был назван нигде, кроме текста самой ошибки.
     elseif ($checkSpeed.Checked           -and (($textSpeed.Text -notmatch '^\d+(\.\d+)?$') -or ([double]$textSpeed.Text -le 0) -or ([double]$textSpeed.Text -gt 100))) { $numErr = "Скорость должна быть больше 0 и не больше 100 (точка как разделитель)" }
     elseif ($checkSplitSilence.Checked    -and $textSilenceDuration.Text -notmatch '^\d+(\.\d+)?$')    { $numErr = "Мин. тишина должна быть числом (секунды)" }
+    # Метки времени тоже обязаны проверяться здесь. Скрипт разбирает их как чч-мм-сс
+    # ([int]$x*3600+...), и «1:00:00» или любой другой текст ронял воркер исключением
+    # каста — весь батч обрывался невнятной ошибкой на первом же файле.
+    elseif ($checkStartTime.Checked       -and $textStartTime.Text       -notmatch '^\d{1,2}-\d{1,2}-\d{1,2}$') { $numErr = "Начало должно быть в формате чч-мм-сс (например 00-01-30)" }
+    elseif ($checkDuration.Checked        -and $textDuration.Text        -notmatch '^\d{1,2}-\d{1,2}-\d{1,2}$') { $numErr = "Длительность должна быть в формате чч-мм-сс (например 00-05-00)" }
     if ($numErr) {
         [System.Windows.Forms.MessageBox]::Show($numErr, "Проверка настроек", "OK", "Warning") | Out-Null
         return
@@ -1489,6 +1494,7 @@ $buttonRun.Add_Click({
 
             # Очистка
             try { Remove-Item $global:_guiProgress -Force -ErrorAction SilentlyContinue } catch {}
+            try { Remove-Item "$($global:_guiProgress).tmp" -Force -ErrorAction SilentlyContinue } catch {}
             try { Remove-Item $global:_guiCancel   -Force -ErrorAction SilentlyContinue } catch {}
             $env:FFMPEG_GUI_PROGRESS_FILE = $null
             $env:FFMPEG_GUI_CANCEL_FILE   = $null
@@ -1613,13 +1619,21 @@ $form.Add_FormClosing({
         try { "cancel" | Set-Content $global:_guiCancel -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
         # Даём воркеру до ~3с увидеть cancel-файл и сам убить свой ffmpeg.exe; иначе Stop()
         # обрывает pipeline, а внешний ffmpeg.exe остаётся осиротевшим процессом.
+        # Ждём с прокачкой очереди сообщений. Голый Start-Sleep в UI-потоке замораживает
+        # окно: Windows рисует «Не отвечает», и пользователь успевает снять процесс через
+        # диспетчер задач — ровно тот осиротевший ffmpeg.exe, ради которого мы и ждём.
+        # Форму на время ожидания выключаем, чтобы DoEvents не втянул новые клики.
+        $form.Enabled = $false
         $waited = 0
         while (-not $global:_guiHandle.IsCompleted -and $waited -lt 3000) {
-            Start-Sleep -Milliseconds 100; $waited += 100
+            [System.Windows.Forms.Application]::DoEvents()
+            Start-Sleep -Milliseconds 10; $waited += 10
         }
         if (-not $global:_guiHandle.IsCompleted) { try { $global:_guiPS.Stop() } catch {} }
     }
-    foreach ($f in @($global:_guiProgress, $global:_guiCancel)) {
+    # ".tmp"/".bak" — служебные файлы атомарной записи прогресса (воркер пишет в tmp и
+    # подменяет цель); остаются, только если воркер убит между записью и подменой.
+    foreach ($f in @($global:_guiProgress, "$($global:_guiProgress).tmp", "$($global:_guiProgress).bak", $global:_guiCancel)) {
         if ($f) { try { Remove-Item $f -Force -ErrorAction SilentlyContinue } catch {} }
     }
     if ($global:_guiPS)       { try { $global:_guiPS.Dispose() } catch {} }

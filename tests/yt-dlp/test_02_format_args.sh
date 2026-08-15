@@ -16,7 +16,7 @@ source "$TESTS_DIR/lib/framework.sh"
 # (quality, preset=auto, platform=youtube) и заполняет argv-массив FMT_ARGS_ARR.
 # То есть тест проверял функцию с другим дефолтом и другим контрактом — сломать
 # настоящую можно было при полностью зелёном наборе.
-YT_SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.sh"
+YT_SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v17.sh"
 if [ ! -f "$YT_SH" ]; then
     suite "build_format_args"
     fail "production-скрипт на месте" "$YT_SH" "файл не найден — тест проверял бы копию, а не production"
@@ -181,9 +181,9 @@ assert_contains "неизвестный пресет → avc1"      "vcodec^=avc
 # ══════════════════════════════════════════════════════════════
 suite "Task 9: исправленные itag-таблицы во всех 3 платформах (анализ исходников)"
 # ══════════════════════════════════════════════════════════════
-SH_SRC="$(cat "$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.sh")"
-CMD_SRC="$(cat "$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.cmd")"
-PS1_SRC="$(cat "$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.ps1")"
+SH_SRC="$(cat "$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v17.sh")"
+CMD_SRC="$(cat "$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v17.cmd")"
+PS1_SRC="$(cat "$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v17.ps1")"
 
 # SH
 assert_contains "SH: avc1_https 2160 → 140+266"  "140+266"  "$SH_SRC"
@@ -207,7 +207,7 @@ suite "ПРОДАКШН build_format_args (dot-source SH) — таблицы н�
 # main() под guard → можно дот-сорсить и звать НАСТОЯЩУЮ build_format_args.
 # Изоляция в субшелле: у боевого скрипта 'set -uo pipefail' в шапке, не тащим его
 # в тело теста. Ловит расхождение боевых itag-таблиц с ожиданиями (F-test-copies).
-prod_fmt() { ( YTDLP_BIN=":"; source "$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.sh" >/dev/null 2>&1; build_format_args "$1" "$2" youtube; printf '%s' "${FMT_ARGS_ARR[1]}" ); }
+prod_fmt() { ( YTDLP_BIN=":"; source "$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v17.sh" >/dev/null 2>&1; build_format_args "$1" "$2" youtube; printf '%s' "${FMT_ARGS_ARR[1]}" ); }
 
 assert_eq       "prod 60fps 720"   "140+298/best[height<=720]"       "$(prod_fmt 720 avc1_https_60fps)"
 assert_eq       "prod 60fps 1080"  "140+299/298/best[height<=1080]"  "$(prod_fmt 1080 avc1_https_60fps)"

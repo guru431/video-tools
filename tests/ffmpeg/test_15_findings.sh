@@ -39,14 +39,18 @@ default_vars() {
 # Запускает script.sh, захватывает stdout+stderr в OUT_TEXT и код возврата в RC.
 run_capture() {
     rm -f "$FFMPEG_LOG"
+    # `exec < /dev/null` ВНУТРИ подоболочки, а не редирект на присваивании снаружи:
+    # редирект у простой команды без имени сбрасывает $? в 0, и RC был всегда 0 —
+    # любая проверка кода возврата проходила бы независимо от исхода скрипта.
     OUT_TEXT=$(
+        exec < /dev/null
         export PATH="$MOCKS_DIR:$PATH"
         export MOCK_FFMPEG_ENCODERS=""
         export MOCK_FFMPEG_LOG="$FFMPEG_LOG"
         default_vars
         for ov in "$@"; do eval "$ov"; done
         source "$SCRIPT" 2>&1
-    ) < /dev/null
+    )
     RC=$?
 }
 log_has() { [ -f "$FFMPEG_LOG" ] && grep -qF -- "$1" "$FFMPEG_LOG"; }
@@ -321,12 +325,13 @@ fi
 run_speed() {
     local val="$1"
     OUT_TEXT=$(
+        exec < /dev/null
         export PATH="$MOCKS_DIR:$PATH"; export MOCK_FFMPEG_ENCODERS=""; export MOCK_FFMPEG_LOG="$FFMPEG_LOG"
         # set -a: скрипт запускается подпроцессом (иначе timeout не поймает зависание),
         # поэтому конфиг должен уехать в окружение.
         set -a; default_vars; playback_speed=":+:$val"; set +a
         _timeout 15 bash "$SCRIPT" 2>&1
-    ) < /dev/null
+    )
     RC=$?
 }
 
@@ -436,7 +441,9 @@ touch "$IN/par1.mp4" "$IN/par2.mp4"; rm -f "$DST/par1.mp4" "$DST/par2.mp4"
 run_capture 'parallel_files=":+:2"'
 assert_not_contains "параллель: нет ложной коллизии in==out" "выход совпадает с входом" "$OUT_TEXT"
 assert_not_contains "параллель: canon_path доступен в дочерней оболочке" "canon_path: command not found" "$OUT_TEXT"
-if [ -f "$DST/par1.mp4" ] && [ -f "$DST/par2.mp4" ]; then pass "параллель: оба файла перекодированы"; else fail "параллель: оба файла перекодированы" "par1.mp4 + par2.mp4" "$(ls "$DST" 2>/dev/null | tr '\n' ' ')"; fi
+# При провале печатаем и вывод скрипта: по одному `ls` целевой папки причину
+# («encode_file: command not found» из чужого bash, ошибка xargs) не отличить.
+if [ -f "$DST/par1.mp4" ] && [ -f "$DST/par2.mp4" ]; then pass "параллель: оба файла перекодированы"; else fail "параллель: оба файла перекодированы" "par1.mp4 + par2.mp4" "в $DST: [$(ls "$DST" 2>/dev/null | tr '\n' ' ')]; вывод скрипта: $(printf '%s' "$OUT_TEXT" | tr '\n' '|')"; fi
 rm -f "$IN"/par*.mp4 "$DST"/par*.mp4 "$DST"/.par*.ffconv
 
 # ══════════════════════════════════════════════════════════════
@@ -720,6 +727,29 @@ assert_contains "CMD: проверка через findstr /x"      'findstr /i /
 assert_contains "CMD: temp-файл карты удаляется"      'if defined _col_file del' "$src_cmd_col"
 # Отсутствие PowerShell не должно молча выключать защиту.
 assert_contains "CMD: нет PowerShell → явный WARN"    'Не удалось построить карту конфликтов' "$src_cmd_col"
+
+# ══════════════════════════════════════════════════════════════
+suite "Метка времени чч-мм-сс: битое значение отсекается до кодирования"
+# ══════════════════════════════════════════════════════════════
+# Суть: "1:00:00" (двоеточия вместо дефисов) уходило прямо в арифметику. В PS1 каст
+# [int]"1:00:00" бросал исключение, trap рвал ВЕСЬ батч невнятной ошибкой; в SH
+# $(( )) печатал сырую "syntax error in expression" и оставлял значение пустым —
+# разбиение молча шло не по тем границам. Проверяем внятный отказ и отсутствие запуска.
+touch "$IN/hms.mp4"; rm -f "$DST/hms.mp4"
+run_capture 'start_coding=":+:1:00:00"'
+assert_contains "start: названо поле и ожидаемый формат" "[split] start: ожидается чч-мм-сс" "$OUT_TEXT"
+assert_not_contains "start: нет сырой ошибки арифметики" "syntax error" "$OUT_TEXT"
+assert_eq "start: батч останавливается с кодом 1" "1" "$RC"
+if log_has "-i"; then fail "start: ffmpeg не запускался" "лог пуст" "ffmpeg вызван"; else pass "start: ffmpeg не запускался"; fi
+
+run_capture 'length_coding=":+:00-05"'
+assert_contains "length: неполная метка тоже отсекается" "[split] length: ожидается чч-мм-сс" "$OUT_TEXT"
+
+# Корректное значение проходит насквозь — валидатор не должен ломать рабочий путь.
+run_capture 'start_coding=":+:00-00-10"'
+assert_not_contains "корректная метка не отвергается" "ожидается чч-мм-сс" "$OUT_TEXT"
+if log_has "-ss 10"; then pass "корректная метка доезжает до ffmpeg (-ss 10)"; else fail "корректная метка доезжает до ffmpeg" "-ss 10 в логе" "нет"; fi
+rm -f "$IN/hms.mp4" "$DST"/hms*.mp4 "$DST"/.hms*.ffconv
 
 # ── Cleanup ───────────────────────────────────────────────────
 rm -rf "$WORK"

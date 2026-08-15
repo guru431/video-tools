@@ -40,14 +40,18 @@ default_vars() {
 
 run_capture() {
     rm -f "$FFMPEG_LOG"
+    # `exec < /dev/null` ВНУТРИ подоболочки, а не редирект на присваивании снаружи:
+    # редирект у простой команды без имени сбрасывает $? в 0, и RC был всегда 0 —
+    # любая проверка кода возврата проходила бы независимо от исхода скрипта.
     OUT_TEXT=$(
+        exec < /dev/null
         export PATH="$MOCKS_DIR:$PATH"
         export MOCK_FFMPEG_ENCODERS=""
         export MOCK_FFMPEG_LOG="$FFMPEG_LOG"
         default_vars
         for ov in "$@"; do eval "$ov"; done
         source "$SCRIPT" 2>&1
-    ) < /dev/null
+    )
     RC=$?
 }
 log_has() { [ -f "$FFMPEG_LOG" ] && grep -qF -- "$1" "$FFMPEG_LOG"; }
@@ -55,7 +59,7 @@ log_has() { [ -f "$FFMPEG_LOG" ] && grep -qF -- "$1" "$FFMPEG_LOG"; }
 SH_SRC="$(cat "$SCRIPT")"
 PS1_SRC="$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1")"
 CMD_SRC="$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.cmd")"
-GUI_SRC="$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v16.ps1")"
+GUI_SRC="$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v17.ps1")"
 
 # ══════════════════════════════════════════════════════════════
 suite "F1: dry_run не уничтожает существующий выход при overwrite_existing=yes"

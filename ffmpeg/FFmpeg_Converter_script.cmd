@@ -85,6 +85,13 @@ for /f "tokens=1,2 delims=:" %%a in ("%gpu_tune%") do (set "gpu_tune_status=%%a"
 for /f "tokens=1,2 delims=:" %%a in ("%gpu_rc%") do (set "gpu_rc_status=%%a" & set "gpu_rc_value=%%b")
 for /f "tokens=1,2 delims=:" %%a in ("%playback_speed%") do (set "playback_speed_status=%%a" & set "playback_speed_value=%%b")
 
+rem parallel_files реализован ТОЛЬКО в .sh (там xargs -P); в CMD и PS1 параллельной
+rem ветки нет. Раньше ключ молча игнорировался: один config.ini на Linux давал
+rem параллель, на Windows — последовательную обработку, и об этом нигде не говорилось.
+if "!parallel_files_status!"=="+" if not "!parallel_files_value!"=="1" (
+	echo [ПРЕДУПРЕЖДЕНИЕ] parallel_files=!parallel_files_value! игнорируется: параллельная обработка файлов реализована только в SH-версии. Файлы обрабатываются последовательно.
+)
+
 rem --- Формирование аудио-параметров ---
 if "!audio_codec_status!"=="+" (set "set_audio_codec=-c:a !audio_codec_value!") else (set "set_audio_codec=")
 if "!audio_number_channels_status!"=="+" (set "set_audio_number_channels=-ac !audio_number_channels_value!") else (set "set_audio_number_channels=")
@@ -111,6 +118,11 @@ if "!hw_accel_status!"=="+" call :resolve_hw
 rem --- Время начала и длительности ---
 for /f "tokens=1,2 delims=:" %%a in ("%start_coding%") do (set "start_coding_status=%%a" & set "start_coding_value=%%b")
 if "!start_coding_status!"=="+" (
+	call :check_hms "[split] start" "!start_coding_value!"
+	if errorlevel 1 (
+		pause
+		exit /b 1
+	)
 	for /f "tokens=1,2,3 delims=-" %%i in ("!start_coding_value!") do set "x=1%%i" & set "y=1%%j" & set "z=1%%k"
 	set /a "start_coding_value=(x-100)*3600+(y-100)*60+(z-100)"
 	set "set_start_coding=-ss !start_coding_value!"
@@ -129,6 +141,11 @@ if "!start_coding_status!"=="+" if not "!start_coding_value!"=="0" set "part_suf
 
 for /f "tokens=1,2 delims=:" %%a in ("%length_coding%") do (set "length_coding_status=%%a" & set "length_coding_value=%%b")
 if "!length_coding_status!"=="+" (
+	call :check_hms "[split] length" "!length_coding_value!"
+	if errorlevel 1 (
+		pause
+		exit /b 1
+	)
 	for /f "tokens=1,2,3 delims=-" %%i in ("!length_coding_value!") do set "x=1%%i" & set "y=1%%j" & set "z=1%%k"
 	set /a "length_coding_value=(x-100)*3600+(y-100)*60+(z-100)"
 	set "set_length_coding=-t !length_coding_value!"
@@ -773,11 +790,15 @@ rem а goto из тела for обрывал бы перечисление фа�
 					rem Разбиение всегда идёт по времени. Реализация — в SH/PS1.
 					set "num="
 					set "d="
+					rem Граница считается в ОДНУ переменную _lcv: прежний вариант заводил
+					rem отдельную lcv0..lcv999 на итерацию, и они оставались в окружении до
+					rem конца прогона (у длинного файла — сотни имён). Значение нужно только
+					rem внутри своей итерации, delayed expansion пересчитывает его каждый раз.
 					for /l %%i in (0,1,999) do (
 						if not defined d (
-							if %%i==0 (set /a "lcv%%i=0") else (set /a "lcv%%i=length_coding_value*%%i")
-							if !duration! gtr !lcv%%i! (
-								set "part_start=!lcv%%i!"
+							if %%i==0 (set "_lcv=0") else (set /a "_lcv=length_coding_value*%%i")
+							if !duration! gtr !_lcv! (
+								set "part_start=!_lcv!"
 								if defined num (set "num=!num! !part_start!") else (set "num=!part_start!")
 							) else (set "d=1")
 						)
@@ -1026,6 +1047,19 @@ set "use_hw_accel=yes"
 set "hw_accel_type=%hw_try_type%"
 set "hw_decode_args=%hw_try_args%"
 set "set_video_codec=%hw_candidate%"
+exit /b 0
+
+rem --- Проверка метки времени "чч-мм-сс" (паритет с check_hms в .sh / ConvertTo-Seconds в .ps1) ---
+rem %1 = что проверяем, %2 = значение. Без проверки "1:00:00" и любой другой текст
+rem уходил в set /a, который молча даёт 0: разбиение работало не по тем границам.
+:check_hms
+echo %~2| findstr /r /c:"^[0-9][0-9]*-[0-9][0-9]*-[0-9][0-9]*$" >nul
+if errorlevel 1 (
+	echo.
+	echo [ОШИБКА] %~1: ожидается чч-мм-сс ^(например 00-01-30^), получено: "%~2"
+	echo.
+	exit /b 1
+)
 exit /b 0
 
 rem --- D6. Построение каскада atempo (milli-арифметика, без float) ---

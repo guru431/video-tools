@@ -14,7 +14,7 @@
 
 TESTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
-DLP_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.ps1"
+DLP_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v17.ps1"
 
 source "$TESTS_DIR/lib/framework.sh"
 
@@ -102,6 +102,7 @@ url = ${TEST_PROXY_VAR}
 method = browser
 [download]
 default_quality = 1080
+default_quality = 360
 [translation]
 enabled = true
 target_lang = ru
@@ -126,6 +127,10 @@ Write-Output ("rc_method=" + (Read-Config 'method' 'cookies' 'none'))
 Write-Output ("rc_quality=" + (Read-Config 'default_quality' 'download' '720'))
 Write-Output ("rc_default=" + (Read-Config 'nonexistent' 'proxy' 'my_default'))
 Write-Output ("rc_transen=" + (Read-Config 'enabled' 'translation' 'false'))
+# Дубль ключа в секции: выигрывает ПЕРВОЕ вхождение — тот же контракт, что у
+# ffmpeg-парсера и у обоих .sh (там `break` на первом совпадении). Раньше здесь
+# побеждало последнее, и один config.ini читался компонентами по-разному.
+Write-Output ("rc_dup=" + (Read-Config 'default_quality' 'download' '720'))
 
 # Get-Platform (production: якорь по границе домена)
 Write-Output ("plat_yt=" + (Get-Platform 'https://www.youtube.com/watch?v=abc123'))
@@ -194,6 +199,7 @@ assert_eq "cookies method"                             "browser"                
 assert_eq "default_quality"                            "1080"                         "$(get_field "$out" rc_quality)"
 assert_eq "нет ключа → default"                        "my_default"                   "$(get_field "$out" rc_default)"
 assert_eq "translation enabled"                        "true"                         "$(get_field "$out" rc_transen)"
+assert_eq "дубль ключа: выигрывает первое вхождение"   "1080"                         "$(get_field "$out" rc_dup)"
 
 # ── Get-Platform ──────────────────────────────────────────────
 suite "PS1 yt-dlp: Get-Platform (production, якорь границы)"

@@ -21,10 +21,18 @@ norm_folder() {
 folder_sources="$(norm_folder "$folder_sources")"
 folder_destination="$(norm_folder "$folder_destination")"
 
+# --- Пауза «нажмите Enter» — только при интерактивном stdin ---
+# Скрипт отдаёт exit code для cron/CI, но безусловный `read` ждал EOF: неинтерактивная
+# джоба висела на паузе, а код возврата приходил с опозданием (или не приходил вовсе —
+# по таймауту раннера). Терминала нет → паузы нет, поведение в консоли не меняется.
+pause_prompt() {
+	if [ -t 0 ]; then read -p "$1" _; fi
+}
+
 # --- E1. Проверка окружения ---
 if [ ! -d "$folder_sources" ]; then
 	echo -e "\n[ОШИБКА] Папка источника не найдена: $folder_sources\n"
-	read -p "Нажмите [Enter], чтобы выйти..."
+	pause_prompt "Нажмите [Enter], чтобы выйти..."
 	exit 1
 fi
 
@@ -32,14 +40,14 @@ if [ ! -d "$folder_destination" ]; then
 	mkdir -p "$folder_destination"
 	if [ $? -ne 0 ]; then
 		echo -e "\n[ОШИБКА] Не удалось создать папку назначения: $folder_destination\n"
-		read -p "Нажмите [Enter], чтобы выйти..."
+		pause_prompt "Нажмите [Enter], чтобы выйти..."
 		exit 1
 	fi
 fi
 
 if ! command -v "$ffmpeg" &> /dev/null; then
 	echo -e "\n[ОШИБКА] ffmpeg не найден: $ffmpeg\n"
-	read -p "Нажмите [Enter], чтобы выйти..."
+	pause_prompt "Нажмите [Enter], чтобы выйти..."
 	exit 1
 fi
 
@@ -127,8 +135,22 @@ if [ "$hw_accel_status" = "+" ]; then
 fi
 
 # --- Время начала и длительности ---
+# Формат проверяем ДО арифметики: "1:00:00" (двоеточия вместо дефисов) или любой другой
+# текст уходил прямо в $(( )), давал сырую "syntax error in expression" и оставлял
+# значение пустым — разбиение молча работало не по тем границам. Паритет с
+# ConvertTo-Seconds в .ps1 и :check_hms в .cmd.
+check_hms() {
+	local what="$1" val="$2"
+	if [[ ! "$val" =~ ^[0-9]{1,2}-[0-9]{1,2}-[0-9]{1,2}$ ]]; then
+		echo -e "\n[ОШИБКА] ${what}: ожидается чч-мм-сс (например 00-01-30), получено: '$val'\n"
+		pause_prompt "Нажмите [Enter], чтобы выйти..."
+		exit 1
+	fi
+}
+
 IFS=':' read -r foo start_coding_status start_coding_value <<< "$start_coding"
 if [ "$start_coding_status" = "+" ]; then
+	check_hms "[split] start" "$start_coding_value"
 	IFS='-' read -r x y z <<< "$start_coding_value"
 	start_coding_value=$((${x#0}*3600+${y#0}*60+${z#0}))
 	set_start_coding="-ss $start_coding_value"
@@ -138,6 +160,7 @@ fi
 
 IFS=':' read -r foo length_coding_status length_coding_value <<< "$length_coding"
 if [ "$length_coding_status" = "+" ]; then
+	check_hms "[split] length" "$length_coding_value"
 	IFS='-' read -r x y z <<< "$length_coding_value"
 	length_coding_value=$((${x#0}*3600+${y#0}*60+${z#0}))
 	set_length_coding="-t $length_coding_value"
@@ -284,7 +307,7 @@ if [ "$playback_speed_status" = "+" ] && [ "$playback_speed_value" != "1.0" ]; t
 	# (верхняя граница — предел одного звена atempo).
 	if ! awk "BEGIN {v=($speed)+0; exit !(v > 0 && v <= 100)}" </dev/null 2>/dev/null; then
 		echo -e "\n[ОШИБКА] playback_speed должен быть числом в диапазоне 0 < speed <= 100 (получено: '$speed')\n"
-		read -p "Нажмите [Enter], чтобы выйти..."
+		pause_prompt "Нажмите [Enter], чтобы выйти..."
 		exit 1
 	fi
 	# atempo поддерживает 0.5-100.0, для значений >2.0 или <0.5 — каскад
@@ -356,7 +379,7 @@ if [ "$audio_only" != "yes" ] && [ "$copy_codecs" != "yes" ] && [ "$merge_files"
 	esac
 	if [ -n "$_incompat" ]; then
 		echo -e "\n[ОШИБКА] Несовместимая комбинация контейнера и кодеков:\n$_incompat\n"
-		read -p "Нажмите [Enter], чтобы выйти..."
+		pause_prompt "Нажмите [Enter], чтобы выйти..."
 		exit 1
 	fi
 fi
@@ -779,13 +802,19 @@ encode_file() {
 			echo -e "\n\nЖдите! Идёт поиск пауз в файле:\n$full_path\n"
 			local search_silence=$("$ffmpeg" -nostdin -i "$full_path" -nostats -af "silencedetect=n=${silence_threshold}:d=${silence_duration}" -f null - 2>&1 | grep -i silence_)
 			local silence_start_val=""
+			# Знак обязателен в шаблоне: ffmpeg печатает и отрицательный silence_start
+			# (например "silence_start: -0.0261224"), а шаблон без минуса давал ПУСТОЕ
+			# значение — следующая же строка silence_end роняла awk синтаксической
+			# ошибкой на "(+12.3)/2" и разбиение по паузам молча теряло точку.
 			while IFS= read -r line; do
 				if [[ "$line" == *"silence_start"* ]]; then
-					silence_start_val=$(echo "$line" | grep -o 'silence_start: [0-9.]*' | sed 's/silence_start: //')
+					silence_start_val=$(echo "$line" | grep -oE 'silence_start: -?[0-9.]+' | sed 's/silence_start: //')
 				fi
 				if [[ "$line" == *"silence_end"* ]]; then
-					local silence_end_val=$(echo "$line" | grep -o 'silence_end: [0-9.]*' | sed 's/silence_end: //')
-					split_points+=($(awk "BEGIN {printf \"%d\", ($silence_start_val+$silence_end_val)/2}"))
+					local silence_end_val=$(echo "$line" | grep -oE 'silence_end: -?[0-9.]+' | sed 's/silence_end: //')
+					if [ -n "$silence_start_val" ] && [ -n "$silence_end_val" ]; then
+						split_points+=($(awk "BEGIN {printf \"%d\", ($silence_start_val+$silence_end_val)/2}"))
+					fi
 				fi
 			done <<< "$search_silence"
 		fi
@@ -1236,7 +1265,11 @@ else
 		export keep_aspect_ratio_status keep_aspect_ratio_value playback_speed_status playback_speed_value
 		export results_dir collisions_file
 		export part_suffix_known
-		find_inputs | xargs -0 -P "$parallel_count" -I {} bash -c 'trap _cleanup_child_on_int INT TERM; encode_file "$@"' _ {}
+		# Интерпретатор зовём ПОЛНЫМ путём ("$BASH"), а не голым `bash`: xargs ищет имя
+		# по PATH, и на Windows-раннере туда попадает System32\bash.exe (WSL). Тот не
+		# видит ни экспортированных функций (BASH_FUNC_*), ни путей вида C:\...,
+		# поэтому параллельная ветка молча не обрабатывала ни одного файла.
+		find_inputs | xargs -0 -P "$parallel_count" -I {} "${BASH:-bash}" -c 'trap _cleanup_child_on_int INT TERM; encode_file "$@"' _ {}
 	else
 		find_inputs | while IFS= read -r -d '' full_path; do
 			encode_file "$full_path"
@@ -1287,7 +1320,7 @@ if [ "$total_in_bytes" -gt 0 ]; then
 fi
 echo "══════════════════════════════════════════════"
 echo -e "\n"
-read -p "Нажмите [Enter], чтобы продолжить..."
+pause_prompt "Нажмите [Enter], чтобы продолжить..."
 # Exit code отражает наличие ошибок — cron/CI/GUI могут детектировать провал батча.
 [ "$total_fail" -gt 0 ] && exit 1
 exit 0

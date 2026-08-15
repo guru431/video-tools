@@ -48,7 +48,12 @@ if (Test-Path -LiteralPath $configFile) {
                 $ev = [Environment]::GetEnvironmentVariable($m.Groups[1].Value)
                 if ($null -eq $ev) { Write-Host "WARN: переменная $($m.Groups[1].Value) не задана"; "" } else { $ev }
             })
-            $script:_configCache["${curSection}::$($Matches[1].Trim())"] = $val
+            # Первое вхождение ключа выигрывает — тот же контракт, что у ffmpeg-парсера
+            # (`if (-not $_cfgCache.ContainsKey($_k))`) и у обоих .sh (там `break` на
+            # первом совпадении). Раньше здесь побеждало ПОСЛЕДНЕЕ вхождение, и один
+            # и тот же config.ini с дублем ключа читался компонентами по-разному.
+            $_k = "${curSection}::$($Matches[1].Trim())"
+            if (-not $script:_configCache.ContainsKey($_k)) { $script:_configCache[$_k] = $val }
         }
     }
 }
@@ -423,7 +428,7 @@ if ($env:YTDLP_TEST -eq '1') { return }
 
 # ── Создание формы ────────────────────────────────────────────────────────
 $form = [System.Windows.Forms.Form]::new()
-$form.Text = "Video Downloader (yt-dlp) v16"
+$form.Text = "Video Downloader (yt-dlp) v17"
 $form.Size = [System.Drawing.Size]::new(830, 807)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
@@ -1260,7 +1265,7 @@ $btnStart.Add_Click({
 
             Set-UiProgress -Percent 0 `
                 -Status "Загрузка $itemNum/$totalItems  [$platform]" `
-                -Title  "Video Downloader (yt-dlp) v16  [$itemNum/$totalItems]"
+                -Title  "Video Downloader (yt-dlp) v17  [$itemNum/$totalItems]"
             Append-Output ""
             Append-Output "═══ [$itemNum/$totalItems] [$platform]  $currentUrl" ([System.Drawing.Color]::Cyan)
 
@@ -1293,7 +1298,10 @@ $btnStart.Add_Click({
             $dlManifest = $null
             if ($chkTranslate.Checked -or ($cfg_useArchive -eq "true" -and $qi -lt 7)) {
                 $dlManifest = Join-Path ([System.IO.Path]::GetTempPath()) ("ytdlp_manifest_{0}.txt" -f [System.Guid]::NewGuid().ToString('N'))
-                Set-Content -LiteralPath $dlManifest -Value $null -Encoding UTF8
+                # Создаём БЕЗ BOM: `Set-Content -Encoding UTF8` в PS 5.1 пишет 3 байта
+                # преамбулы даже для пустого файла, и «пустой манифест» ниже определялся
+                # бы по содержимому, а не по длине (см. проверку archive-skip).
+                [System.IO.File]::WriteAllText($dlManifest, "")
                 $command += "--print-to-file", "after_move:filepath", $dlManifest
             }
             # Архив добавляется ниже — только для реальных загрузок (qi 0..6), НЕ для
@@ -1482,7 +1490,7 @@ $btnStart.Add_Click({
                         $pct = [int][math]::Floor([double]$Matches[1])
                         Set-UiProgress -Percent $pct `
                             -Status "Загрузка $itemNum/$totalItems  [$platform]  $pct%" `
-                            -Title  "Video Downloader (yt-dlp) v16  [$itemNum/$totalItems]  $pct%"
+                            -Title  "Video Downloader (yt-dlp) v17  [$itemNum/$totalItems]  $pct%"
                     } elseif ($line -match '\[download\] Destination:') {
                         Append-Output $line ([System.Drawing.Color]::LightGreen)
                     } elseif ($line -match '\[Merger\]|\[info\].*Merging') {
@@ -1541,9 +1549,14 @@ $btnStart.Add_Click({
                 # файла (пустой манифест) → видео уже было в архиве. Это ПРОПУСК, а не
                 # загрузка. Контракт дословно как у .sh (там это `return 2`): на пропуске
                 # перевод не запускается, потому что переводить нечего.
+                # Пустоту проверяем по СОДЕРЖИМОМУ, а не по длине файла: длина ловит любую
+                # преамбулу кодировки (у `Set-Content -Encoding UTF8` в PS 5.1 это 3 байта
+                # BOM), из-за чего условие `Length -eq 0` не выполнялось никогда и пропуск
+                # по архиву засчитывался как реальная загрузка.
                 $archiveSkipped = $false
                 if ($dlManifest -and $cfg_useArchive -eq "true" -and $qi -lt 7 -and (Test-Path -LiteralPath $dlManifest)) {
-                    $archiveSkipped = ((Get-Item -LiteralPath $dlManifest).Length -eq 0)
+                    $archiveSkipped = (@(Get-Content -LiteralPath $dlManifest -ErrorAction SilentlyContinue |
+                                         Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -eq 0)
                 }
 
                 if ($archiveSkipped) {
@@ -1796,7 +1809,7 @@ $btnStart.Add_Click({
             if ($failCount -gt 0) { $summary += "  |  Ошибки: $failCount" }
             Append-Output $summary ([System.Drawing.Color]::LightGreen)
             Set-UiProgress -Status "Завершено: $successCount/$totalItems" `
-                           -Title  "Video Downloader (yt-dlp) v16 — Готово!"
+                           -Title  "Video Downloader (yt-dlp) v17 — Готово!"
         } else {
             Append-Output "═══ Остановлено  |  Загружено: $successCount" ([System.Drawing.Color]::Yellow)
             Set-UiProgress -Status "Остановлено"
@@ -1841,7 +1854,7 @@ $btnClear.Add_Click({
     $richOutput.Clear()
     $progressBar.Value = 0
     $lblStatus.Text    = "Готов к загрузке"
-    $form.Text         = "Video Downloader (yt-dlp) v16"
+    $form.Text         = "Video Downloader (yt-dlp) v17"
 })
 $_fc.Add($btnClear)
 

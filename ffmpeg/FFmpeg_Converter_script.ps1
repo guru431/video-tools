@@ -49,15 +49,25 @@ $folder_destination = Normalize-FolderPath $folder_destination
 
 # --- E1. Проверка окружения ---
 $_isGui = [bool]$env:FFMPEG_GUI_PROGRESS_FILE -or [bool]$guiProgressFile
+
+# Пауза «нажмите Enter» — только в интерактивной консоли. Под GUI её нет по определению,
+# а в cron/CI stdin перенаправлен: Read-Host ждал бы EOF, и джоба стояла бы на паузе
+# вместо того, чтобы сразу отдать exit code. Паритет с pause_prompt в .sh.
+function Pause-Prompt {
+	param([string]$Text)
+	if ($_isGui) { return }
+	try { if ([Console]::IsInputRedirected) { return } } catch {}
+	Read-Host $Text | Out-Null
+}
 if ([string]::IsNullOrWhiteSpace($folder_sources) -or !(Test-Path -LiteralPath $folder_sources)) {
 	Write-Host "`n[ОШИБКА] Папка источника не найдена: $folder_sources`n"
-	if (-not $_isGui) { Read-Host "Нажмите [Enter], чтобы выйти..." }
+	Pause-Prompt "Нажмите [Enter], чтобы выйти..."
 	exit 1
 }
 
 if ([string]::IsNullOrWhiteSpace($folder_destination)) {
 	Write-Host "`n[ОШИБКА] Папка назначения не задана`n"
-	if (-not $_isGui) { Read-Host "Нажмите [Enter], чтобы выйти..." }
+	Pause-Prompt "Нажмите [Enter], чтобы выйти..."
 	exit 1
 }
 # CreateDirectory идемпотентен — предварительный Test-Path не нужен
@@ -65,7 +75,7 @@ New-DirLiteral $folder_destination
 
 try { & $ffmpeg -version 2>&1 | Out-Null } catch {
 	Write-Host "`n[ОШИБКА] ffmpeg не найден: $ffmpeg`n"
-	if (-not $_isGui) { Read-Host "Нажмите [Enter], чтобы выйти..." }
+	Pause-Prompt "Нажмите [Enter], чтобы выйти..."
 	exit 1
 }
 
@@ -108,7 +118,13 @@ $set_video_resolution = if ($video_resolution_status -eq "+") { $video_resolutio
 
 # --- Многопоточность ---
 $threads = if ($multithreads_status -eq "+") { $multithreads_value } else { "1" }
-$parallel_count = if ($parallel_files_status -eq "+") { [int]$parallel_files_value } else { 1 }
+# parallel_files реализован ТОЛЬКО в .sh (там `xargs -P`); в PS1 и CMD параллельной
+# ветки нет. Раньше значение просто молча игнорировалось: один и тот же config.ini на
+# Linux давал параллель, на Windows — последовательную обработку, и нигде об этом не
+# говорилось. Считать $parallel_count незачем — говорим вслух и работаем последовательно.
+if ($parallel_files_status -eq "+" -and "$parallel_files_value" -match '^\d+$' -and [int]$parallel_files_value -gt 1) {
+	Write-Host "[ПРЕДУПРЕЖДЕНИЕ] parallel_files=$parallel_files_value игнорируется: параллельная обработка файлов реализована только в SH-версии. Файлы обрабатываются последовательно."
+}
 
 # --- Аппаратное ускорение (nvidia / intel / off) ---
 $use_hw_accel = $false
@@ -154,18 +170,29 @@ if ($hw_accel_status -eq "+") {
 }
 
 # --- Время начала и длительности ---
+# «чч-мм-сс» → секунды. Формат проверяем ДО каста: [int]"1:00:00" бросает исключение,
+# которое подхватывает trap, и весь батч обрывался невнятной ошибкой вместо указания на
+# конкретное поле. Паритет с check_hms в .sh и :check_hms в .cmd.
+function ConvertTo-Seconds {
+	param([string]$Value, [string]$What)
+	if ($Value -notmatch '^\s*(\d{1,2})-(\d{1,2})-(\d{1,2})\s*$') {
+		Write-Host "`n[ОШИБКА] ${What}: ожидается чч-мм-сс (например 00-01-30), получено: '$Value'`n"
+		Pause-Prompt "Нажмите [Enter], чтобы выйти..."
+		exit 1
+	}
+	return [int]$Matches[1] * 3600 + [int]$Matches[2] * 60 + [int]$Matches[3]
+}
+
 $_, $start_coding_status, $start_coding_value = $start_coding -split ":"
 if ($start_coding_status -eq "+") {
-	$x, $y, $z = $start_coding_value -split '-'
-	$start_coding_value = [int]$x * 3600 + [int]$y * 60 + [int]$z
+	$start_coding_value = ConvertTo-Seconds "$start_coding_value" "[split] start"
 } else {
 	$start_coding_value = 0
 }
 
 $_, $length_coding_status, $length_coding_value = $length_coding -split ":"
 if ($length_coding_status -eq "+") {
-	$x, $y, $z = $length_coding_value -split '-'
-	$length_coding_value = [int]$x * 3600 + [int]$y * 60 + [int]$z
+	$length_coding_value = ConvertTo-Seconds "$length_coding_value" "[split] length"
 	$set_length_coding = "-t $length_coding_value"
 } else {
 	$set_length_coding = ""
@@ -389,7 +416,7 @@ if ($audio_only -ne "yes" -and $copy_codecs -ne "yes" -and $merge_files -ne "yes
 	}
 	if ($_incompat.Count -gt 0) {
 		Write-Host "`n[ОШИБКА] Несовместимая комбинация контейнера и кодеков:`n$($_incompat -join "`n")`n"
-		if (-not $_isGui) { Read-Host "Нажмите [Enter], чтобы выйти..." }
+		Pause-Prompt "Нажмите [Enter], чтобы выйти..."
 		exit 1
 	}
 }
@@ -557,8 +584,23 @@ function Write-GUIProgress {
 		command      = if ($script:_lastCommand) { $script:_lastCommand } else { "" }
 		pid          = 0
 	}
+	# Пишем в соседний temp и подменяем целиком: GUI читает этот файл таймером каждые
+	# 400 мс, и при прямой записи он регулярно попадал на полузаписанный JSON —
+	# ConvertFrom-Json падал в пустой catch, а прогресс замирал до следующего тика.
+	# Замена файла целиком означает, что читатель видит либо старую версию, либо новую.
+	# Путь резервной копии обязателен: PowerShell превращает $null в пустую строку, и
+	# трёхаргументный Replace падает с «The path is not of a legal form» — прогресс
+	# замирал бы на первой же записи. Копию сразу удаляем, она нужна только API.
 	try {
-		$data | ConvertTo-Json | Set-Content -Path $guiProgressFile -Encoding UTF8 -NoNewline
+		$_tmp = "$guiProgressFile.tmp"
+		[System.IO.File]::WriteAllText($_tmp, ($data | ConvertTo-Json))
+		if ([System.IO.File]::Exists($guiProgressFile)) {
+			$_bak = "$guiProgressFile.bak"
+			[System.IO.File]::Replace($_tmp, $guiProgressFile, $_bak)
+			[System.IO.File]::Delete($_bak)
+		} else {
+			[System.IO.File]::Move($_tmp, $guiProgressFile)
+		}
 	} catch {}
 }
 
@@ -840,8 +882,11 @@ function Encode-File {
 			$silence_start_val = $null
 			foreach ($line in $search_silence) {
 				$lineStr = "$line"
-				if ($lineStr -match "silence_start:\s+([\d.]+)") { $silence_start_val = [double]$matches[1] }
-				if ($lineStr -match "silence_end:\s+([\d.]+)" -and $null -ne $silence_start_val) {
+				# Знак обязателен в шаблоне: ffmpeg печатает и отрицательный silence_start
+				# (например "silence_start: -0.0261224"). Без минуса строка не матчилась
+				# вовсе, и вся пауза молча пропадала из списка точек разбиения.
+				if ($lineStr -match "silence_start:\s+(-?[\d.]+)") { $silence_start_val = [double]$matches[1] }
+				if ($lineStr -match "silence_end:\s+(-?[\d.]+)" -and $null -ne $silence_start_val) {
 					$silence_end_val = [double]$matches[1]
 					$split_points += [int](($silence_start_val + $silence_end_val) / 2)
 				}
@@ -1254,7 +1299,7 @@ if (-not $guiProgressFile) {
 	}
 	Write-Host "══════════════════════════════════════════════"
 	Write-Host ""
-	Read-Host "Нажмите [Enter], чтобы продолжить..."
+	Pause-Prompt "Нажмите [Enter], чтобы продолжить..."
 } else {
 	# GUI: записываем финальное состояние. F17. Финал обязан назвать исход явно —
 	# GUI не видит наш exit code и по одному «Готово» не отличит провал от успеха.

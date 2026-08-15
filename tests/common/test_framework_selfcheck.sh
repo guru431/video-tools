@@ -10,7 +10,7 @@
 #
 # Эффект зависел от РАЗМЕРА текста: на коротких строках writer успевал
 # дописать до выхода grep, и всё выглядело исправным. На файле в ~94 КБ
-# (Downloading_from_YouTube_v16.ps1) начиналось расхождение:
+# (Downloading_from_YouTube_v17.ps1) начиналось расхождение:
 #   • assert_contains     — ложный ПРОВАЛ;
 #   • assert_not_contains — ложный УСПЕХ, то есть guardrail «запрещённого
 #     паттерна нет» оставался зелёным при том, что паттерн в файле есть.
@@ -49,9 +49,9 @@ assert_not_contains "assert_not_contains не находит отсутству�
 _probe=$(mktemp "${TMPDIR:-/tmp}/fw_probe_XXXXXX.sh")
 cat > "$_probe" << PROBEEOF
 source "$TESTS_DIR/lib/framework.sh"
-source "$(dirname "$0")/../../yt-dlp/Downloading_from_YouTube_v16.sh" >/dev/null 2>&1
+source "$(dirname "$0")/../../yt-dlp/Downloading_from_YouTube_v17.sh" >/dev/null 2>&1
 suite "probe"
-_big="\$(cat "$(dirname "$0")/../../yt-dlp/Downloading_from_YouTube_v16.ps1")"
+_big="\$(cat "$(dirname "$0")/../../yt-dlp/Downloading_from_YouTube_v17.ps1")"
 assert_not_contains "запрещённый паттерн отсутствует" "Read-Config" "\$_big"
 summary
 PROBEEOF

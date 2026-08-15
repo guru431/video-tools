@@ -14,8 +14,8 @@ TESTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
 source "$TESTS_DIR/lib/framework.sh"
 
-YT_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.ps1"
-YT_CMD="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.cmd"
+YT_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v17.ps1"
+YT_CMD="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v17.cmd"
 PS1_SRC="$(cat "$YT_PS1")"
 CMD_SRC="$(cat "$YT_CMD")"
 

@@ -18,7 +18,7 @@
 
 TESTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
-DLP_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.ps1"
+DLP_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v17.ps1"
 
 source "$TESTS_DIR/lib/framework.sh"
 
@@ -50,7 +50,7 @@ assert_contains "обработчик Resize"             '$form.Add_Resize({'  
 # Внутри цикла загрузки прямых обращений к контролам быть не должно — только
 # через Set-UiProgress, иначе защита обходится в самом горячем месте.
 assert_not_contains "нет прямого progressBar.Value в цикле"  '$progressBar.Value = [math]::Min($pct, 100)'  "$src"
-assert_not_contains "нет прямого form.Text в цикле"          '$form.Text         = "Video Downloader (yt-dlp) v16  [$itemNum/$totalItems]  $pct%"'  "$src"
+assert_not_contains "нет прямого form.Text в цикле"          '$form.Text         = "Video Downloader (yt-dlp) v17  [$itemNum/$totalItems]  $pct%"'  "$src"
 # UI-поток не должен молчать 100 мс подряд: команды окна обрабатывались рывками.
 assert_not_contains "нет сплошного Start-Sleep 100 в цикле"  "Start-Sleep -Milliseconds 100"  "$src"
 assert_contains "пауза с прокачкой сообщений"   '[System.Threading.Thread]::Sleep(10)'  "$src"

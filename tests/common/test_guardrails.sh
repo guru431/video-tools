@@ -10,9 +10,9 @@ TESTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
 source "$TESTS_DIR/lib/framework.sh"
 
-YT_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.ps1"
-YT_CMD="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.cmd"
-YT_SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.sh"
+YT_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v17.ps1"
+YT_CMD="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v17.cmd"
+YT_SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v17.sh"
 FF_CMD="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.cmd"
 
 ps1="$(cat "$YT_PS1")"
@@ -208,8 +208,8 @@ done
 assert_empty "ни один тест не держит PS1/CMD-копию production-подпрограммы" "$ps_cmd_offenders"
 
 # PS1-тесты парсера обязаны дот-сорсить production под гардом FFCONV_TEST/YTDLP_TEST.
-for _pair in "ffmpeg/test_02_config_ps1.sh:ffmpeg/FFmpeg_Converter_run_v16.ps1" \
-             "ffmpeg/test_13_parser_parity.sh:ffmpeg/FFmpeg_Converter_run_v16.ps1"; do
+for _pair in "ffmpeg/test_02_config_ps1.sh:ffmpeg/FFmpeg_Converter_run_v17.ps1" \
+             "ffmpeg/test_13_parser_parity.sh:ffmpeg/FFmpeg_Converter_run_v17.ps1"; do
     _tf="${_pair%%:*}"; _pf="${_pair#*:}"
     if grep -q "$(basename "$_pf")" "$TESTS_DIR/$_tf" 2>/dev/null; then
         pass "$(basename "$_tf") ссылается на настоящий $(basename "$_pf")"
@@ -219,16 +219,16 @@ for _pair in "ffmpeg/test_02_config_ps1.sh:ffmpeg/FFmpeg_Converter_run_v16.ps1" 
 done
 
 # PS1-точка входа обязана иметь тест-гард, иначе дот-сорсинг запустит загрузку настроек.
-if grep -qE '\$env:FFCONV_TEST' "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v16.ps1" 2>/dev/null; then
-    pass "FFmpeg_Converter_run_v16.ps1: тест-гард FFCONV_TEST на месте"
+if grep -qE '\$env:FFCONV_TEST' "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v17.ps1" 2>/dev/null; then
+    pass "FFmpeg_Converter_run_v17.ps1: тест-гард FFCONV_TEST на месте"
 else
-    fail "FFmpeg_Converter_run_v16.ps1: тест-гард FFCONV_TEST на месте" '$env:FFCONV_TEST' "гарда нет — дот-сорсинг запустит конвейер"
+    fail "FFmpeg_Converter_run_v17.ps1: тест-гард FFCONV_TEST на месте" '$env:FFCONV_TEST' "гарда нет — дот-сорсинг запустит конвейер"
 fi
 
 # Тесты, разбирающие config.ini, обязаны брать парсер из production, а не свой.
-for _pair in "ffmpeg/test_01_config_sh.sh:ffmpeg/FFmpeg_Converter_run_v16.sh" \
-             "yt-dlp/test_01_read_config.sh:yt-dlp/Downloading_from_YouTube_v16.sh" \
-             "yt-dlp/test_03_cookie_args.sh:yt-dlp/Downloading_from_YouTube_v16.sh"; do
+for _pair in "ffmpeg/test_01_config_sh.sh:ffmpeg/FFmpeg_Converter_run_v17.sh" \
+             "yt-dlp/test_01_read_config.sh:yt-dlp/Downloading_from_YouTube_v17.sh" \
+             "yt-dlp/test_03_cookie_args.sh:yt-dlp/Downloading_from_YouTube_v17.sh"; do
     _tf="${_pair%%:*}"; _pf="${_pair#*:}"
     if grep -q "$(basename "$_pf")" "$TESTS_DIR/$_tf" 2>/dev/null; then
         pass "$(basename "$_tf") ссылается на настоящий $(basename "$_pf")"
@@ -238,7 +238,7 @@ for _pair in "ffmpeg/test_01_config_sh.sh:ffmpeg/FFmpeg_Converter_run_v16.sh" \
 done
 
 # Обе точки входа обязаны иметь main-гард, иначе дот-сорсинг запустит конвейер.
-for _g in "ffmpeg/FFmpeg_Converter_run_v16.sh" "yt-dlp/Downloading_from_YouTube_v16.sh"; do
+for _g in "ffmpeg/FFmpeg_Converter_run_v17.sh" "yt-dlp/Downloading_from_YouTube_v17.sh"; do
     if grep -qE '\[ "\$\{BASH_SOURCE\[0\]\}" = "\$\{?0\}?" \]' "$PROJECT_DIR/$_g" 2>/dev/null; then
         pass "$(basename "$_g"): main-гард на месте (дот-сорсинг безопасен)"
     else
@@ -364,7 +364,7 @@ suite "PowerShell: Test-Path/Get-Content по пути только с -LiteralP
 # [ ] ? * (типично для распакованных архивов — video[1], Downloads[2]) трактуется как
 # маска, Test-Path возвращает $false на существующем файле. Последствия по месту:
 # портативный yt-dlp.exe/ffmpeg.exe «не находится» и подменяется голым именем из PATH,
-# run_v16.ps1 печатает «не найден script.ps1» при существующем файле.
+# run_v17.ps1 печатает «не найден script.ps1» при существующем файле.
 # Контракт: в продуктовых .ps1 у Test-Path всегда -LiteralPath (вендоренный ps2exe.ps1
 # исключён — сторонний код со своим стилем).
 _np_hits=""
@@ -433,5 +433,63 @@ if [ -f "$CHK" ]; then
 else
     fail "check_release.ps1 на месте" "$CHK" "не найден"
 fi
+
+# ══════════════════════════════════════════════════════════════
+suite "ffmpeg: интерпретатор параллели, пауза и метки времени"
+# ══════════════════════════════════════════════════════════════
+FF_SH="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.sh"
+FF_PS1="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1"
+GUI_PS1="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v17.ps1"
+ffsh="$(cat "$FF_SH")"; ffps1="$(cat "$FF_PS1")"; gui="$(cat "$GUI_PS1")"
+
+# Голое имя `bash` в xargs на Windows-раннере резолвится в System32\bash.exe (WSL):
+# тот не видит ни экспортированных функций, ни C:\-путей, и параллельная ветка молча
+# не обрабатывает ни одного файла (F27 на CI падал именно так).
+assert_not_contains "xargs не зовёт интерпретатор по голому имени" "-I {} bash -c" "$ffsh"
+assert_contains     "xargs зовёт интерпретатор полным путём"       '-I {} "${BASH:-bash}" -c' "$ffsh"
+
+# Пауза перед выходом обязана быть под проверкой интерактивности: скрипт отдаёт
+# exit code для cron/CI, а безусловный read/Read-Host вешает джобу до EOF.
+assert_not_contains "SH: нет безусловного read -p"     'read -p "Нажмите' "$ffsh"
+assert_contains     "SH: пауза через pause_prompt"     "pause_prompt()"   "$ffsh"
+assert_contains     "SH: пауза проверяет терминал"     'if [ -t 0 ]; then read -p' "$ffsh"
+assert_not_contains "PS1: нет безусловного Read-Host"  'Read-Host "Нажмите' "$ffps1"
+assert_contains     "PS1: пауза через Pause-Prompt"    "function Pause-Prompt" "$ffps1"
+assert_contains     "PS1: пауза проверяет stdin"       "IsInputRedirected" "$ffps1"
+
+# Метки чч-мм-сс проверяются ДО арифметики на всех платформах: [int]"1:00:00" бросает
+# исключение (trap рвал весь батч), set /a молча даёт 0, $(( )) оставляет пустое.
+assert_contains "SH: валидатор check_hms"            "check_hms()"                "$ffsh"
+assert_contains "PS1: валидатор ConvertTo-Seconds"   "function ConvertTo-Seconds" "$ffps1"
+assert_contains "CMD: валидатор :check_hms"          ":check_hms"                 "$ffcmd"
+assert_contains "GUI валидирует поле начала"         'textStartTime.Text       -notmatch' "$gui"
+assert_contains "GUI валидирует поле длительности"   'textDuration.Text        -notmatch' "$gui"
+
+# parallel_files есть только в SH — PS1/CMD обязаны сказать это вслух, а не молчать.
+assert_contains "PS1: предупреждение про parallel_files" "parallel_files=\$parallel_files_value игнорируется" "$ffps1"
+assert_contains "CMD: предупреждение про parallel_files" "parallel_files=!parallel_files_value! игнорируется" "$ffcmd"
+
+# Прогресс для GUI пишется через подмену файла целиком: прямая запись отдавала
+# таймеру GUI полу-записанный JSON, и прогресс замирал до следующего тика.
+assert_not_contains "PS1: прогресс не пишется прямо в цель" 'Set-Content -Path $guiProgressFile' "$ffps1"
+assert_contains     "PS1: прогресс пишется через .tmp"      '$_tmp = "$guiProgressFile.tmp"'     "$ffps1"
+assert_contains     "PS1: подмена через File::Replace"      '[System.IO.File]::Replace($_tmp'    "$ffps1"
+# Резервный путь Replace обязан быть НЕПУСТЫМ: PowerShell превращает $null в пустую
+# строку, и вызов падает «The path is not of a legal form» — прогресс замирает совсем.
+assert_not_contains "Replace не зовётся с \$null-бэкапом" '[System.IO.File]::Replace($_tmp, $guiProgressFile, $null)' "$ffps1"
+
+# Ожидание воркера при закрытии формы качает очередь сообщений: голый Start-Sleep
+# в UI-потоке рисует «Не отвечает», и пользователь снимает процесс, оставляя ffmpeg.
+assert_contains "GUI: ожидание при закрытии качает сообщения" 'Application]::DoEvents()' "$gui"
+
+# ══════════════════════════════════════════════════════════════
+suite "silencedetect: отрицательные метки не теряются"
+# ══════════════════════════════════════════════════════════════
+# ffmpeg печатает и "silence_start: -0.0261224". Шаблон без знака давал ПУСТОЕ
+# значение (SH ронял awk на "(+12.3)/2", PS1 молча выбрасывал всю паузу).
+assert_contains "SH: шаблон silence_start учитывает знак"  "silence_start: -?[0-9.]+" "$ffsh"
+assert_contains "SH: шаблон silence_end учитывает знак"    "silence_end: -?[0-9.]+"   "$ffsh"
+assert_contains "PS1: шаблон silence_start учитывает знак" 'silence_start:\s+(-?[\d.]+)' "$ffps1"
+assert_contains "PS1: шаблон silence_end учитывает знак"   'silence_end:\s+(-?[\d.]+)'   "$ffps1"
 
 summary

@@ -10,25 +10,25 @@ ffmpeg/yt-dlp скрипты для загрузки и конвертации �
 video/
 ├── ffmpeg/                              # Конвертер видео/аудио
 │   ├── config.ini                       # Настройки: кодеки, GPU, нарезка, фильтры
-│   ├── FFmpeg_Converter_run_v16.sh      # Загрузчик конфига (Bash)
-│   ├── FFmpeg_Converter_run_v16.cmd     # Загрузчик конфига (CMD)
-│   ├── FFmpeg_Converter_run_v16.ps1     # Загрузчик конфига (PowerShell)
-│   ├── FFmpeg_Converter_run_win_v16.ps1 # GUI (WinForms)
+│   ├── FFmpeg_Converter_run_v17.sh      # Загрузчик конфига (Bash)
+│   ├── FFmpeg_Converter_run_v17.cmd     # Загрузчик конфига (CMD)
+│   ├── FFmpeg_Converter_run_v17.ps1     # Загрузчик конфига (PowerShell)
+│   ├── FFmpeg_Converter_run_win_v17.ps1 # GUI (WinForms)
 │   ├── FFmpeg_Converter_script.*        # Основная логика (.sh/.cmd/.ps1)
-│   ├── build_exe.ps1                    # Сборка -> _VideoConverter_v16.exe
+│   ├── build_exe.ps1                    # Сборка -> _VideoConverter_v17.exe
 │   ├── ffmpeg.exe                       # Портативный ffmpeg (нужно скачать, см. ниже)
-│   └── _VideoConverter_v16.exe          # Скомпилированный GUI
+│   └── _VideoConverter_v17.exe          # Скомпилированный GUI
 │
 ├── yt-dlp/                              # Загрузчик видео с YouTube и 1000+ сайтов
 │   ├── config.ini.example               # Шаблон настроек (скопировать в config.ini)
-│   ├── Downloading_from_YouTube_v16.sh  # CLI (Bash)
-│   ├── Downloading_from_YouTube_v16.cmd # CLI (Windows)
-│   ├── Downloading_from_YouTube_v16.ps1 # GUI (WinForms)
-│   ├── build_exe.ps1                    # Сборка -> _VideoDownloader_v16.exe
+│   ├── Downloading_from_YouTube_v17.sh  # CLI (Bash)
+│   ├── Downloading_from_YouTube_v17.cmd # CLI (Windows)
+│   ├── Downloading_from_YouTube_v17.ps1 # GUI (WinForms)
+│   ├── build_exe.ps1                    # Сборка -> _VideoDownloader_v17.exe
 │   ├── yt-dlp.exe                       # Загрузчик видео (нужно скачать, см. ниже)
 │   ├── deno.exe                         # JS-runtime для vot-cli (опционально)
 │   ├── vot-cli-live.exe                 # AI-перевод аудио через Яндекс (опционально)
-│   └── _VideoDownloader_v16.exe         # Скомпилированный GUI
+│   └── _VideoDownloader_v17.exe         # Скомпилированный GUI
 │
 ├── tests/                               # Автоматические тесты
 │   ├── run_tests.sh                     # Точка входа
@@ -85,7 +85,7 @@ video/
 - **Cookies:** без / из браузера (Chrome, Firefox, Edge) / из файла
 - **Прокси:** HTTPS с авторизацией
 - **AI-перевод аудио:** 3 режима — dual_track, replace, mix
-- **Batch:** загрузка каналов из channels.txt с задержками и архивом скачанного — **только SH** (`Downloading_from_YouTube_v16.sh`, флаг `--batch`); в CMD и GUI (PS1) batch-режима нет
+- **Batch:** загрузка каналов из channels.txt с задержками и архивом скачанного — **только SH** (`Downloading_from_YouTube_v17.sh`, флаг `--batch`); в CMD и GUI (PS1) batch-режима нет
 - **Субтитры:** автоматическое скачивание (VTT)
 
 **Формат channels.txt:** одна строка на канал, `category|handle|mode` (где `mode` = `videos` либо `playlists`, `handle` — без ведущего `@`). `category` задаёт подпапку для сохранения, строки с `#` игнорируются. Шаблон для копирования — [`yt-dlp/channels.txt.example`](yt-dlp/channels.txt.example) (скопировать в `yt-dlp/channels.txt`).
@@ -111,7 +111,7 @@ video/
 
 Бинарники (ffmpeg, yt-dlp) автоматически определяются рядом со скриптом, затем в PATH. Относительные пути в config.ini разрешаются от директории скрипта.
 
-**Исключение (по дизайну):** `yt-dlp/Downloading_from_YouTube_v16.cmd` — интерактивный CLI (спрашивает параметры в консоли) и **не читает `config.ini`**. Это санкционированное отклонение от config-driven паттерна: config-driven режим для yt-dlp даёт SH (`.sh`) и GUI (`.ps1`). Мета-тест `tests/common/test_config_keys.sh` учитывает это исключение (для yt-dlp ключ обязан читаться в `.sh` ИЛИ `.ps1`, CMD не требуется).
+**Исключение (по дизайну):** `yt-dlp/Downloading_from_YouTube_v17.cmd` — интерактивный CLI (спрашивает параметры в консоли) и **не читает `config.ini`**. Это санкционированное отклонение от config-driven паттерна: config-driven режим для yt-dlp даёт SH (`.sh`) и GUI (`.ps1`). Мета-тест `tests/common/test_config_keys.sh` учитывает это исключение (для yt-dlp ключ обязан читаться в `.sh` ИЛИ `.ps1`, CMD не требуется).
 
 ---
 
@@ -119,18 +119,18 @@ video/
 
 ```bash
 # FFmpeg Converter (из папки ffmpeg/)
-bash FFmpeg_Converter_run_v16.sh
+bash FFmpeg_Converter_run_v17.sh
 
 # YT-DLP Downloader (из папки yt-dlp/)
-bash Downloading_from_YouTube_v16.sh
+bash Downloading_from_YouTube_v17.sh
 
 # GUI (Windows PowerShell)
-powershell -File ffmpeg/FFmpeg_Converter_run_win_v16.ps1
-powershell -File yt-dlp/Downloading_from_YouTube_v16.ps1
+powershell -File ffmpeg/FFmpeg_Converter_run_win_v17.ps1
+powershell -File yt-dlp/Downloading_from_YouTube_v17.ps1
 
 # Готовые EXE (собираются через build_exe.ps1)
-ffmpeg/_VideoConverter_v16.exe
-yt-dlp/_VideoDownloader_v16.exe
+ffmpeg/_VideoConverter_v17.exe
+yt-dlp/_VideoDownloader_v17.exe
 ```
 
 ---

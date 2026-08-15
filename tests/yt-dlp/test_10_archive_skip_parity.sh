@@ -23,8 +23,8 @@ TESTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
 source "$TESTS_DIR/lib/framework.sh"
 
-SH_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.sh"
-PS1_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.ps1"
+SH_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v17.sh"
+PS1_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v17.ps1"
 for _f in "$SH_SCRIPT" "$PS1_SCRIPT"; do
     if [ ! -f "$_f" ]; then
         suite "archive-skip parity"
@@ -109,8 +109,16 @@ src_ps1="$(cat "$PS1_SCRIPT")"
 assert_contains "манифест создаётся и при use_archive, а не только при переводе" \
     '$chkTranslate.Checked -or ($cfg_useArchive -eq "true"' "$src_ps1"
 assert_contains "PS1 считает пропуски (паритет с COUNT_SKIP)" '$skipCount++' "$src_ps1"
-assert_contains "PS1 определяет archive-skip по пустому манифесту" \
-    '$archiveSkipped = ((Get-Item -LiteralPath $dlManifest).Length -eq 0)' "$src_ps1"
+# Пустота манифеста проверяется по СОДЕРЖИМОМУ, а не по длине файла: `Set-Content
+# -Encoding UTF8` в PS 5.1 пишет 3 байта BOM даже в пустой файл, поэтому условие
+# `Length -eq 0` не выполнялось НИКОГДА — пропуск по архиву засчитывался как загрузка,
+# ровно тот баг завышенной сводки, который этот файл и охраняет.
+assert_contains "PS1 определяет archive-skip по содержимому манифеста" \
+    'Get-Content -LiteralPath $dlManifest -ErrorAction SilentlyContinue |' "$src_ps1"
+assert_not_contains "пропуск НЕ определяется по длине файла (BOM даёт Length=3)" \
+    '(Get-Item -LiteralPath $dlManifest).Length -eq 0' "$src_ps1"
+assert_contains "манифест создаётся без BOM" \
+    '[System.IO.File]::WriteAllText($dlManifest, "")' "$src_ps1"
 assert_contains "PS1 печатает пропуск отдельно от «Готово»" \
     'Пропущено (уже в архиве)' "$src_ps1"
 assert_contains "PS1 показывает пропуски в итоговой сводке" \

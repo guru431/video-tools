@@ -4,7 +4,7 @@
 
 $script:Ps2ExeSha    = 'E180C1264C131CAEDDFA37130A2F0EB826A3FFCA701B808DA3337689721FF45A'  # PS2EXE @ MScholtes/PS2EXE d32d5ce + локальный патч (экранирование метаданных для C#-литералов: \ " CR LF TAB)
 $script:Ps2ExeCommit = 'd32d5ce21c458696e860a7533943b1466d925be9'  # закреплённый commit ps2exe (провенанс)
-$script:BuildVersion = '16.0.0.0'
+$script:BuildVersion = '17.0.0.0'
 
 # Проверяет наличие вендоренного ps2exe и совпадение SHA256 (supply-chain).
 function Assert-Ps2Exe {

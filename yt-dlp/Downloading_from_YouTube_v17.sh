@@ -994,6 +994,13 @@ load_config() {
     # Относительные пути резолвятся от каталога скрипта; drive/UNC — уже абсолютные.
     is_abs_path "$COOKIE_FILE_PATH" || COOKIE_FILE_PATH="${SCRIPT_DIR}/${COOKIE_FILE_PATH}"
     is_abs_path "$BASE_DIR"         || BASE_DIR="${SCRIPT_DIR}/${BASE_DIR}"
+
+    # Значения [trim] из config.ini проходят ту же проверку, что и --trim-start/--trim-end.
+    # Без неё битое значение уходило прямо в --download-sections, и пользователь видел
+    # сырую ошибку yt-dlp вместо внятного сообщения о формате.
+    [ "$TRIM_START_ON" = "true" ] && validate_time "[trim] start" "$TRIM_START_VAL"
+    [ "$TRIM_END_ON"   = "true" ] && validate_time "[trim] end"   "$TRIM_END_VAL"
+    return 0
 }
 
 # ── Валидация значений опций ───────────────────────────────────────────────

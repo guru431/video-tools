@@ -13,9 +13,9 @@ TESTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
 source "$TESTS_DIR/lib/framework.sh"
 
-SH_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.sh"
-CMD_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.cmd"
-PS1_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v16.ps1"
+SH_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v17.sh"
+CMD_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v17.cmd"
+PS1_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v17.ps1"
 MOCK_YTDLP="$TESTS_DIR/mocks/yt-dlp"
 chmod +x "$MOCK_YTDLP" 2>/dev/null
 
@@ -249,6 +249,29 @@ assert_contains "--format bogus: отвергнут enum'ом" "Недопуст
 
 OUT=$(run_full "$CFG" --dry-run --trim-start "abc" "https://youtube.com/watch?v=abc"); RC=$?
 assert_contains "--trim-start abc: отвергнут валидатором времени" "ожидается ЧЧ:ММ:СС" "$OUT"
+
+# Тот же валидатор обязан работать и для значений из [trim] config.ini: раньше
+# проверялись только CLI-флаги, а битое значение из ini уходило в --download-sections
+# и всплывало сырой ошибкой yt-dlp вместо указания на конкретный ключ конфига.
+write_cfg "[trim]
+start = +нольсемь"
+OUT=$(run_full "$CFG" --dry-run "https://youtube.com/watch?v=abc"); RC=$?
+assert_contains "[trim] start из ini: назван ключ конфига" "[trim] start" "$OUT"
+assert_contains "[trim] start из ini: назван ожидаемый формат" "ожидается ЧЧ:ММ:СС" "$OUT"
+assert_eq       "[trim] start из ini: exit 1" "1" "$RC"
+
+write_cfg "[trim]
+end = +12:xx"
+OUT=$(run_full "$CFG" --dry-run "https://youtube.com/watch?v=abc"); RC=$?
+assert_contains "[trim] end из ini: назван ключ конфига" "[trim] end" "$OUT"
+
+# Выключенный (`-`) и корректный включённый trim проходят без нареканий.
+write_cfg "[trim]
+start = -белиберда
+end = +00:01:30"
+OUT=$(run_full "$CFG" --dry-run "https://youtube.com/watch?v=abc")
+assert_not_contains "выключенный trim не валидируется" "ожидается ЧЧ:ММ:СС" "$OUT"
+assert_contains     "корректный [trim] end доезжает до yt-dlp" "--download-sections" "$(dry_line "$OUT")"
 
 # Валидные значения по-прежнему проходят.
 OUT=$(run_full "$CFG" --dry-run --quality 1080 --format avc1_best "https://youtube.com/watch?v=abc")

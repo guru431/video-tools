@@ -20,6 +20,25 @@ trap '[ "${TESTS_RESULT_OWNER:-}" = "$$" ] && rm -f "$TESTS_RESULT_FILE"' EXIT
 _tally() { printf '%s\n' "$1" >> "$TESTS_RESULT_FILE"; }
 _tally_count() { grep -c "^$1\$" "$TESTS_RESULT_FILE" 2>/dev/null || true; }
 
+# ── Временный файл С РАСШИРЕНИЕМ ───────────────────────────
+# $1 = префикс пути (каталог + начало имени), $2 = расширение вместе с точкой.
+#   tmp=$(mktemp_suffix /tmp/test_dump_ .txt)   → /tmp/test_dump_a1B2c3.txt
+#
+# Писать шаблон как `mktemp /tmp/test_dump_XXXXXX.txt` НЕЛЬЗЯ: у BSD mktemp (macOS)
+# шаблон обязан ОКАНЧИВАТЬСЯ на X, иначе подстановки не происходит вовсе и создаётся
+# буквальный файл с шестью иксами в имени. Первый вызов проходит, второй подряд падает
+# «mkstemp failed: File exists», переменная остаётся пустой, вывод уходит в никуда — и
+# тест молча проверяет не то, что собирался (так упал macOS-джоб CI 2026-08-15).
+# Расширение при этом нужно по делу: powershell не исполняет файл без .ps1, cmd.exe —
+# без .cmd. Поэтому уникальное имя генерируем БЕЗ суффикса и дописываем его сами.
+mktemp_suffix() {
+    local prefix="$1" ext="${2:-}" base
+    base="$(mktemp "${prefix}XXXXXX")" || return 1
+    [ -n "$ext" ] || { printf '%s' "$base"; return 0; }
+    mv "$base" "${base}${ext}" || return 1
+    printf '%s' "${base}${ext}"
+}
+
 # ── Сетевой guard ──────────────────────────────────────────
 # Тесты НИКОГДА не должны ходить в сеть. Инцидент: у VOT_BIN не было env-override,
 # и check_translate_deps безусловно перезатирал переменную бинарём рядом со скриптом —

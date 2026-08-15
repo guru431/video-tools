@@ -72,7 +72,7 @@ if [ "$winforms_ok" -ne 1 ]; then
     skip "Stop-ProcessTree" "нет Windows PowerShell + WinForms"
 else
     win_prod=$(cygpath -w "$DLP_PS1" 2>/dev/null || echo "$DLP_PS1")
-    harness=$(mktemp /tmp/test_stoptree_XXXXXX.ps1)
+    harness=$(mktemp_suffix /tmp/test_stoptree_ .ps1)
     win_harness=$(cygpath -w "$harness" 2>/dev/null || echo "$harness")
     # Стенд без сети: cmd.exe порождает ping как дочерний процесс — та же форма
     # «родитель + ребёнок», из-за которой Kill() не останавливал закачку.

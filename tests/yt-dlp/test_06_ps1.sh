@@ -94,7 +94,7 @@ fi
 win_prod=$(cygpath -w "$DLP_PS1" 2>/dev/null || echo "$DLP_PS1")
 
 # Временный config.ini для проверки production Read-Config (кэш + подстановка ${ENV}).
-tmpcfg=$(mktemp /tmp/test_ytps1_cfg_XXXXXX.ini)
+tmpcfg=$(mktemp_suffix /tmp/test_ytps1_cfg_ .ini)
 cat > "$tmpcfg" << 'INIEOF'
 [proxy]
 url = ${TEST_PROXY_VAR}
@@ -111,7 +111,7 @@ win_cfg=$(cygpath -w "$tmpcfg" 2>/dev/null || echo "$tmpcfg")
 
 # Harness: дот-сорсит production, печатает KEY=VALUE. Пишем во временный .ps1,
 # чтобы не бороться с bash-экранированием кавычек/скобок.
-harness=$(mktemp /tmp/test_ytps1_harness_XXXXXX.ps1)
+harness=$(mktemp_suffix /tmp/test_ytps1_harness_ .ps1)
 win_harness=$(cygpath -w "$harness" 2>/dev/null || echo "$harness")
 cat > "$harness" << 'PS1EOF'
 param([string]$Prod, [string]$Cfg)

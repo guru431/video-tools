@@ -59,7 +59,7 @@ done
 suite "Cookies: метод file (файл существует)"
 # ══════════════════════════════════════════════════════════════
 
-TMPFILE=$(mktemp /tmp/test_cookies_XXXXXX.txt)
+TMPFILE=$(mktemp_suffix /tmp/test_cookies_ .txt)
 echo "# Netscape HTTP Cookie File" > "$TMPFILE"
 assert_eq "file exists → --cookies + путь как ОТДЕЛЬНЫЕ argv" "--cookies|$TMPFILE" "$(cookie_call "file" "$TMPFILE" "")"
 rm -f "$TMPFILE"

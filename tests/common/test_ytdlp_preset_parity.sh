@@ -60,7 +60,7 @@ sh_out=$(
 
 # ── PS1-сторона: реальные $formatPresets/$simpleBest ──────────────────────
 win_prod=$(cygpath -w "$YT_PS1" 2>/dev/null || echo "$YT_PS1")
-harness=$(mktemp /tmp/test_parity_XXXXXX.ps1)
+harness=$(mktemp_suffix /tmp/test_parity_ .ps1)
 win_harness=$(cygpath -w "$harness" 2>/dev/null || echo "$harness")
 cat > "$harness" << 'PS1EOF'
 param([string]$Prod)

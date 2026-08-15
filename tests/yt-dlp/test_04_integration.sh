@@ -48,7 +48,7 @@ run_script() {
 # Раньше тест перезаписывал боевой yt-dlp/config.ini и восстанавливал в конце —
 # при падении между записью и restore репозиторный конфиг оставался затёртым.
 # Теперь репозиторий не трогаем: --config указывает скрипт на temp-файл.
-TEST_CONFIG=$(mktemp "${TMPDIR:-/tmp}/ytdlp_test_config_XXXXXX.ini")
+TEST_CONFIG=$(mktemp_suffix "${TMPDIR:-/tmp}/ytdlp_test_config_" .ini)
 
 write_test_config() {
     cat > "$TEST_CONFIG" << EOF

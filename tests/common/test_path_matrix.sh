@@ -31,7 +31,7 @@ if [ "$winforms_ok" -ne 1 ]; then
     skip "Quote-WinArg матрица" "нет Windows PowerShell + WinForms"
 else
     win_prod=$(cygpath -w "$YT_PS1" 2>/dev/null || echo "$YT_PS1")
-    harness=$(mktemp /tmp/test_pathmx_XXXXXX.ps1)
+    harness=$(mktemp_suffix /tmp/test_pathmx_ .ps1)
     win_harness=$(cygpath -w "$harness" 2>/dev/null || echo "$harness")
     # Матрица (arg, key) задана в самом harness — избегаем bash-экранирования " ' & % ^.
     cat > "$harness" << 'PS1EOF'
@@ -89,7 +89,7 @@ else
     : > "$workdir/amp&.mp4"
     : > "$workdir/bang!.mp4"
     : > "$workdir/two!!.mp4"
-    drv=$(mktemp /tmp/test_bang_drv_XXXXXX.cmd)
+    drv=$(mktemp_suffix /tmp/test_bang_drv_ .cmd)
     cat > "$drv" << 'CMDEOF'
 @echo off
 setlocal enabledelayedexpansion

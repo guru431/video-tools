@@ -22,7 +22,7 @@ fi
 run_cmd_file() {
     local script_content="$1"
     local tmp_cmd
-    tmp_cmd=$(mktemp /tmp/test_ytcmd_XXXXXX.cmd)
+    tmp_cmd=$(mktemp_suffix /tmp/test_ytcmd_ .cmd)
     printf '@echo off\r\nchcp 65001 >nul 2>&1\r\nsetlocal enabledelayedexpansion\r\n%s\r\n' \
         "$script_content" > "$tmp_cmd"
     local win_path

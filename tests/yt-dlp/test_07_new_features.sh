@@ -25,7 +25,7 @@ chmod +x "$MOCK_YTDLP" 2>/dev/null
 
 # ── Хелпер: записать временный config.ini ────────────────────────────────────
 write_cfg() {
-    CFG=$(mktemp /tmp/test_ytfeat_XXXXXX.ini)
+    CFG=$(mktemp_suffix /tmp/test_ytfeat_ .ini)
     printf '%s\n' "$1" > "$CFG"
 }
 

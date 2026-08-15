@@ -28,7 +28,7 @@ SH_SRC="$(cat "$SH_SCRIPT")"
 PS1_SRC="$(cat "$PS1_SCRIPT")"
 CMD_SRC="$(cat "$CMD_SCRIPT")"
 
-write_cfg() { CFG=$(mktemp /tmp/test_ytf11_XXXXXX.ini); printf '%s\n' "$1" > "$CFG"; }
+write_cfg() { CFG=$(mktemp_suffix /tmp/test_ytf11_ .ini); printf '%s\n' "$1" > "$CFG"; }
 dry_line() { printf '%s\n' "$1" | grep '\[DRY-RUN\]'; }
 
 # ══════════════════════════════════════════════════════════════
@@ -205,7 +205,7 @@ suite "F13 (CMD behavioral): host-детект платформы в ранта�
 if cmd //c "exit 0" &>/dev/null; then
     run_cmd_file() {
         local body="$1" tmp_cmd win_path result
-        tmp_cmd=$(mktemp /tmp/test_ytf13cmd_XXXXXX.cmd)
+        tmp_cmd=$(mktemp_suffix /tmp/test_ytf13cmd_ .cmd)
         printf '@echo off\r\nchcp 65001 >nul 2>&1\r\nsetlocal enabledelayedexpansion\r\n%s\r\n' "$body" > "$tmp_cmd"
         win_path=$(cygpath -w "$tmp_cmd" 2>/dev/null || echo "$tmp_cmd")
         result=$(cmd //c "$win_path" 2>/dev/null)

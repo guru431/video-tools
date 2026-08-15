@@ -23,7 +23,7 @@ fi
 run_cmd() {
     local script_content="$1"
     local tmp_cmd
-    tmp_cmd=$(mktemp /tmp/test_cmd_XXXXXX.cmd)
+    tmp_cmd=$(mktemp_suffix /tmp/test_cmd_ .cmd)
     printf '@echo off\r\nchcp 65001 >nul 2>&1\r\nsetlocal enabledelayedexpansion\r\n%s\r\n' \
         "$script_content" > "$tmp_cmd"
     local win_path
@@ -305,7 +305,7 @@ if [ -z "$RESOLVE_HW_SRC" ]; then
     fail "CMD: подпрограмма :resolve_hw найдена в production-файле" "найдена" "не найдена"
 fi
 # Mock ffmpeg.cmd: печатает список энкодеров (имя в конце строки — под якорь `$` findstr).
-MOCK_FF=$(mktemp /tmp/test_ffmock_XXXXXX.cmd)
+MOCK_FF=$(mktemp_suffix /tmp/test_ffmock_ .cmd)
 printf '@echo off\r\necho  V..... libx264\r\necho  V..... libx265\r\necho  V..... libsvtav1\r\nfor %%%%e in (%%MOCK_ENC%%) do echo  V....D %%%%e\r\nexit /b 0\r\n' > "$MOCK_FF"
 MOCK_FF_WIN=$(cygpath -w "$MOCK_FF" 2>/dev/null || echo "$MOCK_FF" | sed 's|/c/|C:/|;s|/|\\|g')
 

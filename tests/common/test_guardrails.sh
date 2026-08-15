@@ -490,6 +490,37 @@ assert_not_contains "Replace не зовётся с \$null-бэкапом" '[Sys
 assert_contains "GUI: ожидание при закрытии качает сообщения" 'Application]::DoEvents()' "$gui"
 
 # ══════════════════════════════════════════════════════════════
+suite "mktemp: шаблон обязан оканчиваться на XXXXXX"
+# ══════════════════════════════════════════════════════════════
+# У BSD mktemp (macOS) шаблон, у которого после иксов стоит расширение, не
+# подставляется вовсе: создаётся буквальный файл с шестью иксами в имени, второй
+# вызов подряд падает «File exists», переменная остаётся пустой — и тест молча
+# проверяет не то, что собирался. GNU mktemp такой шаблон принимает, поэтому на
+# Linux/Windows дефект невидим и всплывает только на macOS-джобе CI.
+# Расширение добавляет mktemp_suffix из framework.sh.
+mktemp_offenders=""
+for _t in "$TESTS_DIR"/lib/*.sh "$TESTS_DIR"/ffmpeg/*.sh "$TESTS_DIR"/yt-dlp/*.sh "$TESTS_DIR"/common/*.sh "$TESTS_DIR"/run_tests.sh; do
+    [ -f "$_t" ] || continue
+    case "$(basename "$_t")" in test_guardrails.sh) continue ;; esac
+    # Код, а не комментарии: те цитируют дефектный шаблон, объясняя его.
+    if grep -v '^[[:space:]]*#' "$_t" | grep -qE 'mktemp( -d)? "?[^"]*XXXXXX\.' 2>/dev/null; then
+        mktemp_offenders="$mktemp_offenders $(basename "$_t")"
+    fi
+done
+assert_empty "ни один тест не ставит расширение после XXXXXX" "$mktemp_offenders"
+assert_contains "framework отдаёт хелпер mktemp_suffix" "mktemp_suffix()" "$(cat "$TESTS_DIR/lib/framework.sh")"
+
+# Хелпер обязан реально создавать файл с нужным расширением и уникальным именем —
+# инвариант проверяем вызовом, а не чтением исходника.
+_mt1=$(mktemp_suffix "${TMPDIR:-/tmp}/gr_mktemp_" .ini)
+_mt2=$(mktemp_suffix "${TMPDIR:-/tmp}/gr_mktemp_" .ini)
+if [ -f "$_mt1" ]; then pass "mktemp_suffix создаёт файл"; else fail "mktemp_suffix создаёт файл" "$_mt1" "файла нет"; fi
+case "$_mt1" in *.ini) pass "mktemp_suffix сохраняет расширение" ;; *) fail "mktemp_suffix сохраняет расширение" "*.ini" "$_mt1" ;; esac
+case "$_mt1" in *XXXXXX*) fail "mktemp_suffix подставляет иксы" "случайное имя" "$_mt1" ;; *) pass "mktemp_suffix подставляет иксы" ;; esac
+if [ "$_mt1" != "$_mt2" ]; then pass "два вызова подряд дают разные имена"; else fail "два вызова подряд дают разные имена" "разные" "$_mt1"; fi
+rm -f "$_mt1" "$_mt2"
+
+# ══════════════════════════════════════════════════════════════
 suite "silencedetect: отрицательные метки не теряются"
 # ══════════════════════════════════════════════════════════════
 # ffmpeg печатает и "silence_start: -0.0261224". Шаблон без знака давал ПУСТОЕ

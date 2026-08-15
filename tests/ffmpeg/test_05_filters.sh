@@ -28,7 +28,7 @@ default_vars() {
 
 run_script() {
     local dump
-    dump=$(mktemp /tmp/test_dump_XXXXXX.txt)
+    dump=$(mktemp_suffix /tmp/test_dump_ .txt)
     (
         export PATH="$TESTS_DIR/mocks:$PATH"
         export MOCK_FFMPEG_ENCODERS=""

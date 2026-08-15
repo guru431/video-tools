@@ -33,7 +33,7 @@ default_vars() {
 # Трюк: exit внутри source оставляет stdout перенаправленным → пишем в файл
 run_script() {
     local dump
-    dump=$(mktemp /tmp/test_dump_XXXXXX.txt)
+    dump=$(mktemp_suffix /tmp/test_dump_ .txt)
 
     (
         export PATH="$TESTS_DIR/mocks:$PATH"

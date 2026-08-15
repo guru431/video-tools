@@ -46,7 +46,7 @@ assert_not_contains "assert_not_contains не находит отсутству�
 # бесполезно — fail() намеренно возвращает 0, чтобы тест-файл продолжался.
 # Судить надо по СЧЁТЧИКУ провалов, поэтому запускаем отдельный мини-тест-файл
 # и читаем его machine-readable маркер TESTS_RESULT.
-_probe=$(mktemp "${TMPDIR:-/tmp}/fw_probe_XXXXXX.sh")
+_probe=$(mktemp_suffix "${TMPDIR:-/tmp}/fw_probe_" .sh)
 cat > "$_probe" << PROBEEOF
 source "$TESTS_DIR/lib/framework.sh"
 source "$(dirname "$0")/../../yt-dlp/Downloading_from_YouTube_v17.sh" >/dev/null 2>&1

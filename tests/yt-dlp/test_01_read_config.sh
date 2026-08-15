@@ -33,7 +33,7 @@ set +u +o pipefail
 
 write_config() {
     local content="$1"
-    CONFIG_FILE=$(mktemp /tmp/test_ytdlp_XXXXXX.ini)
+    CONFIG_FILE=$(mktemp_suffix /tmp/test_ytdlp_ .ini)
     printf '%s\n' "$content" > "$CONFIG_FILE"
 }
 
@@ -164,7 +164,7 @@ rm -f "$CONFIG_FILE"
 
 # CRLF: config.ini на Windows может быть с \r. Копия его не убирала, поэтому значение
 # уезжало с невидимым \r на конце — и сравнение с ожидаемым молча ломалось бы.
-CONFIG_FILE=$(mktemp /tmp/test_ytdlp_crlf_XXXXXX.ini)
+CONFIG_FILE=$(mktemp_suffix /tmp/test_ytdlp_crlf_ .ini)
 printf '[download]\r\ndefault_quality = 1080\r\n' > "$CONFIG_FILE"
 crlf_val=$(read_config 'default_quality' 'download' '')
 assert_eq "CRLF: \\r убран из значения" "1080" "$crlf_val"

@@ -48,7 +48,7 @@ run_ps1_readconfig() {
     local section="$3"
     local default="$4"
     local config_file
-    config_file=$(mktemp /tmp/test_config_XXXXXX.ini)
+    config_file=$(mktemp_suffix /tmp/test_config_ .ini)
     printf '%s\n' "$config_content" > "$config_file"
     local win_path
     win_path=$(cygpath -w "$config_file" 2>/dev/null || echo "$config_file")

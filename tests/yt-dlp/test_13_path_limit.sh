@@ -145,7 +145,7 @@ else
     # на устаревшей копии, как это уже было с таблицей форматов.
     run_limit() {
         local folder="$1"
-        local tmp_cmd; tmp_cmd=$(mktemp /tmp/test_ytlimit_XXXXXX.cmd)
+        local tmp_cmd; tmp_cmd=$(mktemp_suffix /tmp/test_ytlimit_ .cmd)
         {
             printf '@echo off\nchcp 65001 >nul 2>&1\nsetlocal enabledelayedexpansion\n'
             printf 'set "folder=%s"\n' "$folder"
@@ -206,7 +206,7 @@ if [ "$winforms_ok" -ne 1 ]; then
     skip "Limit-OutputTemplate" "нет Windows PowerShell + WinForms"
 else
     win_prod=$(cygpath -w "$DLP_PS1" 2>/dev/null || echo "$DLP_PS1")
-    harness=$(mktemp /tmp/test_pathlimit_XXXXXX.ps1)
+    harness=$(mktemp_suffix /tmp/test_pathlimit_ .ps1)
     win_harness=$(cygpath -w "$harness" 2>/dev/null || echo "$harness")
     cat > "$harness" << 'PS1EOF'
 param([string]$Prod)

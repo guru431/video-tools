@@ -54,7 +54,7 @@ default_vars() {
 
 run_script() {
     local dump
-    dump=$(mktemp /tmp/test_dump_XXXXXX.txt)
+    dump=$(mktemp_suffix /tmp/test_dump_ .txt)
     rm -f "$FFMPEG_LOG"
     (
         export PATH="$MOCKS_DIR:$PATH"

@@ -19,7 +19,16 @@ PS1_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v17.ps1"
 MOCK_YTDLP="$TESTS_DIR/mocks/yt-dlp"
 chmod +x "$MOCK_YTDLP" 2>/dev/null
 
-write_cfg() { CFG=$(mktemp /tmp/test_ytf8_XXXXXX.ini); printf '%s\n' "$1" > "$CFG"; }
+# Прошлый конфиг удаляем САМИ, а не полагаемся на `rm -f "$CFG"` по месту вызова:
+# у BSD mktemp (macOS) шаблон обязан ОКАНЧИВАТЬСЯ на X, а здесь после них стоит '.ini' —
+# подстановки не происходит, и mktemp пытается создать буквальный файл
+# /tmp/test_ytf8_XXXXXX.ini. Первый вызов проходит, второй подряд падает «File exists»,
+# CFG остаётся пустым, конфиг уходит в никуда, а тест молча проверяет дефолты.
+write_cfg() {
+    [ -n "${CFG:-}" ] && rm -f "$CFG"
+    CFG=$(mktemp /tmp/test_ytf8_XXXXXX.ini)
+    printf '%s\n' "$1" > "$CFG"
+}
 # Полный вывод SH (не только строки [DRY-RUN]) — нужен, чтобы поймать [WARN]-guardrail'ы.
 run_full() { local cfg="$1"; shift; YTDLP_BIN="$MOCK_YTDLP" bash "$SH_SCRIPT" --config "$cfg" "$@" 2>&1; }
 dry_line() { printf '%s\n' "$1" | grep '\[DRY-RUN\]'; }

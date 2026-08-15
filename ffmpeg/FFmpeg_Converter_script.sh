@@ -826,7 +826,8 @@ encode_file() {
 		# тишине → между частями появлялись зазоры и перекрытия.
 		# length_silent[i] хранит длительность i-го куска; "END" = «до конца файла».
 		# Локальный массив вместо eval-генерированных глобалов length_coding_value_silent${i} —
-		# при экспорте функции для xargs они не дублируются и не пересекаются между файлами.
+		# в параллельном режиме каждая подоболочка получает свою копию, и границы частей
+		# одного файла не протекают в соседний.
 		local -a num=()
 		local -a length_silent=()
 		local max_parts=1000
@@ -1245,31 +1246,34 @@ if [ "$merge_files" = "yes" ]; then
 		fi
 	fi
 else
-	# B1b. Параллельная обработка файлов
+	# B1b. Параллельная обработка файлов — пул фоновых подоболочек.
+	#
+	# Раньше здесь был `xargs -0 -P N bash -c ...`, и он требовал протащить в дочерний
+	# процесс ВСЁ состояние через окружение: `export -f` на девять функций плюс четыре
+	# десятка переменных. На Windows-раннере CI это его и убивало — msys2-xargs считает
+	# доступную длину аргументов как ARG_MAX минус размер окружения и падает ассертом
+	# «bc_ctl.arg_max >= LINE_MAX failed (xargs.c:512)», как только окружение вырастает.
+	# Раннер приносит свои переменные, экспортированные функции добавляют десятки
+	# килобайт — и параллельная ветка не обрабатывала НИ ОДНОГО файла (красный F27).
+	#
+	# Подоболочка `( ... ) &` наследует и функции, и переменные напрямую, без
+	# сериализации в окружение: экспорт не нужен вовсе, а значит нет и потолка,
+	# в который упирался xargs. Заодно исчезает зависимость от того, какой `bash`
+	# найдётся в PATH (на Windows это мог быть System32\bash.exe от WSL).
+	# Результаты, как и раньше, каждый процесс пишет файлом в $results_dir.
 	if [ "$parallel_count" -gt 1 ] 2>/dev/null; then
-		# canon_path/file_size/partial_path/manifest_* обязаны быть в списке: encode_file
-		# зовёт их в дочерней оболочке `bash -c`. Без экспорта canon_path обе стороны
-		# сравнения «выход == вход» становились пустыми строками — то есть равными, —
-		# и в параллельном режиме КАЖДЫЙ файл отклонялся как ложная коллизия.
-		export -f encode_file log_msg show_progress_bar human_size \
-			canon_path file_size partial_path manifest_write manifest_is_complete \
-			_cleanup_child_on_int
-		export audio_only folder_sources folder_destination canon_destination dest_inside_source ffmpeg format_files_out video_settings audio_settings
-		export save_old_extension create_frame copy_codecs split_by_silence extract_audio_copy
-		export video_bitrate_status set_video_bitrate_orig video_quality_status
-		export length_coding_status length_coding_value set_length_coding start_coding_status start_coding_value
-		export video_subtitles_status video_subtitles_value subtitles_style
-		export vf_chain af_chain hw_decode_args thread_args use_hw_accel
-		export silence_threshold silence_duration dry_run enable_log log_file
-		export overwrite_existing sub_meta_codec settings_sig
-		export keep_aspect_ratio_status keep_aspect_ratio_value playback_speed_status playback_speed_value
-		export results_dir collisions_file
-		export part_suffix_known
-		# Интерпретатор зовём ПОЛНЫМ путём ("$BASH"), а не голым `bash`: xargs ищет имя
-		# по PATH, и на Windows-раннере туда попадает System32\bash.exe (WSL). Тот не
-		# видит ни экспортированных функций (BASH_FUNC_*), ни путей вида C:\...,
-		# поэтому параллельная ветка молча не обрабатывала ни одного файла.
-		find_inputs | xargs -0 -P "$parallel_count" -I {} "${BASH:-bash}" -c 'trap _cleanup_child_on_int INT TERM; encode_file "$@"' _ {}
+		find_inputs | {
+			while IFS= read -r -d '' full_path; do
+				# Держим не больше $parallel_count живых задач. `wait -n` есть с bash 4.3;
+				# на bash 3.2 (macOS) он ругается и возвращает ненулевой код — тогда
+				# просто ждём фиксированный интервал и проверяем счётчик заново.
+				while [ "$(jobs -rp | wc -l)" -ge "$parallel_count" ]; do
+					wait -n 2>/dev/null || sleep 0.2
+				done
+				( trap _cleanup_child_on_int INT TERM; encode_file "$full_path" ) &
+			done
+			wait
+		}
 	else
 		find_inputs | while IFS= read -r -d '' full_path; do
 			encode_file "$full_path"

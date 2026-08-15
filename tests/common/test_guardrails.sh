@@ -442,11 +442,18 @@ FF_PS1="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1"
 GUI_PS1="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v17.ps1"
 ffsh="$(cat "$FF_SH")"; ffps1="$(cat "$FF_PS1")"; gui="$(cat "$GUI_PS1")"
 
-# Голое имя `bash` в xargs на Windows-раннере резолвится в System32\bash.exe (WSL):
-# тот не видит ни экспортированных функций, ни C:\-путей, и параллельная ветка молча
-# не обрабатывает ни одного файла (F27 на CI падал именно так).
-assert_not_contains "xargs не зовёт интерпретатор по голому имени" "-I {} bash -c" "$ffsh"
-assert_contains     "xargs зовёт интерпретатор полным путём"       '-I {} "${BASH:-bash}" -c' "$ffsh"
+# msys2-xargs считает доступную длину аргументов как ARG_MAX минус размер окружения и
+# падает ассертом «bc_ctl.arg_max >= LINE_MAX failed», когда окружение велико: раннер CI
+# приносит свои переменные, а `export -f` девяти функций добавляет десятки килобайт.
+# Параллель обязана идти пулом фоновых подоболочек — они наследуют функции и переменные
+# напрямую, без сериализации в окружение (и без зависимости от `bash` из PATH).
+# Комментарии исключаем: они цитируют старый паттерн, объясняя, почему он убран.
+ffsh_code="$(grep -v '^[[:space:]]*#' "$FF_SH")"
+assert_not_contains "параллель не идёт через xargs"        "xargs -0 -P"  "$ffsh_code"
+assert_not_contains "функции не экспортируются в окружение" "export -f encode_file" "$ffsh_code"
+assert_contains     "параллель — пул фоновых подоболочек"   "jobs -rp | wc -l" "$ffsh"
+assert_contains     "задача уходит в подоболочку со своим trap" \
+    '( trap _cleanup_child_on_int INT TERM; encode_file "$full_path" ) &' "$ffsh"
 
 # Пауза перед выходом обязана быть под проверкой интерактивности: скрипт отдаёт
 # exit code для cron/CI, а безусловный read/Read-Host вешает джобу до EOF.

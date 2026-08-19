@@ -48,10 +48,6 @@ if (Test-Path -LiteralPath $configFile) {
                 $ev = [Environment]::GetEnvironmentVariable($m.Groups[1].Value)
                 if ($null -eq $ev) { Write-Host "WARN: переменная $($m.Groups[1].Value) не задана"; "" } else { $ev }
             })
-            # Первое вхождение ключа выигрывает — тот же контракт, что у ffmpeg-парсера
-            # (`if (-not $_cfgCache.ContainsKey($_k))`) и у обоих .sh (там `break` на
-            # первом совпадении). Раньше здесь побеждало ПОСЛЕДНЕЕ вхождение, и один
-            # и тот же config.ini с дублем ключа читался компонентами по-разному.
             $_k = "${curSection}::$($Matches[1].Trim())"
             if (-not $script:_configCache.ContainsKey($_k)) { $script:_configCache[$_k] = $val }
         }
@@ -434,11 +430,6 @@ $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
 $form.MaximizeBox = $false
 $form.Font = [System.Drawing.Font]::new("Microsoft Sans Serif", 10)
-# Двойная буферизация формы не включается: соответствующее свойство у Control
-# защищённое, добраться до него можно только рефлексией к непубличному члену, а такая
-# конструкция подпадает под эвристики антивирусов. Подкласс через компиляцию C# на лету
-# — то же самое. Разбор: wiki, incident-amsi-doublebuffered-reflection-2026-08-19.
-# Плата — лёгкое мерцание при перерисовке; частично гасится SuspendLayout/ResumeLayout.
 $form.SuspendLayout()
 $_fc = [System.Collections.Generic.List[System.Windows.Forms.Control]]::new()
 
@@ -1300,13 +1291,7 @@ $btnStart.Add_Click({
             $dlManifest = $null
             if ($chkTranslate.Checked -or ($cfg_useArchive -eq "true" -and $qi -lt 7)) {
                 $dlManifest = Join-Path ([System.IO.Path]::GetTempPath()) ("ytdlp_manifest_{0}.txt" -f [System.Guid]::NewGuid().ToString('N'))
-                # Пустой файл создаём командлетом. `Set-Content -Encoding UTF8` не годится:
-                # в PS 5.1 он пишет 3 байта BOM даже для пустого значения, и «пустой
-                # манифест» ниже пришлось бы определять не по длине (см. archive-skip).
-                # Прямой вызов .NET-API сюда тоже не берём: запись файла со случайным
-                # именем в %TEMP% мимо командлетов — характерная примета дропперов, и
-                # эвристики антивирусов на неё реагируют. New-Item даёт ровно 0 байт.
-                New-Item -ItemType File -Path $dlManifest -Force | Out-Null
+                [System.IO.File]::WriteAllText($dlManifest, "")
                 $command += "--print-to-file", "after_move:filepath", $dlManifest
             }
             # Архив добавляется ниже — только для реальных загрузок (qi 0..6), НЕ для
@@ -1554,10 +1539,6 @@ $btnStart.Add_Click({
                 # файла (пустой манифест) → видео уже было в архиве. Это ПРОПУСК, а не
                 # загрузка. Контракт дословно как у .sh (там это `return 2`): на пропуске
                 # перевод не запускается, потому что переводить нечего.
-                # Пустоту проверяем по СОДЕРЖИМОМУ, а не по длине файла: длина ловит любую
-                # преамбулу кодировки (у `Set-Content -Encoding UTF8` в PS 5.1 это 3 байта
-                # BOM), из-за чего условие `Length -eq 0` не выполнялось никогда и пропуск
-                # по архиву засчитывался как реальная загрузка.
                 $archiveSkipped = $false
                 if ($dlManifest -and $cfg_useArchive -eq "true" -and $qi -lt 7 -and (Test-Path -LiteralPath $dlManifest)) {
                     $archiveSkipped = (@(Get-Content -LiteralPath $dlManifest -ErrorAction SilentlyContinue |

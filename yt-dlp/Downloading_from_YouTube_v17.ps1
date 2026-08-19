@@ -434,9 +434,22 @@ $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
 $form.MaximizeBox = $false
 $form.Font = [System.Drawing.Font]::new("Microsoft Sans Serif", 10)
-# DoubleBuffered (protected) — убирает мерцание при перерисовке / разблокировке
-$form.GetType().GetProperty('DoubleBuffered',
-    [System.Reflection.BindingFlags]'Instance,NonPublic').SetValue($form, $true, $null)
+# DoubleBuffered (protected у Control) НЕ включаем — и не возвращать.
+#
+# Раньше здесь стояло `$form.GetType().GetProperty('DoubleBuffered',
+# [Reflection.BindingFlags]'Instance,NonPublic').SetValue($form,$true,$null)`. Это
+# структурно тот же приём, которым глушат сам AMSI (GetType→NonPublic-член→SetValue),
+# и эвристика Касперского «PowerShell исполняет обфусцированный код» блокировала по
+# нему ВЕСЬ скрипт: AMSI отдаёт вердикт на текст целиком, PowerShell отказывается
+# исполнять, EXE падает с «This script contains malicious content and has been blocked
+# by your antivirus software» на первой же строке. Скрипт при этом ничего вредного не
+# делает — но выглядит для эвристики ровно как обход защиты.
+#
+# Обойтись без рефлексии нельзя: DoubleBuffered и SetStyle у Control защищённые, а
+# единственная альтернатива — подкласс через `Add-Type -TypeDefinition` с C#, который
+# у того же Касперского сам по себе повышает heuristic score (см. kaspersky-workaround
+# в вики). Плата за отказ — лёгкое мерцание при перерисовке; цена возврата — не
+# запускающееся приложение. Мерцание частично гасят SuspendLayout/ResumeLayout ниже.
 $form.SuspendLayout()
 $_fc = [System.Collections.Generic.List[System.Windows.Forms.Control]]::new()
 

@@ -490,6 +490,31 @@ assert_not_contains "Replace не зовётся с \$null-бэкапом" '[Sys
 assert_contains "GUI: ожидание при закрытии качает сообщения" 'Application]::DoEvents()' "$gui"
 
 # ══════════════════════════════════════════════════════════════
+suite "GUI: без рефлексии к защищённым членам (AMSI блокирует скрипт целиком)"
+# ══════════════════════════════════════════════════════════════
+# Оба GUI включали DoubleBuffered через `GetType().GetProperty(...,'Instance,NonPublic')`
+# + SetValue — ради устранения мерцания. Форма записи структурно совпадает с приёмом
+# отключения AMSI, и эвристика Касперского «PowerShell исполняет обфусцированный код»
+# блокировала ВЕСЬ скрипт: PowerShell отдаёт текст в AMSI перед исполнением, получает
+# вердикт и отказывается запускать — EXE падает с «This script contains malicious
+# content and has been blocked by your antivirus software» на первой строке.
+#
+# Проверяем ТОЧНУЮ конструкцию, а не набор «опасных» слов. Тест-файл с батареей вроде
+# AmsiUtils|GetField|EncodedCommand сам стал бы проблемой: паттерн уходит в командную
+# строку grep, и поведенческий анализатор ловит уже её (проверено на Defender —
+# Trojan:PowerShell/PsAttack.R на строку запуска поиска, 2026-08-19).
+YT_GUI="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v17.ps1"
+for _g in "$YT_GUI" "$GUI_PS1"; do
+    _n="$(basename "$_g")"
+    _src="$(grep -v '^[[:space:]]*#' "$_g")"
+    assert_not_contains "$_n: нет рефлексии к DoubleBuffered" "GetProperty('DoubleBuffered'" "$_src"
+    assert_not_contains "$_n: нет BindingFlags к непубличным членам" "BindingFlags]'Instance," "$_src"
+    # Add-Type с C# — альтернатива, которая лечит мерцание, но поднимает heuristic score
+    # у того же Касперского (см. kaspersky-workaround в вики). Тоже не пускаем.
+    assert_not_contains "$_n: нет компиляции C# на лету" "Add-Type -TypeDefinition" "$_src"
+done
+
+# ══════════════════════════════════════════════════════════════
 suite "mktemp: шаблон обязан оканчиваться на XXXXXX"
 # ══════════════════════════════════════════════════════════════
 # У BSD mktemp (macOS) шаблон, у которого после иксов стоит расширение, не

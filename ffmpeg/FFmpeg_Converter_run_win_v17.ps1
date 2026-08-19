@@ -142,9 +142,12 @@ $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
 $form.Font = [System.Drawing.Font]::new("Segoe UI", 9, [System.Drawing.FontStyle]::Regular)
-# DoubleBuffered (protected) — убирает мерцание при перерисовке / разблокировке
-$form.GetType().GetProperty('DoubleBuffered',
-    [System.Reflection.BindingFlags]'Instance,NonPublic').SetValue($form, $true, $null)
+# DoubleBuffered (protected у Control) НЕ включаем — и не возвращать.
+# Рефлексия к непубличному члену с последующим SetValue — структурно тот же приём,
+# которым глушат AMSI, и эвристика Касперского блокирует по нему ВЕСЬ скрипт целиком
+# (подробный разбор — в такой же врезке в yt-dlp/Downloading_from_YouTube_v17.ps1).
+# Альтернатива через `Add-Type -TypeDefinition` с C# ещё хуже: она сама повышает
+# heuristic score. Плата — лёгкое мерцание, его частично гасят SuspendLayout/ResumeLayout.
 $form.SuspendLayout()
 $_fc = [System.Collections.Generic.List[System.Windows.Forms.Control]]::new()
 $_mc = [System.Collections.Generic.List[System.Windows.Forms.Control]]::new()

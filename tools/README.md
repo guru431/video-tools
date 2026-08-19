@@ -7,6 +7,22 @@ Release-хелпер: прогон тестов → сборка обоих EXE 
 сверка `.sha256` sidecar'ов. `-ManifestOnly` — только (пере)генерация манифеста,
 `-SkipTests` — без тестов.
 
+## amsi_probe.ps1
+
+Диагностика ложных срабатываний антивируса. Перед исполнением PowerShell отдаёт весь
+текст скрипта антивирусу через AMSI; при отказе сообщение
+«This script contains malicious content and has been blocked by your antivirus software»
+указывает на `line:1`, то есть на начало скрипта, а не на место проблемы. Probe скармливает
+антивирусу куски файла и печатает, какие именно получают вердикт.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\amsi_probe.ps1 yt-dlp\Downloading_from_YouTube_v17.ps1
+```
+
+Запускать на машине, где ошибка воспроизводится. Проверяемый текст оборачивается в блочный
+комментарий `<# … #>`: он доходит до AMSI дословно, но не исполняется — ни одна строка
+проверяемого файла не выполняется.
+
 ## _build_common.ps1
 
 Единый источник пинов сборки: `$script:Ps2ExeSha`, `$script:Ps2ExeCommit`,

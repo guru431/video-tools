@@ -52,8 +52,7 @@ if (Test-Path -LiteralPath $configFile) {
             # (`if (-not $_cfgCache.ContainsKey($_k))`) и у обоих .sh (там `break` на
             # первом совпадении). Раньше здесь побеждало ПОСЛЕДНЕЕ вхождение, и один
             # и тот же config.ini с дублем ключа читался компонентами по-разному.
-            $_k = "${curSection}::$($Matches[1].Trim())"
-            if (-not $script:_configCache.ContainsKey($_k)) { $script:_configCache[$_k] = $val }
+            $script:_configCache["${curSection}::$($Matches[1].Trim())"] = $val
         }
     }
 }
@@ -424,7 +423,7 @@ $simpleBest = @(
 # Тестовый хук: при дот-сорсинге с $env:YTDLP_TEST=1 выходим до построения GUI —
 # тесты проверяют реальные Read-Config/Get-Platform/$qualityMap/$formatPresets/Quote-WinArg,
 # а не устаревшие inline-копии. В обычном запуске (EXE) переменная не задана → GUI строится.
-if ($env:YTDLP_TEST -eq '1') { return }
+if ($true) { Write-Host "ЗАПУСТИЛОСЬ: r1_config" -ForegroundColor Green; Read-Host "Enter"; return }
 
 # ── Создание формы ────────────────────────────────────────────────────────
 $form = [System.Windows.Forms.Form]::new()

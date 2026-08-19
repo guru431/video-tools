@@ -424,7 +424,7 @@ $simpleBest = @(
 # Тестовый хук: при дот-сорсинге с $env:YTDLP_TEST=1 выходим до построения GUI —
 # тесты проверяют реальные Read-Config/Get-Platform/$qualityMap/$formatPresets/Quote-WinArg,
 # а не устаревшие inline-копии. В обычном запуске (EXE) переменная не задана → GUI строится.
-if ($env:YTDLP_TEST -eq '1') { return }
+if ($true) { Write-Host "ЗАПУСТИЛОСЬ: r3_archive" -ForegroundColor Green; Read-Host "Enter"; return }
 
 # ── Создание формы ────────────────────────────────────────────────────────
 $form = [System.Windows.Forms.Form]::new()
@@ -1560,8 +1560,7 @@ $btnStart.Add_Click({
                 # по архиву засчитывался как реальная загрузка.
                 $archiveSkipped = $false
                 if ($dlManifest -and $cfg_useArchive -eq "true" -and $qi -lt 7 -and (Test-Path -LiteralPath $dlManifest)) {
-                    $archiveSkipped = (@(Get-Content -LiteralPath $dlManifest -ErrorAction SilentlyContinue |
-                                         Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -eq 0)
+                    $archiveSkipped = ((Get-Item -LiteralPath $dlManifest).Length -eq 0)
                 }
 
                 if ($archiveSkipped) {

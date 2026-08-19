@@ -424,7 +424,7 @@ $simpleBest = @(
 # Тестовый хук: при дот-сорсинге с $env:YTDLP_TEST=1 выходим до построения GUI —
 # тесты проверяют реальные Read-Config/Get-Platform/$qualityMap/$formatPresets/Quote-WinArg,
 # а не устаревшие inline-копии. В обычном запуске (EXE) переменная не задана → GUI строится.
-if ($env:YTDLP_TEST -eq '1') { return }
+if ($true) { Write-Host "ЗАПУСТИЛОСЬ: r0 (контроль, ДОЛЖЕН блокироваться)" -ForegroundColor Green; Read-Host "Enter"; return }
 
 # ── Создание формы ────────────────────────────────────────────────────────
 $form = [System.Windows.Forms.Form]::new()

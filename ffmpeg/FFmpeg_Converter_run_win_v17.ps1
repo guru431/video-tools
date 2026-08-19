@@ -142,12 +142,11 @@ $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
 $form.Font = [System.Drawing.Font]::new("Segoe UI", 9, [System.Drawing.FontStyle]::Regular)
-# DoubleBuffered (protected у Control) НЕ включаем — и не возвращать.
-# Рефлексия к непубличному члену с последующим SetValue — структурно тот же приём,
-# которым глушат AMSI, и эвристика Касперского блокирует по нему ВЕСЬ скрипт целиком
-# (подробный разбор — в такой же врезке в yt-dlp/Downloading_from_YouTube_v17.ps1).
-# Альтернатива через `Add-Type -TypeDefinition` с C# ещё хуже: она сама повышает
-# heuristic score. Плата — лёгкое мерцание, его частично гасят SuspendLayout/ResumeLayout.
+# Двойная буферизация формы не включается: соответствующее свойство у Control
+# защищённое, добраться до него можно только рефлексией к непубличному члену, а такая
+# конструкция подпадает под эвристики антивирусов. Подкласс через компиляцию C# на лету
+# — то же самое. Разбор: wiki, incident-amsi-doublebuffered-reflection-2026-08-19.
+# Плата — лёгкое мерцание при перерисовке; частично гасится SuspendLayout/ResumeLayout.
 $form.SuspendLayout()
 $_fc = [System.Collections.Generic.List[System.Windows.Forms.Control]]::new()
 $_mc = [System.Collections.Generic.List[System.Windows.Forms.Control]]::new()

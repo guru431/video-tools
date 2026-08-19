@@ -424,7 +424,7 @@ $simpleBest = @(
 # Тестовый хук: при дот-сорсинге с $env:YTDLP_TEST=1 выходим до построения GUI —
 # тесты проверяют реальные Read-Config/Get-Platform/$qualityMap/$formatPresets/Quote-WinArg,
 # а не устаревшие inline-копии. В обычном запуске (EXE) переменная не задана → GUI строится.
-if ($env:YTDLP_TEST -eq '1') { return }
+if ($true) { Write-Host "ЗАПУСТИЛОСЬ: r2_manifest" -ForegroundColor Green; Read-Host "Enter"; return }
 
 # ── Создание формы ────────────────────────────────────────────────────────
 $form = [System.Windows.Forms.Form]::new()
@@ -1306,7 +1306,7 @@ $btnStart.Add_Click({
                 # Прямой вызов .NET-API сюда тоже не берём: запись файла со случайным
                 # именем в %TEMP% мимо командлетов — характерная примета дропперов, и
                 # эвристики антивирусов на неё реагируют. New-Item даёт ровно 0 байт.
-                New-Item -ItemType File -Path $dlManifest -Force | Out-Null
+                Set-Content -LiteralPath $dlManifest -Value $null -Encoding UTF8
                 $command += "--print-to-file", "after_move:filepath", $dlManifest
             }
             # Архив добавляется ниже — только для реальных загрузок (qi 0..6), НЕ для

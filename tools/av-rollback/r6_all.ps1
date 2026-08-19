@@ -48,12 +48,7 @@ if (Test-Path -LiteralPath $configFile) {
                 $ev = [Environment]::GetEnvironmentVariable($m.Groups[1].Value)
                 if ($null -eq $ev) { Write-Host "WARN: переменная $($m.Groups[1].Value) не задана"; "" } else { $ev }
             })
-            # Первое вхождение ключа выигрывает — тот же контракт, что у ffmpeg-парсера
-            # (`if (-not $_cfgCache.ContainsKey($_k))`) и у обоих .sh (там `break` на
-            # первом совпадении). Раньше здесь побеждало ПОСЛЕДНЕЕ вхождение, и один
-            # и тот же config.ini с дублем ключа читался компонентами по-разному.
-            $_k = "${curSection}::$($Matches[1].Trim())"
-            if (-not $script:_configCache.ContainsKey($_k)) { $script:_configCache[$_k] = $val }
+            $script:_configCache["${curSection}::$($Matches[1].Trim())"] = $val
         }
     }
 }
@@ -424,21 +419,19 @@ $simpleBest = @(
 # Тестовый хук: при дот-сорсинге с $env:YTDLP_TEST=1 выходим до построения GUI —
 # тесты проверяют реальные Read-Config/Get-Platform/$qualityMap/$formatPresets/Quote-WinArg,
 # а не устаревшие inline-копии. В обычном запуске (EXE) переменная не задана → GUI строится.
-if ($env:YTDLP_TEST -eq '1') { return }
+if ($true) { Write-Host "ЗАПУСТИЛОСЬ: r6 (контроль — точный v16, ДОЛЖЕН работать)" -ForegroundColor Green; Read-Host "Enter"; return }
 
 # ── Создание формы ────────────────────────────────────────────────────────
 $form = [System.Windows.Forms.Form]::new()
-$form.Text = "Video Downloader (yt-dlp) v17"
+$form.Text = "Video Downloader (yt-dlp) v16"
 $form.Size = [System.Drawing.Size]::new(830, 807)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
 $form.MaximizeBox = $false
 $form.Font = [System.Drawing.Font]::new("Microsoft Sans Serif", 10)
-# Двойная буферизация формы не включается: соответствующее свойство у Control
-# защищённое, добраться до него можно только рефлексией к непубличному члену, а такая
-# конструкция подпадает под эвристики антивирусов. Подкласс через компиляцию C# на лету
-# — то же самое. Разбор: wiki, incident-amsi-doublebuffered-reflection-2026-08-19.
-# Плата — лёгкое мерцание при перерисовке; частично гасится SuspendLayout/ResumeLayout.
+# DoubleBuffered (protected) — убирает мерцание при перерисовке / разблокировке
+$form.GetType().GetProperty('DoubleBuffered',
+    [System.Reflection.BindingFlags]'Instance,NonPublic').SetValue($form, $true, $null)
 $form.SuspendLayout()
 $_fc = [System.Collections.Generic.List[System.Windows.Forms.Control]]::new()
 
@@ -1267,7 +1260,7 @@ $btnStart.Add_Click({
 
             Set-UiProgress -Percent 0 `
                 -Status "Загрузка $itemNum/$totalItems  [$platform]" `
-                -Title  "Video Downloader (yt-dlp) v17  [$itemNum/$totalItems]"
+                -Title  "Video Downloader (yt-dlp) v16  [$itemNum/$totalItems]"
             Append-Output ""
             Append-Output "═══ [$itemNum/$totalItems] [$platform]  $currentUrl" ([System.Drawing.Color]::Cyan)
 
@@ -1300,13 +1293,7 @@ $btnStart.Add_Click({
             $dlManifest = $null
             if ($chkTranslate.Checked -or ($cfg_useArchive -eq "true" -and $qi -lt 7)) {
                 $dlManifest = Join-Path ([System.IO.Path]::GetTempPath()) ("ytdlp_manifest_{0}.txt" -f [System.Guid]::NewGuid().ToString('N'))
-                # Пустой файл создаём командлетом. `Set-Content -Encoding UTF8` не годится:
-                # в PS 5.1 он пишет 3 байта BOM даже для пустого значения, и «пустой
-                # манифест» ниже пришлось бы определять не по длине (см. archive-skip).
-                # Прямой вызов .NET-API сюда тоже не берём: запись файла со случайным
-                # именем в %TEMP% мимо командлетов — характерная примета дропперов, и
-                # эвристики антивирусов на неё реагируют. New-Item даёт ровно 0 байт.
-                New-Item -ItemType File -Path $dlManifest -Force | Out-Null
+                Set-Content -LiteralPath $dlManifest -Value $null -Encoding UTF8
                 $command += "--print-to-file", "after_move:filepath", $dlManifest
             }
             # Архив добавляется ниже — только для реальных загрузок (qi 0..6), НЕ для
@@ -1495,7 +1482,7 @@ $btnStart.Add_Click({
                         $pct = [int][math]::Floor([double]$Matches[1])
                         Set-UiProgress -Percent $pct `
                             -Status "Загрузка $itemNum/$totalItems  [$platform]  $pct%" `
-                            -Title  "Video Downloader (yt-dlp) v17  [$itemNum/$totalItems]  $pct%"
+                            -Title  "Video Downloader (yt-dlp) v16  [$itemNum/$totalItems]  $pct%"
                     } elseif ($line -match '\[download\] Destination:') {
                         Append-Output $line ([System.Drawing.Color]::LightGreen)
                     } elseif ($line -match '\[Merger\]|\[info\].*Merging') {
@@ -1554,14 +1541,9 @@ $btnStart.Add_Click({
                 # файла (пустой манифест) → видео уже было в архиве. Это ПРОПУСК, а не
                 # загрузка. Контракт дословно как у .sh (там это `return 2`): на пропуске
                 # перевод не запускается, потому что переводить нечего.
-                # Пустоту проверяем по СОДЕРЖИМОМУ, а не по длине файла: длина ловит любую
-                # преамбулу кодировки (у `Set-Content -Encoding UTF8` в PS 5.1 это 3 байта
-                # BOM), из-за чего условие `Length -eq 0` не выполнялось никогда и пропуск
-                # по архиву засчитывался как реальная загрузка.
                 $archiveSkipped = $false
                 if ($dlManifest -and $cfg_useArchive -eq "true" -and $qi -lt 7 -and (Test-Path -LiteralPath $dlManifest)) {
-                    $archiveSkipped = (@(Get-Content -LiteralPath $dlManifest -ErrorAction SilentlyContinue |
-                                         Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -eq 0)
+                    $archiveSkipped = ((Get-Item -LiteralPath $dlManifest).Length -eq 0)
                 }
 
                 if ($archiveSkipped) {
@@ -1814,7 +1796,7 @@ $btnStart.Add_Click({
             if ($failCount -gt 0) { $summary += "  |  Ошибки: $failCount" }
             Append-Output $summary ([System.Drawing.Color]::LightGreen)
             Set-UiProgress -Status "Завершено: $successCount/$totalItems" `
-                           -Title  "Video Downloader (yt-dlp) v17 — Готово!"
+                           -Title  "Video Downloader (yt-dlp) v16 — Готово!"
         } else {
             Append-Output "═══ Остановлено  |  Загружено: $successCount" ([System.Drawing.Color]::Yellow)
             Set-UiProgress -Status "Остановлено"
@@ -1859,7 +1841,7 @@ $btnClear.Add_Click({
     $richOutput.Clear()
     $progressBar.Value = 0
     $lblStatus.Text    = "Готов к загрузке"
-    $form.Text         = "Video Downloader (yt-dlp) v17"
+    $form.Text         = "Video Downloader (yt-dlp) v16"
 })
 $_fc.Add($btnClear)
 

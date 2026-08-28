@@ -50,6 +50,8 @@ default_vars() {
     subtitles_style=""; dry_run="no"; enable_log="no"; log_file=""
     audio_only="no"; merge_files="no"; create_frame="no"
     copy_codecs="no"; extract_audio_copy="no"
+    remote_enabled="no"; remote_endpoint=""; remote_api_key=""
+    remote_prefer="auto"; remote_wait_timeout="1800"
 }
 
 run_script() {
@@ -68,6 +70,25 @@ run_script() {
         # local-контекст вызывающей функции ДО запуска EXIT-трапа, и $dump там пуст.
         trap "_dump '$dump'" EXIT
         source "$SCRIPT" > /dev/null 2>&1
+    ) < /dev/null
+    rm -f "$dump"
+}
+
+# Как run_script, но возвращает вывод скрипта: проверки удалённого бэкенда
+# смотрят именно на сообщения, а не на вызовы ffmpeg.
+run_script_out() {
+    local dump; dump=$(mktemp_suffix /tmp/test_dump_ .txt)
+    rm -f "$FFMPEG_LOG"
+    (
+        export PATH="$MOCKS_DIR:$PATH"
+        export MOCK_FFMPEG_ENCODERS=""
+        export MOCK_FFMPEG_LOG="$FFMPEG_LOG"
+        export CURL_BIN="$MOCKS_DIR/curl"
+        default_vars
+        for ov in "$@"; do eval "$ov"; done
+        _dump() { echo "done" > "$1"; }
+        trap "_dump '$dump'" EXIT
+        source "$SCRIPT" 2>&1
     ) < /dev/null
     rm -f "$dump"
 }
@@ -258,6 +279,45 @@ if [ -f "$FFMPEG_LOG" ]; then
 else
     fail "split_silence: mock вызван" "лог создан" "нет лога"
 fi
+
+# ══════════════════════════════════════════════════════════════
+suite "remote: локальные режимы остаются локальными"
+# ══════════════════════════════════════════════════════════════
+CURL_LOG="/tmp/mock_curl_int_$$.txt"
+for _m in copy_codecs merge_files create_frame audio_only extract_audio_copy; do
+    rm -f "$CURL_LOG"
+    _out="$(MOCK_CURL_LOG="$CURL_LOG" run_script_out \
+        'remote_enabled="yes"' \
+        'remote_endpoint="http://mock.invalid/v1"' \
+        'remote_api_key="k"' \
+        "${_m}=\"yes\"" \
+        'dry_run="yes"')"
+    assert_contains "$_m: сказано, что считается локально" "локально" "$_out"
+    if [ -s "$CURL_LOG" ]; then
+        fail "$_m: в сеть не ходим" "лог curl пуст" "$(cat "$CURL_LOG")"
+    else
+        pass "$_m: в сеть не ходим"
+    fi
+done
+rm -f "$CURL_LOG"
+
+suite "remote: preflight обрывает прогон до первого файла"
+_out="$(run_script_out 'remote_enabled="yes"' 'remote_endpoint=""' 'remote_api_key=""')"
+assert_contains "названа переменная адреса" "TRANSCODE_URL" "$_out"
+assert_not_contains "ни один файл не тронут" "Кодирование:" "$_out"
+
+suite "remote: обычное перекодирование уезжает"
+rm -f "$CURL_LOG"
+_out="$(MOCK_CURL_LOG="$CURL_LOG" MOCK_CURL_CODE=200 \
+    MOCK_CURL_BODY='{"args_version":"1","chunk_size":1048576,"job_id":"j1","upload_id":"u1","state":"done","received":0}' \
+    run_script_out \
+        'remote_enabled="yes"' \
+        'remote_endpoint="http://mock.invalid/v1"' \
+        'remote_api_key="k"' \
+        'dry_run="yes"')"
+assert_contains "сказано о включении" "Удалённый бэкенд включён" "$_out"
+assert_contains "preflight спросил возможности" "/v1/capabilities" "$(cat "$CURL_LOG")"
+rm -f "$CURL_LOG"
 
 # ── Cleanup ───────────────────────────────────────────────────
 rm -f "$FFMPEG_LOG"

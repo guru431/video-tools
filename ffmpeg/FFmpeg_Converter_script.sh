@@ -51,6 +51,15 @@ if ! command -v "$ffmpeg" &> /dev/null; then
 	exit 1
 fi
 
+# Удалённый бэкенд — отдельный модуль. Подключаем всегда: он ничего не делает
+# сам, только объявляет функции, а условие включения проверяется ниже.
+# BASH_SOURCE, а не $0: скрипт дот-сорсится и из run.sh, и из тестов — $0 там
+# указывает на вызывающий файл, и модуль искался бы не в той папке.
+_ffconv_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "${_ffconv_script_dir}/remote_client.sh" ]; then
+	source "${_ffconv_script_dir}/remote_client.sh"
+fi
+
 # --- Парсинг настроек (формат :+:value или :-:value) ---
 IFS=':' read -r foo video_codec_status video_codec_value <<< "$video_codec"
 IFS=':' read -r foo video_number_frames_status video_number_frames_value <<< "$video_number_frames"
@@ -448,6 +457,8 @@ start_time_global=$(date +%s)
 _current_ffmpeg_pid=""
 _current_out_tmp=""
 _cleanup_on_int() {
+	# Брошенная задача продолжила бы держать карту на сервере до своего таймаута.
+	[ -n "${REMOTE_CURRENT_JOB:-}" ] && remote_cancel "$REMOTE_CURRENT_JOB"
 	[ -n "$_current_ffmpeg_pid" ] && kill "$_current_ffmpeg_pid" 2>/dev/null
 	[ -n "$_current_out_tmp" ] && rm -f "$_current_out_tmp"
 	[ -n "$results_dir" ] && rm -rf "$results_dir"
@@ -462,6 +473,7 @@ trap _cleanup_on_int INT TERM
 # только доставка сигнала всей process group. results_dir/collisions_file дочерний
 # процесс НЕ трогает — они общие, их чистит родитель.
 _cleanup_child_on_int() {
+	[ -n "${REMOTE_CURRENT_JOB:-}" ] && remote_cancel "$REMOTE_CURRENT_JOB"
 	[ -n "${_current_ffmpeg_pid:-}" ] && kill "$_current_ffmpeg_pid" 2>/dev/null
 	[ -n "${_current_out_tmp:-}" ] && rm -f "$_current_out_tmp"
 	exit 130
@@ -475,6 +487,48 @@ file_size() { stat -c%s "$1" 2>/dev/null || stat -f%z "$1" 2>/dev/null || echo 0
 # merge как раз идут с `-c copy` без -f. Суффиксное `.movie.mp4.partial` давало
 # "Error initializing the muxer ... Invalid argument" на настоящем ffmpeg.
 partial_path() { printf '%s/.ffconv-partial-%s' "$(dirname "$1")" "$(basename "$1")"; }
+
+# --- Публикация результата: общая для локального и удалённого путей ---
+# Вынесена, чтобы переименование, лог и учёт байтов существовали в ОДНОМ
+# экземпляре: разойдись они, «успех» на одном пути значил бы не то же, что на
+# другом, и сводка ok/fail перестала бы что-либо значить.
+#
+# Пятый аргумент — проверять ли содержимое (`-s` и `-f null -`). Он есть только
+# у удалённого пути и именно поэтому необязателен: локальный ffmpeg с rc=0
+# нулевого или битого файла не оставляет, а оборванная загрузка — запросто.
+# Включать проверку и локально значило бы декодировать КАЖДЫЙ выход целиком
+# вторым проходом — на многогигабайтном пакете это минуты на файл ни за что.
+publish_result() {
+	local src="$1" tmp="$2" dst="$3" started="$4" verify="${5:-no}"
+	local elapsed=$(( $(date +%s) - started ))
+	if [ "$verify" = "yes" ]; then
+		if [ ! -s "$tmp" ] || ! "$ffmpeg" -nostdin -v error -i "$tmp" -f null - 2>/dev/null; then
+			log_msg "FAIL" "$(basename "$src"): результат не прошёл проверку"
+			rm -f "$tmp"
+			any_fail="yes"
+			echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+			return 1
+		fi
+	fi
+	# F-rename. Публикацию подтверждаем: успех mv И наличие файла-цели. Молчаливый
+	# провал rename (цель заблокирована, нет места) иначе выдал бы отсутствующий или
+	# старый результат за успех — с записью manifest поверх него.
+	if mv -f "$tmp" "$dst" 2>/dev/null && [ -f "$dst" ]; then
+		log_msg "OK" "$(basename "$src") -> $(basename "$dst") ($((elapsed / 60))m $((elapsed % 60))s)"
+		local out_sz in_sz=0
+		out_sz=$(file_size "$dst")
+		# F29. Вход — только с первой удавшейся части (см. in_reported выше).
+		if [ "$in_reported" -eq 0 ]; then in_sz=$(file_size "$src"); in_reported=1; fi
+		produced+=("$dst")
+		echo "ok:${out_sz}:${in_sz}" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+		return 0
+	fi
+	log_msg "FAIL" "$(basename "$src"): не удалось опубликовать результат (rename)"
+	rm -f "$tmp"
+	any_fail="yes"
+	echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+	return 1
+}
 
 # --- Manifest готовности: input → outputs → completion state ---
 # Построчный формат (не JSON: CMD его не разберёт), одинаковый на трёх платформах:
@@ -885,6 +939,10 @@ encode_file() {
 	# Готовые выходы копим, чтобы записать manifest одной транзакцией после цикла.
 	local -a produced=()
 	local any_fail="no"
+	# Одна загрузка на исходный файл, задач — по одной на часть. local обязателен:
+	# иначе идентификатор пережил бы файл, и части второго файла уехали бы к
+	# загрузке первого.
+	local remote_upload_id="" remote_sub_id=""
 
 	# F29. Размер входа засчитываем ОДИН раз на исходный файл. Раньше запись "ok"
 	# писалась на каждую часть и несла полный размер источника, поэтому при разбиении
@@ -981,8 +1039,68 @@ encode_file() {
 		fi
 		[ "${progress_dur:-0}" -gt 0 ] 2>/dev/null || progress_dur="$file_duration"
 
+		# Удалённый бэкенд подменяет РОВНО этот участок: сборку argv и запуск
+		# ffmpeg. Всё до (manifest, коллизии, имена частей) и всё после
+		# (валидация, mv, сводка, manifest_write) остаётся общим — именно
+		# поэтому один config.ini даёт один результат на обоих путях.
+		if [ "$remote_active" = "yes" ]; then
+			local r_len=0
+			[[ "$current_set_length" == "-t "* ]] && r_len="${current_set_length#-t }"
+			local r_op r_params r_out
+			r_out="$(remote_op_for_config "${b:-0}" "$r_len")" || {
+				log_msg "FAIL" "$(basename "$full_path"): кодек $set_video_codec служба не поддерживает"
+				any_fail="yes"
+				echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+				((c+=1)); continue
+			}
+			r_op="$(printf '%s' "$r_out" | head -1)"
+			r_params="$(printf '%s' "$r_out" | tail -1)"
+
+			# Загрузка одна на файл, задач — по одной на часть. Второй раз те же
+			# гигабайты не отправляются.
+			if [ -z "${remote_upload_id:-}" ]; then
+				log_msg "INFO" "Отправка на сервер: $(basename "$full_path")"
+				remote_upload_id="$(remote_upload "$full_path")" || {
+					log_msg "FAIL" "$(basename "$full_path"): загрузка не удалась"
+					any_fail="yes"
+					echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+					((c+=1)); continue
+				}
+				printf "\n"
+				# Файл субтитров приходит той же дорогой, что видео: путей в
+				# параметрах служба не принимает по построению.
+				remote_sub_id=""
+				if [ "$sub_found" = "1" ] && [ -n "${sub_file:-}" ]; then
+					remote_sub_id="$(remote_upload "$sub_file")" || remote_sub_id=""
+				fi
+			fi
+
+			if [ "$dry_run" = "yes" ]; then
+				remote_dry_run "$remote_upload_id" "$r_op" "$r_params" "${remote_sub_id:-}"
+			else
+				local r_job
+				r_job="$(remote_submit "$remote_upload_id" "$r_op" "$r_params" "${remote_sub_id:-}")" || {
+					log_msg "FAIL" "$(basename "$full_path"): служба отвергла задачу"
+					any_fail="yes"
+					echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+					((c+=1)); continue
+				}
+				local out_tmp; out_tmp="$(partial_path "$out_file")"
+				rm -f "$out_tmp"
+				_current_out_tmp="$out_tmp"
+				local encode_start=$(date +%s)
+				if remote_wait "$r_job" "$full_path" && remote_fetch "$r_job" "$out_tmp"; then
+					publish_result "$full_path" "$out_tmp" "$out_file" "$encode_start" "yes"
+				else
+					log_msg "FAIL" "$(basename "$full_path")"
+					rm -f "$out_tmp"
+					any_fail="yes"
+					echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+				fi
+				_current_out_tmp=""
+			fi
 		# D7. Dry-run
-		if [ "$dry_run" = "yes" ]; then
+		elif [ "$dry_run" = "yes" ]; then
 			echo "[DRY-RUN] $ffmpeg -nostdin -hide_banner -strict -2 $hw_decode_args $in_seek -i \"$full_path\" ${subtitles_params[*]} $convert_settings $thread_args ${vf_args[*]} ${af_args[*]} $current_set_length $out_seek \"$out_file\""
 		else
 			log_msg "INFO" "Кодирование: $(basename "$full_path") -> $(basename "$out_file")"
@@ -1060,26 +1178,9 @@ encode_file() {
 				rm -f "$out_tmp"
 				any_fail="yes"
 				echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
-			# F-rename. Публикацию результата подтверждаем: успех mv И наличие файла-цели.
-			# Молчаливый провал rename (цель заблокирована, нет места) иначе выдал бы
-			# отсутствующий/старый результат за успех — с записью manifest поверх него.
-			elif mv -f "$out_tmp" "$out_file" 2>/dev/null && [ -f "$out_file" ]; then
-				log_msg "OK" "$(basename "$full_path") -> $(basename "$out_file") (${elapsed_min}m ${elapsed_sec}s)"
-				local out_sz in_sz
-				out_sz=$(file_size "$out_file")
-				# F29. Вход — только с первой удавшейся части (см. in_reported выше).
-				in_sz=0
-				if [ "$in_reported" -eq 0 ]; then
-					in_sz=$(file_size "$full_path")
-					in_reported=1
-				fi
-				produced+=("$out_file")
-				echo "ok:${out_sz}:${in_sz}" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+			# Публикация — общая с удалённым путём (см. publish_result выше).
 			else
-				log_msg "FAIL" "$(basename "$full_path"): не удалось опубликовать результат (rename)"
-				rm -f "$out_tmp"
-				any_fail="yes"
-				echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+				publish_result "$full_path" "$out_tmp" "$out_file" "$encode_start"
 			fi
 			rm -f "$err_file"
 		fi
@@ -1171,6 +1272,43 @@ if [ "$merge_files" != "yes" ] && [ "$extract_audio_copy" != "yes" ] && [ "$crea
 		done < "$collisions_file"
 	fi
 	rm -f "$_cmap"
+fi
+
+# --- Удалённый бэкенд: включён ли он для ЭТОГО прогона ---
+# Уезжает только то, где выигрывает карта. remux, concat, frames, audio и
+# extract_audio служба умеет, но карта в них не участвует: там ffmpeg либо
+# переливает байты, либо считает на процессоре — гнать по сети гигабайты ради
+# `-c copy` заведомо хуже локального прогона. Молчать об этом нельзя: режим,
+# который тихо не уехал, неотличим от сломанного удалённого пути.
+remote_active="no"
+if [ "$remote_enabled" = "yes" ]; then
+	if ! type remote_preflight >/dev/null 2>&1; then
+		echo "[ОШИБКА] [remote] enabled = yes, но рядом со скриптом нет remote_client.sh." >&2
+		pause_prompt "Нажмите [Enter], чтобы выйти..."
+		exit 1
+	fi
+	if [ "$merge_files" = "yes" ] || [ "$extract_audio_copy" = "yes" ] || \
+	   [ "$create_frame" = "yes" ] || [ "$copy_codecs" = "yes" ] || \
+	   [ "$audio_only" = "yes" ]; then
+		log_msg "INFO" "Удалённый бэкенд не используется в этом режиме (карта в нём не участвует) — считаем локально"
+	elif [ "$parallel_count" -gt 1 ] 2>/dev/null; then
+		echo "[ПРЕДУПРЕЖДЕНИЕ] parallel_files на удалённом пути игнорируется: параллельность задаёт очередь службы."
+		parallel_count=1
+		remote_active="yes"
+	else
+		remote_active="yes"
+	fi
+	if [ "$remote_active" = "yes" ]; then
+		# Всё, что делает невозможным весь прогон, выясняем ДО первого файла.
+		if ! remote_preflight; then
+			pause_prompt "Нажмите [Enter], чтобы выйти..."
+			exit 1
+		fi
+		if [ "$hw_accel_status" = "+" ] && [ "$hw_accel_value" = "intel" ]; then
+			echo "[ПРЕДУПРЕЖДЕНИЕ] hw_accel = intel: Intel-карты на сервере нет, служба посчитает на процессоре."
+		fi
+		log_msg "INFO" "Удалённый бэкенд включён: кодирование уходит на службу конвертации"
+	fi
 fi
 
 # --- Основная логика ---

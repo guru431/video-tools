@@ -132,4 +132,20 @@ fi
 # ── Cleanup ───────────────────────────────────────────────────
 rm -rf "$WORK"
 
+suite "GUI: группа «Сервер»"
+GUI="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v17.ps1"
+gui_text="$(cat "$GUI")"
+assert_contains "галка удалённого счёта" 'chkRemote'        "$gui_text"
+assert_contains "выбор prefer"           'cmbRemotePrefer'  "$gui_text"
+assert_contains "поле таймаута"          'txtRemoteWait'    "$gui_text"
+assert_contains "метка состояния ключа"  'lblRemoteCreds'   "$gui_text"
+# Приватное из GUI не редактируется и, значит, не может попасть в config.ini.
+assert_not_contains "нет поля ввода адреса" 'txtRemoteEndpoint' "$gui_text"
+assert_not_contains "нет поля ввода ключа"  'txtRemoteApiKey'   "$gui_text"
+# Галка без передачи переменных в runspace не делала бы ничего: скрипт читает
+# именно эти имена, и без них удалённый бэкенд из GUI не включается вовсе.
+for _v in remote_enabled remote_endpoint remote_api_key remote_prefer remote_wait_timeout; do
+    assert_contains "$_v уезжает в runspace" "'$_v'" "$gui_text"
+done
+
 summary

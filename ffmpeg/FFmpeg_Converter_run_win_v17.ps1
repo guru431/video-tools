@@ -129,6 +129,13 @@ $_cfg_silence_duration = Read-Config "silence_duration"  "split" "2.0"
 $_cfg_silence_thresh   = Read-Config "silence_threshold" "split" "-30dB"
 
 $_cfg_save_ext     = Read-Config "save_old_extension" "other" "no"
+# Адрес и ключ ЧИТАЮТСЯ, но не редактируются: GUI показывает лишь «задано/не задано».
+# Менять их можно только переменными окружения TRANSCODE_URL/TRANSCODE_API_KEY.
+$_cfg_remote_on    = Read-Config "enabled" "remote" "no"
+$_cfg_remote_ep    = Read-Config "endpoint" "remote" ""
+$_cfg_remote_key   = Read-Config "api_key" "remote" ""
+$_cfg_remote_pref  = Read-Config "prefer" "remote" "auto"
+$_cfg_remote_wait  = Read-Config "wait_timeout" "remote" "1800"
 $_cfg_formats      = Read-Config "format_files_in"    "other" "3gp,avi,flv,mp4,mpg,mpeg,wmv,mov,asf,mkv,m4v,webm,mts,vob,m4b,mp3,wma,ogg,m4a,aac"
 $_cfg_sub_style    = Read-Config "subtitles_style"    "other" "FontName=Arial,FontSize=24,PrimaryColour=&HFFFFFF&"
 $_cfg_dry_run      = Read-Config "dry_run"            "other" "no"
@@ -1073,7 +1080,7 @@ $groupOther.Size = [System.Drawing.Size]::new(770, 18)
 $groupOther.Text = "Дополнительные настройки (нажмите, чтобы развернуть)"
 $groupOther.Add_Click({
     if ($groupOther.Height -eq 18) {
-        $groupOther.Height = 96
+        $groupOther.Height = 190
     } else {
         $groupOther.Height = 18
     }
@@ -1119,6 +1126,56 @@ $textSubtitlesStyle.Size = [System.Drawing.Size]::new(648, 20)
 $textSubtitlesStyle.Text = $_cfg_sub_style
 $_goth.Add($textSubtitlesStyle)
 
+
+# Группа «Сервер». Вложена в «Дополнительные настройки», чтобы не сдвигать кнопки
+# и прогресс ниже — их Y задан абсолютными числами.
+# Адрес и ключ здесь ТОЛЬКО показываются: правь мы их из GUI, приватное значение
+# рано или поздно оказалось бы в config.ini, а репозиторий публичный.
+$grpRemote = [System.Windows.Forms.GroupBox]::new()
+$grpRemote.Location = [System.Drawing.Point]::new(8, 92)
+$grpRemote.Size = [System.Drawing.Size]::new(750, 92)
+$grpRemote.Text = "Сервер конвертации"
+
+$chkRemote = [System.Windows.Forms.CheckBox]::new()
+$chkRemote.Location = [System.Drawing.Point]::new(8, 18)
+$chkRemote.Size = [System.Drawing.Size]::new(300, 18)
+$chkRemote.Text = "Считать на сервере"
+$chkRemote.Checked = ($_cfg_remote_on -eq "yes")
+
+$lblRemotePrefer = [System.Windows.Forms.Label]::new()
+$lblRemotePrefer.Location = [System.Drawing.Point]::new(320, 20)
+$lblRemotePrefer.Size = [System.Drawing.Size]::new(60, 16)
+$lblRemotePrefer.Text = "Считать:"
+
+$cmbRemotePrefer = [System.Windows.Forms.ComboBox]::new()
+$cmbRemotePrefer.Location = [System.Drawing.Point]::new(382, 17)
+$cmbRemotePrefer.Size = [System.Drawing.Size]::new(90, 20)
+$cmbRemotePrefer.DropDownStyle = 'DropDownList'
+[void]$cmbRemotePrefer.Items.AddRange(@("auto", "gpu", "cpu"))
+$cmbRemotePrefer.SelectedItem = $_cfg_remote_pref
+if ($null -eq $cmbRemotePrefer.SelectedItem) { $cmbRemotePrefer.SelectedIndex = 0 }
+
+$lblRemoteWait = [System.Windows.Forms.Label]::new()
+$lblRemoteWait.Location = [System.Drawing.Point]::new(488, 20)
+$lblRemoteWait.Size = [System.Drawing.Size]::new(126, 16)
+$lblRemoteWait.Text = "Ждать карту, сек:"
+
+$txtRemoteWait = [System.Windows.Forms.TextBox]::new()
+$txtRemoteWait.Location = [System.Drawing.Point]::new(616, 17)
+$txtRemoteWait.Size = [System.Drawing.Size]::new(70, 20)
+$txtRemoteWait.Text = $_cfg_remote_wait
+
+$lblRemoteCreds = [System.Windows.Forms.Label]::new()
+$lblRemoteCreds.Location = [System.Drawing.Point]::new(8, 46)
+$lblRemoteCreds.Size = [System.Drawing.Size]::new(730, 34)
+$lblRemoteCreds.Text = if ($_cfg_remote_ep -and $_cfg_remote_key) {
+	"Адрес и ключ: заданы (переменные окружения)"
+} else {
+	"Адрес и ключ: НЕ заданы — задайте TRANSCODE_URL и TRANSCODE_API_KEY"
+}
+
+$grpRemote.Controls.AddRange(@($chkRemote, $lblRemotePrefer, $cmbRemotePrefer, $lblRemoteWait, $txtRemoteWait, $lblRemoteCreds))
+$_goth.Add($grpRemote)
 $groupOther.Controls.AddRange($_goth.ToArray())
 $_regFont = $groupOther.Font
 $groupOther.Font = [System.Drawing.Font]::new($_regFont, [System.Drawing.FontStyle]::Bold)
@@ -1414,6 +1471,17 @@ $buttonRun.Add_Click({
         return
     }
 
+    # ---- Удалённый бэкенд ----
+    # Адрес и ключ идут из config.ini как есть (в нём — только ${TRANSCODE_URL} и
+    # ${TRANSCODE_API_KEY}, развёрнутые при чтении). GUI их не редактирует.
+    # $script:, как и остальные значения формы: сбор в runspace идёт через
+    # Get-Variable -Scope Script, и локальная переменная обработчика туда не попадёт.
+    $script:remote_enabled      = if ($chkRemote.Checked) { "yes" } else { "no" }
+    $script:remote_endpoint     = $_cfg_remote_ep.TrimEnd("/")
+    $script:remote_api_key      = $_cfg_remote_key
+    $script:remote_prefer       = [string]$cmbRemotePrefer.SelectedItem
+    $script:remote_wait_timeout = $txtRemoteWait.Text
+
     # Собираем все переменные для передачи в runspace
     $varsToPass = @{}
     foreach ($varName in @(
@@ -1426,7 +1494,8 @@ $buttonRun.Add_Click({
         'playback_speed',
         'start_coding','length_coding','split_by_silence','silence_duration','silence_threshold',
         'ffmpeg','save_old_extension','format_files_in','subtitles_style',
-        'dry_run','enable_log','log_file'
+        'dry_run','enable_log','log_file',
+        'remote_enabled','remote_endpoint','remote_api_key','remote_prefer','remote_wait_timeout'
     )) {
         $v = Get-Variable -Name $varName -Scope Script -ErrorAction SilentlyContinue
         $varsToPass[$varName] = if ($v) { $v.Value } else { $null }

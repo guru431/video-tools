@@ -20,7 +20,7 @@
 #                            только сигнатуры по тексту; поведенческие правила — нет.
 #
 # Использование (на машине, где ошибка воспроизводится):
-#   powershell -ExecutionPolicy Bypass -File tools\amsi_probe.ps1 yt-dlp\Downloading_from_YouTube_v17.ps1
+#   powershell -ExecutionPolicy Bypass -File tools\amsi_probe.ps1 yt-dlp\Downloading_from_YouTube_v18.ps1
 
 [CmdletBinding()]
 param(

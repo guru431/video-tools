@@ -1,6 +1,6 @@
-﻿$src       = Join-Path $PSScriptRoot 'FFmpeg_Converter_run_win_v17.ps1'
+﻿$src       = Join-Path $PSScriptRoot 'FFmpeg_Converter_run_win_v18.ps1'
 $scriptPs1 = Join-Path $PSScriptRoot 'FFmpeg_Converter_script.ps1'
-$out       = Join-Path $PSScriptRoot '_VideoConverter_v17.exe'
+$out       = Join-Path $PSScriptRoot '_VideoConverter_v18.exe'
 $ps2exePs  = Join-Path $PSScriptRoot '..\tools\ps2exe.ps1'
 $tmpSrc    = Join-Path $PSScriptRoot '_build_tmp.ps1'
 
@@ -55,7 +55,7 @@ try {
         -noConsole `
         -STA `
         -x64 `
-        -title   "Video Converter (ffmpeg) v17" `
+        -title   "Video Converter (ffmpeg) v18" `
         -version $script:BuildVersion
 } catch {
     Write-Host "FAIL: $_"

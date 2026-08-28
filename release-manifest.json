@@ -1,5 +1,5 @@
 ﻿{
-    "build_version":  "17.0.0.0",
+    "build_version":  "18.0.0.0",
     "source_commit":  "6b41624d3a708b89c74b38fb7177bc4ac8fb6bdc",
     "source_tree_dirty":  true,
     "ps2exe":  {
@@ -8,13 +8,13 @@
                },
     "artifacts":  [
                       {
-                          "path":  "ffmpeg/_VideoConverter_v17.exe",
-                          "source":  "ffmpeg/FFmpeg_Converter_run_win_v17.ps1",
+                          "path":  "ffmpeg/_VideoConverter_v18.exe",
+                          "source":  "ffmpeg/FFmpeg_Converter_run_win_v18.ps1",
                           "sha256":  "60399EE8063D9929C5703F45E9EA79F02AA9D00D76F4E8C8D70D924B15D23D57"
                       },
                       {
-                          "path":  "yt-dlp/_VideoDownloader_v17.exe",
-                          "source":  "yt-dlp/Downloading_from_YouTube_v17.ps1",
+                          "path":  "yt-dlp/_VideoDownloader_v18.exe",
+                          "source":  "yt-dlp/Downloading_from_YouTube_v18.ps1",
                           "sha256":  "99B5079EFC7158C42BE7E45E8E77B57184CB1207603B038DC899A0FED9581ED1"
                       }
                   ]

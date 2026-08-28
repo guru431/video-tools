@@ -63,7 +63,7 @@ log_has() { [ -f "$FFMPEG_LOG" ] && grep -qF -- "$1" "$FFMPEG_LOG"; }
 SH_SRC="$(cat "$SCRIPT")"
 PS1_SRC="$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1")"
 CMD_SRC="$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.cmd")"
-GUI_SRC="$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v17.ps1")"
+GUI_SRC="$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v18.ps1")"
 CFG_SRC="$(cat "$PROJECT_DIR/ffmpeg/config.ini")"
 
 # ══════════════════════════════════════════════════════════════

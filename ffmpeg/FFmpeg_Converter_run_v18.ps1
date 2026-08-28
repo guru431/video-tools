@@ -34,10 +34,19 @@ function Read-Config {
 				if ($curSection -and $line -match '^([^=]+?)\s*=\s*(.*)') {
 					$val = $Matches[2] -replace '\s+#.*', ''
 					# Подстановка ${ENV_VAR} из окружения (паритет с yt-dlp). Не задана → пусто + WARN.
+					# Кроме секции [remote]: там TRANSCODE_URL/TRANSCODE_API_KEY не заданы у
+					# всех, кто удалённым бэкендом не пользуется (а он выключен по умолчанию).
+					# Здесь файл разбирается ЦЕЛИКОМ в кэш при первом же Read-Config, поэтому
+					# WARN печатался бы дважды на каждом запуске, о чём бы ни спросили.
+					# Про незаданную переменную громко говорит Invoke-RemotePreflight.
+					$_quiet = ($curSection -eq 'remote')
 					$val = [regex]::Replace($val, '\$\{(\w+)\}', {
 						param($m)
 						$ev = [Environment]::GetEnvironmentVariable($m.Groups[1].Value)
-						if ([string]::IsNullOrEmpty($ev)) { Write-Host "WARN: переменная $($m.Groups[1].Value) не задана"; "" } else { $ev }
+						if ([string]::IsNullOrEmpty($ev)) {
+							if (-not $_quiet) { Write-Host "WARN: переменная $($m.Groups[1].Value) не задана" }
+							""
+						} else { $ev }
 					})
 					$_k = "${curSection}::$($Matches[1].Trim())"
 					if (-not $script:_cfgCache.ContainsKey($_k)) { $script:_cfgCache[$_k] = $val.Trim() }
@@ -114,6 +123,14 @@ $length_coding   = To-Flag (Read-Config "length" "split" "-00-05-00") ":-:00-05-
 $split_by_silence  = Read-Config "split_by_silence"  "split" "no"
 $silence_duration  = Read-Config "silence_duration"  "split" "2.0"
 $silence_threshold = Read-Config "silence_threshold" "split" "-30dB"
+
+# Хвостовой слэш в адресе даёт "…/v1//jobs" — служба отвечает 404 на путь,
+# который человеку выглядит верным. Снимаем здесь, в единственном месте чтения.
+$remote_enabled      = Read-Config "enabled" "remote" "no"
+$remote_endpoint     = (Read-Config "endpoint" "remote" "").TrimEnd('/')
+$remote_api_key      = Read-Config "api_key" "remote" ""
+$remote_prefer       = Read-Config "prefer" "remote" "auto"
+$remote_wait_timeout = Read-Config "wait_timeout" "remote" "1800"
 
 $save_old_extension = Read-Config "save_old_extension" "other" "no"
 $format_files_in    = Read-Config "format_files_in"    "other" "3gp,avi,flv,mp4,mpg,mpeg,wmv,mov,asf,mkv,m4v,webm,mts,vob,m4b,mp3,wma,ogg,m4a,aac"

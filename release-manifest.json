@@ -1,6 +1,6 @@
 ﻿{
-    "build_version":  "17.0.0.0",
-    "source_commit":  "f5de47a1389d640aff1f07a50bdbc56bc34a98c1",
+    "build_version":  "18.0.0.0",
+    "source_commit":  "c80fe394c5e5af357f461b4e054fec9e369ff6d4",
     "source_tree_dirty":  false,
     "ps2exe":  {
                    "commit":  "d32d5ce21c458696e860a7533943b1466d925be9",
@@ -8,14 +8,14 @@
                },
     "artifacts":  [
                       {
-                          "path":  "ffmpeg/_VideoConverter_v17.exe",
-                          "source":  "ffmpeg/FFmpeg_Converter_run_win_v17.ps1",
-                          "sha256":  "A39CAE929E948A81A0F618EDE755BA27B180FB01D1A47110FC6FCAA5EC4A01F5"
+                          "path":  "ffmpeg/_VideoConverter_v18.exe",
+                          "source":  "ffmpeg/FFmpeg_Converter_run_win_v18.ps1",
+                          "sha256":  "41ECCD358F364A1D1ED260862593CE3B64A36F84B41534EBD7F1DF471829BAC0"
                       },
                       {
-                          "path":  "yt-dlp/_VideoDownloader_v17.exe",
-                          "source":  "yt-dlp/Downloading_from_YouTube_v17.ps1",
-                          "sha256":  "99B5079EFC7158C42BE7E45E8E77B57184CB1207603B038DC899A0FED9581ED1"
+                          "path":  "yt-dlp/_VideoDownloader_v18.exe",
+                          "source":  "yt-dlp/Downloading_from_YouTube_v18.ps1",
+                          "sha256":  "9D71BD3FD69805022B63772D84663722635EB8ABF9B0358BD6AA668C5D9E6102"
                       }
                   ]
 }

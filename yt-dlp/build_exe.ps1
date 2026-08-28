@@ -1,5 +1,5 @@
-﻿$src      = Join-Path $PSScriptRoot 'Downloading_from_YouTube_v17.ps1'
-$out      = Join-Path $PSScriptRoot '_VideoDownloader_v17.exe'
+﻿$src      = Join-Path $PSScriptRoot 'Downloading_from_YouTube_v18.ps1'
+$out      = Join-Path $PSScriptRoot '_VideoDownloader_v18.exe'
 $ps2exePs = Join-Path $PSScriptRoot '..\tools\ps2exe.ps1'
 
 # Общие константы (SHA-пин ps2exe + версия) и проверка — один источник на оба build-скрипта.
@@ -22,7 +22,7 @@ try {
         -noConsole `
         -STA `
         -x64 `
-        -title   "Video Downloader (yt-dlp) v17" `
+        -title   "Video Downloader (yt-dlp) v18" `
         -version $script:BuildVersion
 } catch {
     Write-Host "FAIL: $_"

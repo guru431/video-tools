@@ -35,7 +35,7 @@ read_config() {
 	shopt -s nocasematch
 	local in_section=false
 	while IFS= read -r line || [ -n "$line" ]; do
-		# Trim через bash parameter expansion (см. yt-dlp/Downloading_from_YouTube_v17.sh
+		# Trim через bash parameter expansion (см. yt-dlp/Downloading_from_YouTube_v18.sh
 		# — sed-fork на Windows Git Bash слишком медленный из-за cygwin overhead).
 		line="${line#"${line%%[![:space:]]*}"}"
 		line="${line%"${line##*[![:space:]]}"}"
@@ -58,9 +58,13 @@ read_config() {
 				value="${value%"${value##*[![:space:]]}"}"
 			fi
 			# Подстановка ${ENV_VAR} из окружения (паритет с yt-dlp). Не задана → пусто + WARN.
+			# Кроме секции [remote]: там TRANSCODE_URL/TRANSCODE_API_KEY не заданы у
+			# всех, кто удалённым бэкендом не пользуется (а он выключен по умолчанию),
+			# и WARN печатался бы на каждом запуске. Про незаданную переменную громко
+			# говорит remote_preflight — ровно тогда, когда она действительно нужна.
 			while [[ "$value" == *'${'*'}'* ]]; do
 				local _vn="${value#*\$\{}"; _vn="${_vn%%\}*}"
-				[ -n "${!_vn:-}" ] || echo "WARN: переменная $_vn не задана" >&2
+				[ -n "${!_vn:-}" ] || [ "$section" = "remote" ] || echo "WARN: переменная $_vn не задана" >&2
 				value="${value//\$\{$_vn\}/${!_vn:-}}"
 			done
 			result="$value"
@@ -140,6 +144,15 @@ length_coding="$(to_flag "$(read_config "length" "split" "-00-05-00")" ":-:00-05
 split_by_silence="$(read_config "split_by_silence" "split" "no")"
 silence_duration="$(read_config "silence_duration" "split" "2.0")"
 silence_threshold="$(read_config "silence_threshold" "split" "-30dB")"
+
+remote_enabled="$(read_config "enabled" "remote" "no")"
+remote_endpoint="$(read_config "endpoint" "remote" "")"
+remote_api_key="$(read_config "api_key" "remote" "")"
+remote_prefer="$(read_config "prefer" "remote" "auto")"
+remote_wait_timeout="$(read_config "wait_timeout" "remote" "1800")"
+# Хвостовой слэш в адресе даёт "…/v1//jobs" — служба отвечает 404 на путь,
+# который человеку выглядит верным. Снимаем здесь, в единственном месте чтения.
+remote_endpoint="${remote_endpoint%/}"
 
 save_old_extension="$(read_config "save_old_extension" "other" "no")"
 format_files_in="$(read_config "format_files_in" "other" "3gp,avi,flv,mp4,mpg,mpeg,wmv,mov,asf,mkv,m4v,webm,mts,vob,m4b,mp3,wma,ogg,m4a,aac")"

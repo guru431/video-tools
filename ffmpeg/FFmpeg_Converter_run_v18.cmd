@@ -50,6 +50,11 @@ set "subtitles_style=FontName=Arial,FontSize=24,PrimaryColour=&HFFFFFF&"
 set "dry_run=no"
 set "enable_log=no"
 set "log_file=ffmpeg_convert.log"
+set "remote_enabled=no"
+set "remote_endpoint="
+set "remote_api_key="
+set "remote_prefer=auto"
+set "remote_wait_timeout=1800"
 
 :: --- Чтение config.ini ---
 set "CONFIG_FILE=%~dp0config.ini"
@@ -129,7 +134,10 @@ if not defined _val exit /b
 :_ee_loop
 if "!_val!"=="!_val:${=!" exit /b
 for /f "tokens=2 delims={}" %%V in ("!_val!") do set "_ee_name=%%V"
-if not defined !_ee_name! echo WARN: переменная !_ee_name! не задана 1>&2
+:: Кроме секции [remote]: TRANSCODE_URL/TRANSCODE_API_KEY не заданы у всех, кто
+:: удалённым бэкендом не пользуется, а он выключен по умолчанию — WARN печатался
+:: бы на каждом запуске. В CMD удалённый счёт и так не поддерживается.
+if /i not "!_section!"=="remote" if not defined !_ee_name! echo WARN: переменная !_ee_name! не задана 1>&2
 call set "_ee_val=%%%_ee_name%%%"
 set "_val=!_val:${%_ee_name%}=%_ee_val%!"
 goto :_ee_loop
@@ -195,6 +203,13 @@ if /i "!_section!"=="other" (
 	if /i "!_key!"=="enable_log" set "enable_log=!_val!"
 	if /i "!_key!"=="log_file" set "log_file=!_val!"
 )
+if /i "!_section!"=="remote" (
+	if /i "!_key!"=="enabled" set "remote_enabled=!_val!"
+	if /i "!_key!"=="endpoint" set "remote_endpoint=!_val!"
+	if /i "!_key!"=="api_key" set "remote_api_key=!_val!"
+	if /i "!_key!"=="prefer" set "remote_prefer=!_val!"
+	if /i "!_key!"=="wait_timeout" set "remote_wait_timeout=!_val!"
+)
 exit /b
 
 :to_flag
@@ -213,6 +228,14 @@ if "!_fv:~0,1!"=="+" (
 exit /b
 
 :start_coding
+:: Удалённый бэкенд есть только в .sh/.ps1/GUI. Ключи выше читаются ради
+:: паритета config.ini, но один и тот же файл не должен молча означать
+:: на двух платформах разное — поэтому расхождение объявляется вслух.
+if /i "%remote_enabled%"=="yes" (
+	echo [ПРЕДУПРЕЖДЕНИЕ] Удалённый бэкенд ^([remote] enabled^) в CMD-версии не поддерживается:
+	echo [ПРЕДУПРЕЖДЕНИЕ] нет нарезки файла по смещениям, sha256 и разбора JSON. Файлы считаются локально.
+	echo [ПРЕДУПРЕЖДЕНИЕ] Для удалённого счёта используйте .sh, .ps1 или GUI.
+)
 :: --- Резолвинг относительных путей от директории скрипта ---
 :: Детект абсолютного пути без echo|findstr — пайп исполнял & из значений
 set "_abs="

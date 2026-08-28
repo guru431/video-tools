@@ -1,0 +1,43 @@
+#!/bin/bash
+# ============================================================
+# Mock curl — отдаёт консервированный ответ и пишет вызов в лог.
+#
+# Переменные окружения:
+#   MOCK_CURL_LOG      — файл лога вызовов (по умолчанию /tmp/mock_curl_calls.txt)
+#   MOCK_CURL_BODY     — тело ответа
+#   MOCK_CURL_CODE     — HTTP-код (по умолчанию 200)
+#   MOCK_CURL_BODY_FILE — файл, содержимое которого отдать вместо MOCK_CURL_BODY
+#   MOCK_CURL_FAIL=1   — имитировать сетевой отказ (exit 7, как настоящий curl
+#                        при "Failed to connect")
+#
+# Клиент зовёт curl с `-w '\n%{http_code}'`: код идёт последней строкой тела.
+# Мок обязан повторять именно этот контракт, иначе тест разрешит код, который
+# на настоящем curl не работает.
+# ============================================================
+
+LOG_FILE="${MOCK_CURL_LOG:-/tmp/mock_curl_calls.txt}"
+echo "$@" >> "$LOG_FILE"
+
+[ "${MOCK_CURL_FAIL:-0}" = "1" ] && exit 7
+
+# -o <файл>: тело пишется в файл, а на stdout уходит только код.
+OUT_FILE=""
+PREV=""
+for arg in "$@"; do
+	[ "$PREV" = "-o" ] && OUT_FILE="$arg" && break
+	PREV="$arg"
+done
+
+if [ -n "${MOCK_CURL_BODY_FILE:-}" ] && [ -f "$MOCK_CURL_BODY_FILE" ]; then
+	BODY="$(cat "$MOCK_CURL_BODY_FILE")"
+else
+	BODY="${MOCK_CURL_BODY:-}"
+fi
+
+if [ -n "$OUT_FILE" ]; then
+	printf '%s' "$BODY" > "$OUT_FILE"
+	printf '%s' "${MOCK_CURL_CODE:-200}"
+else
+	printf '%s\n%s' "$BODY" "${MOCK_CURL_CODE:-200}"
+fi
+exit 0

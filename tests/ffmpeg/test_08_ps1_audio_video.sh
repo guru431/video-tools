@@ -166,4 +166,30 @@ assert_eq "sampling_rate off → пустой"    ""                  "$(get_fie
 assert_eq "libx265 → libx265"             "libx265"           "$(get_field "$out" "set_video_codec")"
 assert_eq "quality crf 28"                "-crf 28"           "$(get_field "$out" "set_video_quality")"
 
+suite "remote PS1: локальные режимы и preflight"
+_ffdir="$(cd "$PROJECT_DIR/ffmpeg" && pwd -W 2>/dev/null || echo "$PROJECT_DIR/ffmpeg")"
+out="$($PS_CMD -NoProfile -NonInteractive -Command "
+  \$remote_enabled='yes'; \$remote_endpoint=''; \$remote_api_key=''
+  \$copy_codecs='yes'; \$merge_files='no'; \$create_frame='no'
+  \$audio_only='no'; \$extract_audio_copy='no'
+  . '$_ffdir/remote_client.ps1'
+  Set-RemoteActive | Out-Null
+  Write-Output \$script:remote_active
+" 2>&1 | tr -d '\r' | tail -1)"
+assert_eq "copy_codecs не уезжает" "no" "$out"
+
+# Два разных «нет» обязаны различаться: локальный по замыслу режим и отказ
+# preflight, после которого работать нельзя вовсе. Иначе прогон с пустым ключом
+# тихо ушёл бы на локальный процессор — молчаливый откат, которого здесь нет.
+out="$($PS_CMD -NoProfile -NonInteractive -Command "
+  \$remote_enabled='yes'; \$remote_endpoint=''; \$remote_api_key=''
+  \$copy_codecs='no'; \$merge_files='no'; \$create_frame='no'
+  \$audio_only='no'; \$extract_audio_copy='no'
+  . '$_ffdir/remote_client.ps1'
+  Set-RemoteActive | Out-Null
+  Write-Output \"fatal=\$(\$script:remote_fatal)\"
+" 2>&1 | tr -d '\r')"
+assert_contains "пустой адрес — это отказ, а не локальный режим" "fatal=True" "$out"
+assert_contains "названа переменная" "TRANSCODE_URL" "$out"
+
 summary

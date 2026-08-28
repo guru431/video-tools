@@ -4,7 +4,7 @@
 # Раньше финальная запись всегда была «Готово» независимо от countFail, а `exit 1`
 # не создаёт ErrorRecord — GUI показывал «Готово» после провального батча.
 # Контракт: progress JSON содержит state=running|success|failed|cancelled + exitCode.
-# Запускает НАСТОЯЩИЙ FFmpeg_Converter_script.ps1 (dot-source, как делает run_v17.ps1)
+# Запускает НАСТОЯЩИЙ FFmpeg_Converter_script.ps1 (dot-source, как делает run_v18.ps1)
 # с mock ffmpeg; результат читается из JSON-файла прогресса.
 # ============================================================
 
@@ -101,7 +101,7 @@ suite "GUI preflight: конфликт режимов и отсутствующ�
 # Раньше GUI молча стартовал: часть галок игнорировалась скриптом, а выбранный GPU
 # откатывался на CPU — узнать об этом можно было только из лога ПОСЛЕ старта.
 # Проверяем source-scan'ом: интерактивные MessageBox в headless-тесте не кликнуть.
-GUI_PS1="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v17.ps1"
+GUI_PS1="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v18.ps1"
 src_gui="$(cat "$GUI_PS1")"
 
 assert_contains "GUI: конфликт режимов детектируется"   '$_modes.Count -gt 1'          "$src_gui"
@@ -131,5 +131,21 @@ fi
 
 # ── Cleanup ───────────────────────────────────────────────────
 rm -rf "$WORK"
+
+suite "GUI: группа «Сервер»"
+GUI="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v18.ps1"
+gui_text="$(cat "$GUI")"
+assert_contains "галка удалённого счёта" 'chkRemote'        "$gui_text"
+assert_contains "выбор prefer"           'cmbRemotePrefer'  "$gui_text"
+assert_contains "поле таймаута"          'txtRemoteWait'    "$gui_text"
+assert_contains "метка состояния ключа"  'lblRemoteCreds'   "$gui_text"
+# Приватное из GUI не редактируется и, значит, не может попасть в config.ini.
+assert_not_contains "нет поля ввода адреса" 'txtRemoteEndpoint' "$gui_text"
+assert_not_contains "нет поля ввода ключа"  'txtRemoteApiKey'   "$gui_text"
+# Галка без передачи переменных в runspace не делала бы ничего: скрипт читает
+# именно эти имена, и без них удалённый бэкенд из GUI не включается вовсе.
+for _v in remote_enabled remote_endpoint remote_api_key remote_prefer remote_wait_timeout; do
+    assert_contains "$_v уезжает в runspace" "'$_v'" "$gui_text"
+done
 
 summary

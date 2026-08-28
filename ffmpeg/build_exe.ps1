@@ -1,6 +1,6 @@
-﻿$src       = Join-Path $PSScriptRoot 'FFmpeg_Converter_run_win_v17.ps1'
+﻿$src       = Join-Path $PSScriptRoot 'FFmpeg_Converter_run_win_v18.ps1'
 $scriptPs1 = Join-Path $PSScriptRoot 'FFmpeg_Converter_script.ps1'
-$out       = Join-Path $PSScriptRoot '_VideoConverter_v17.exe'
+$out       = Join-Path $PSScriptRoot '_VideoConverter_v18.exe'
 $ps2exePs  = Join-Path $PSScriptRoot '..\tools\ps2exe.ps1'
 $tmpSrc    = Join-Path $PSScriptRoot '_build_tmp.ps1'
 
@@ -11,6 +11,18 @@ Assert-Ps2Exe $ps2exePs
 # --- Встраиваем script.ps1 в run_win.ps1 ---
 Write-Host "Embedding FFmpeg_Converter_script.ps1..."
 $scriptContent = [System.IO.File]::ReadAllText($scriptPs1, [System.Text.Encoding]::UTF8)
+
+# Модуль удалённого бэкенда встраиваем в ту же строку: EXE обязан быть
+# самодостаточным, а script.ps1 подключает модуль из $PSScriptRoot — рядом с EXE
+# файла нет, и удалённый счёт молча остался бы недоступным (точнее, упал бы с
+# «рядом со скриптом нет remote_client.ps1»). Условный дот-сорсинг в script.ps1
+# после этого просто не находит файла и ничего не делает — функции уже объявлены.
+$remotePs1 = Join-Path $PSScriptRoot 'remote_client.ps1'
+if (Test-Path -LiteralPath $remotePs1) {
+    Write-Host 'Embedding remote_client.ps1...'
+    $remoteContent = [System.IO.File]::ReadAllText($remotePs1, [System.Text.Encoding]::UTF8)
+    $scriptContent = $remoteContent + "`n" + $scriptContent
+}
 
 $embedBlock = @"
 
@@ -43,7 +55,7 @@ try {
         -noConsole `
         -STA `
         -x64 `
-        -title   "Video Converter (ffmpeg) v17" `
+        -title   "Video Converter (ffmpeg) v18" `
         -version $script:BuildVersion
 } catch {
     Write-Host "FAIL: $_"

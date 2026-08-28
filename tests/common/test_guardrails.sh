@@ -10,9 +10,9 @@ TESTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
 source "$TESTS_DIR/lib/framework.sh"
 
-YT_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v17.ps1"
-YT_CMD="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v17.cmd"
-YT_SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v17.sh"
+YT_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v18.ps1"
+YT_CMD="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v18.cmd"
+YT_SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v18.sh"
 FF_CMD="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.cmd"
 
 ps1="$(cat "$YT_PS1")"
@@ -208,8 +208,8 @@ done
 assert_empty "ни один тест не держит PS1/CMD-копию production-подпрограммы" "$ps_cmd_offenders"
 
 # PS1-тесты парсера обязаны дот-сорсить production под гардом FFCONV_TEST/YTDLP_TEST.
-for _pair in "ffmpeg/test_02_config_ps1.sh:ffmpeg/FFmpeg_Converter_run_v17.ps1" \
-             "ffmpeg/test_13_parser_parity.sh:ffmpeg/FFmpeg_Converter_run_v17.ps1"; do
+for _pair in "ffmpeg/test_02_config_ps1.sh:ffmpeg/FFmpeg_Converter_run_v18.ps1" \
+             "ffmpeg/test_13_parser_parity.sh:ffmpeg/FFmpeg_Converter_run_v18.ps1"; do
     _tf="${_pair%%:*}"; _pf="${_pair#*:}"
     if grep -q "$(basename "$_pf")" "$TESTS_DIR/$_tf" 2>/dev/null; then
         pass "$(basename "$_tf") ссылается на настоящий $(basename "$_pf")"
@@ -219,16 +219,16 @@ for _pair in "ffmpeg/test_02_config_ps1.sh:ffmpeg/FFmpeg_Converter_run_v17.ps1" 
 done
 
 # PS1-точка входа обязана иметь тест-гард, иначе дот-сорсинг запустит загрузку настроек.
-if grep -qE '\$env:FFCONV_TEST' "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v17.ps1" 2>/dev/null; then
-    pass "FFmpeg_Converter_run_v17.ps1: тест-гард FFCONV_TEST на месте"
+if grep -qE '\$env:FFCONV_TEST' "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v18.ps1" 2>/dev/null; then
+    pass "FFmpeg_Converter_run_v18.ps1: тест-гард FFCONV_TEST на месте"
 else
-    fail "FFmpeg_Converter_run_v17.ps1: тест-гард FFCONV_TEST на месте" '$env:FFCONV_TEST' "гарда нет — дот-сорсинг запустит конвейер"
+    fail "FFmpeg_Converter_run_v18.ps1: тест-гард FFCONV_TEST на месте" '$env:FFCONV_TEST' "гарда нет — дот-сорсинг запустит конвейер"
 fi
 
 # Тесты, разбирающие config.ini, обязаны брать парсер из production, а не свой.
-for _pair in "ffmpeg/test_01_config_sh.sh:ffmpeg/FFmpeg_Converter_run_v17.sh" \
-             "yt-dlp/test_01_read_config.sh:yt-dlp/Downloading_from_YouTube_v17.sh" \
-             "yt-dlp/test_03_cookie_args.sh:yt-dlp/Downloading_from_YouTube_v17.sh"; do
+for _pair in "ffmpeg/test_01_config_sh.sh:ffmpeg/FFmpeg_Converter_run_v18.sh" \
+             "yt-dlp/test_01_read_config.sh:yt-dlp/Downloading_from_YouTube_v18.sh" \
+             "yt-dlp/test_03_cookie_args.sh:yt-dlp/Downloading_from_YouTube_v18.sh"; do
     _tf="${_pair%%:*}"; _pf="${_pair#*:}"
     if grep -q "$(basename "$_pf")" "$TESTS_DIR/$_tf" 2>/dev/null; then
         pass "$(basename "$_tf") ссылается на настоящий $(basename "$_pf")"
@@ -238,7 +238,7 @@ for _pair in "ffmpeg/test_01_config_sh.sh:ffmpeg/FFmpeg_Converter_run_v17.sh" \
 done
 
 # Обе точки входа обязаны иметь main-гард, иначе дот-сорсинг запустит конвейер.
-for _g in "ffmpeg/FFmpeg_Converter_run_v17.sh" "yt-dlp/Downloading_from_YouTube_v17.sh"; do
+for _g in "ffmpeg/FFmpeg_Converter_run_v18.sh" "yt-dlp/Downloading_from_YouTube_v18.sh"; do
     if grep -qE '\[ "\$\{BASH_SOURCE\[0\]\}" = "\$\{?0\}?" \]' "$PROJECT_DIR/$_g" 2>/dev/null; then
         pass "$(basename "$_g"): main-гард на месте (дот-сорсинг безопасен)"
     else
@@ -247,15 +247,17 @@ for _g in "ffmpeg/FFmpeg_Converter_run_v17.sh" "yt-dlp/Downloading_from_YouTube_
 done
 
 # Ссылки на исчезнувшие версии: тест на v11 молча «проверял» несуществующий файл.
+# Диапазон растёт вместе с текущей версией: иначе после бампа ссылка на прежнюю
+# версию перестаёт ловиться — ровно та дыра, ради которой проверка и написана.
 stale_refs=""
 for _t in "$TESTS_DIR"/ffmpeg/test_*.sh "$TESTS_DIR"/yt-dlp/test_*.sh "$TESTS_DIR"/common/test_*.sh; do
     [ -f "$_t" ] || continue
     case "$(basename "$_t")" in test_guardrails.sh) continue ;; esac
-    if grep -qE '_v1[0-5]\.(sh|ps1|cmd)' "$_t" 2>/dev/null; then
+    if grep -qE '_v1[0-7]\.(sh|ps1|cmd)' "$_t" 2>/dev/null; then
         stale_refs="$stale_refs $(basename "$_t")"
     fi
 done
-assert_empty "нет ссылок на устаревшие версии скриптов (v11..v15)" "$stale_refs"
+assert_empty "нет ссылок на устаревшие версии скриптов (v11..v17)" "$stale_refs"
 
 # Подстановка вплотную к не-ASCII символу («$var»). В локали, где старший байт считается
 # буквой (macOS + bash 3.2), он утягивается в имя переменной — та пуста, значение из
@@ -309,9 +311,11 @@ TESTING_F="$TESTS_DIR/TESTING.md"
 # подстроку ("$n файлов") и была фиктивной: "6 файлов" находится внутри
 # "16 файлов", поэтому она не могла упасть и давала ложную уверенность.
 # Дерево структуры (строки вида "# N тест-файлов" / "# N файлов (").
-readme_ff=$(grep -oE '# [0-9]+ тест-файлов' "$README_F" | sed -n 1p | grep -oE '[0-9]+')
-readme_yt=$(grep -oE '# [0-9]+ тест-файлов' "$README_F" | sed -n 2p | grep -oE '[0-9]+')
-readme_cm=$(grep -oE '# [0-9]+ файлов' "$README_F" | sed -n 1p | grep -oE '[0-9]+')
+# Окончание зависит от самого числа (19 файлов, 23 файла, 21 файл), поэтому
+# шаблон принимает все три формы: иначе он вынуждал бы писать в README неграмотно.
+readme_ff=$(grep -oE '# [0-9]+ тест-файл(ов|а)?' "$README_F" | sed -n 1p | grep -oE '[0-9]+')
+readme_yt=$(grep -oE '# [0-9]+ тест-файл(ов|а)?' "$README_F" | sed -n 2p | grep -oE '[0-9]+')
+readme_cm=$(grep -oE '# [0-9]+ файл(ов|а)?' "$README_F" | sed -n 1p | grep -oE '[0-9]+')
 assert_eq "README (дерево): ffmpeg-файлов = runner" "$n_ff" "${readme_ff:-НЕ_НАЙДЕНО}"
 assert_eq "README (дерево): yt-dlp-файлов = runner" "$n_yt" "${readme_yt:-НЕ_НАЙДЕНО}"
 assert_eq "README (дерево): common-файлов = runner" "$n_cm" "${readme_cm:-НЕ_НАЙДЕНО}"
@@ -319,9 +323,9 @@ assert_eq "README (дерево): common-файлов = runner" "$n_cm" "${readm
 # Блок примеров запуска (строки "bash tests/run_tests.sh <модуль> ... N файлов").
 # Запятая перед числом НЕ обязательна: раньше числа файлов стояли после числа тестов
 # ("(617 тестов, 18 файлов)"), теперь тестов в документах нет — см. проверку ниже.
-usage_ff=$(grep -oE 'run_tests\.sh ffmpeg[^#]*#[^)]*[0-9]+ файлов' "$README_F" | grep -oE '[0-9]+ файлов' | grep -oE '[0-9]+')
-usage_yt=$(grep -oE 'run_tests\.sh yt-dlp[^#]*#[^)]*[0-9]+ файлов' "$README_F" | grep -oE '[0-9]+ файлов' | grep -oE '[0-9]+')
-usage_cm=$(grep -oE 'run_tests\.sh common[^#]*#[^)]*[0-9]+ файлов' "$README_F" | grep -oE '[0-9]+ файлов' | grep -oE '[0-9]+')
+usage_ff=$(grep -oE 'run_tests\.sh ffmpeg[^#]*#[^)]*[0-9]+ файл(ов|а)?' "$README_F" | grep -oE '[0-9]+ файл(ов|а)?' | grep -oE '[0-9]+')
+usage_yt=$(grep -oE 'run_tests\.sh yt-dlp[^#]*#[^)]*[0-9]+ файл(ов|а)?' "$README_F" | grep -oE '[0-9]+ файл(ов|а)?' | grep -oE '[0-9]+')
+usage_cm=$(grep -oE 'run_tests\.sh common[^#]*#[^)]*[0-9]+ файл(ов|а)?' "$README_F" | grep -oE '[0-9]+ файл(ов|а)?' | grep -oE '[0-9]+')
 assert_eq "README (примеры): ffmpeg-файлов = runner" "$n_ff" "${usage_ff:-НЕ_НАЙДЕНО}"
 assert_eq "README (примеры): yt-dlp-файлов = runner" "$n_yt" "${usage_yt:-НЕ_НАЙДЕНО}"
 assert_eq "README (примеры): common-файлов = runner" "$n_cm" "${usage_cm:-НЕ_НАЙДЕНО}"
@@ -345,10 +349,10 @@ readme_txt="$(cat "$README_F")"
 # Устаревшие версии скриптов в документации: ссылка на v11 «объясняла» файл,
 # которого нет начиная с v12.
 for _d in "$README_F" "$TESTING_F"; do
-    if grep -qE '_v1[0-5]\.(sh|ps1|cmd)' "$_d" 2>/dev/null; then
-        fail "$(basename "$_d"): нет ссылок на версии v11..v15" "нет" "$(grep -oE '[A-Za-z_]+_v1[0-5]\.(sh|ps1|cmd)' "$_d" | head -1)"
+    if grep -qE '_v1[0-7]\.(sh|ps1|cmd)' "$_d" 2>/dev/null; then
+        fail "$(basename "$_d"): нет ссылок на версии v11..v17" "нет" "$(grep -oE '[A-Za-z_]+_v1[0-7]\.(sh|ps1|cmd)' "$_d" | head -1)"
     else
-        pass "$(basename "$_d"): нет ссылок на версии v11..v15"
+        pass "$(basename "$_d"): нет ссылок на версии v11..v17"
     fi
 done
 
@@ -364,7 +368,7 @@ suite "PowerShell: Test-Path/Get-Content по пути только с -LiteralP
 # [ ] ? * (типично для распакованных архивов — video[1], Downloads[2]) трактуется как
 # маска, Test-Path возвращает $false на существующем файле. Последствия по месту:
 # портативный yt-dlp.exe/ffmpeg.exe «не находится» и подменяется голым именем из PATH,
-# run_v17.ps1 печатает «не найден script.ps1» при существующем файле.
+# run_v18.ps1 печатает «не найден script.ps1» при существующем файле.
 # Контракт: в продуктовых .ps1 у Test-Path всегда -LiteralPath (вендоренный ps2exe.ps1
 # исключён — сторонний код со своим стилем).
 _np_hits=""
@@ -439,7 +443,7 @@ suite "ffmpeg: интерпретатор параллели, пауза и ме
 # ══════════════════════════════════════════════════════════════
 FF_SH="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.sh"
 FF_PS1="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1"
-GUI_PS1="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v17.ps1"
+GUI_PS1="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v18.ps1"
 ffsh="$(cat "$FF_SH")"; ffps1="$(cat "$FF_PS1")"; gui="$(cat "$GUI_PS1")"
 
 # msys2-xargs считает доступную длину аргументов как ARG_MAX минус размер окружения и
@@ -503,7 +507,7 @@ suite "GUI: без рефлексии к защищённым членам (AMSI
 # AmsiUtils|GetField|EncodedCommand сам стал бы проблемой: паттерн уходит в командную
 # строку grep, и поведенческий анализатор ловит уже её (проверено на Defender —
 # Trojan:PowerShell/PsAttack.R на строку запуска поиска, 2026-08-19).
-YT_GUI="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v17.ps1"
+YT_GUI="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v18.ps1"
 for _g in "$YT_GUI" "$GUI_PS1"; do
     _n="$(basename "$_g")"
     _src="$(grep -v '^[[:space:]]*#' "$_g")"
@@ -554,5 +558,27 @@ assert_contains "SH: шаблон silence_start учитывает знак"  "s
 assert_contains "SH: шаблон silence_end учитывает знак"    "silence_end: -?[0-9.]+"   "$ffsh"
 assert_contains "PS1: шаблон silence_start учитывает знак" 'silence_start:\s+(-?[\d.]+)' "$ffps1"
 assert_contains "PS1: шаблон silence_end учитывает знак"   'silence_end:\s+(-?[\d.]+)'   "$ffps1"
+
+# ══════════════════════════════════════════════════════════════
+suite "приватность: адрес и ключ службы не в репозитории"
+# ══════════════════════════════════════════════════════════════
+# Литеральный адрес службы или ключ в коммитимом файле — это утечка, а
+# репозиторий публичный. Ищем по форме, а не по конкретному значению:
+# конкретные значения нельзя записать в тест по той же причине.
+_priv_hits="$(git -C "$PROJECT_DIR" grep -nIE \
+    'https?://(10|192\.168|172\.(1[6-9]|2[0-9]|3[01]))\.[0-9]+\.[0-9]+' \
+    -- ':!tests/*' ':!docs/*' 2>/dev/null || true)"
+assert_empty "нет приватных IP в URL" "$_priv_hits"
+
+_key_hits="$(git -C "$PROJECT_DIR" grep -nIE \
+    '^[[:space:]]*api_key[[:space:]]*=[[:space:]]*[^$[:space:]].*' \
+    -- 'ffmpeg/config.ini' 'yt-dlp/config.ini*' 2>/dev/null || true)"
+assert_empty "api_key задан только переменной" "$_key_hits"
+
+# endpoint — тем же правилом: подставлять туда живой адрес нельзя даже разово.
+_ep_hits="$(git -C "$PROJECT_DIR" grep -nIE \
+    '^[[:space:]]*endpoint[[:space:]]*=[[:space:]]*[^$[:space:]].*' \
+    -- 'ffmpeg/config.ini' 2>/dev/null || true)"
+assert_empty "endpoint задан только переменной" "$_ep_hits"
 
 summary

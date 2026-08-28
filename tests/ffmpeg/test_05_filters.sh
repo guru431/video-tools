@@ -142,7 +142,10 @@ assert_contains "субтитры: backslash → slash"  's#\\#/#g'  "$src_sh"
 suite "script.sh: фиксы Task 6 (copy_codecs ext, Duration N/A)"
 # copy_codecs: current_format_out из источника ДО existence-check
 cc_ln=$(grep -nF 'current_format_out="${full_path##*.}"' "$SCRIPT" | head -1 | cut -d: -f1)
-chk_ln=$(grep -nF -- '-f null - 2>/dev/null' "$SCRIPT" | head -1 | cut -d: -f1)
+# Ищем именно existence-check (он читает готовый файл в folder_destination), а не
+# любой `-f null -`: такой же проверкой пользуются publish_result и merge, и якорь
+# «первое вхождение» указывал бы на них, а не на проверяемое место.
+chk_ln=$(grep -nF -- '-f null - 2>/dev/null' "$SCRIPT" | grep -F 'folder_destination' | head -1 | cut -d: -f1)
 order="bad"; [ -n "$cc_ln" ] && [ -n "$chk_ln" ] && [ "$cc_ln" -lt "$chk_ln" ] && order="ok"
 assert_eq "copy_codecs ext вычислен ДО existence-check"  "ok"  "$order"
 # Duration N/A → num=(0) fallback

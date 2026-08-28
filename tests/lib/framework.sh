@@ -51,10 +51,10 @@ mktemp_suffix() {
 if [ -z "${TEST_NET_GUARD_DIR:-}" ]; then
     TEST_NET_GUARD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/tests_netguard_XXXXXX")"
     TEST_NET_GUARD_OWNER=$$
-    for _bin in vot-cli-live vot-cli-live.exe; do
+    for _bin in vot-cli-live vot-cli-live.exe curl; do
         cat > "$TEST_NET_GUARD_DIR/$_bin" <<'GUARD'
 #!/bin/bash
-echo "NETWORK GUARD: реальный '$(basename "$0")' вызван в тесте — сетевые вызовы запрещены. Передайте мок через VOT_BIN." >&2
+echo "NETWORK GUARD: реальный '$(basename "$0")' вызван в тесте — сетевые вызовы запрещены. Передайте мок через VOT_BIN/CURL_BIN." >&2
 exit 97
 GUARD
         chmod +x "$TEST_NET_GUARD_DIR/$_bin"

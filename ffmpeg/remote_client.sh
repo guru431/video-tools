@@ -288,3 +288,118 @@ remote_report_upload() {
 	[ "$total_b" -gt 0 ] 2>/dev/null && pct=$((done_b * 100 / total_b))
 	show_progress_bar "$pct" "отправка"
 }
+
+# --- Тело запроса на создание задачи ---
+# Собирается в одном месте: боевой путь и холостой прогон обязаны отправлять
+# одинаковое тело, иначе сверка планов проверяет не то, что поедет.
+remote_job_body() {
+	local uid="$1" op="$2" params="$3" sub_uid="${4:-}" extra="${5:-}"
+	local p="$params"
+	if [ -n "$sub_uid" ]; then
+		p="${p%\}},\"subtitle_upload_id\":\"$sub_uid\"}"
+	fi
+	local body="{\"upload_id\":\"$uid\",\"op\":\"$op\",\"params\":$p"
+	body="$body,\"prefer\":\"${remote_prefer:-auto}\""
+	body="$body,\"wait_timeout\":${remote_wait_timeout:-1800}"
+	# overwrite_existing = yes обязан отключить дедупликацию службы: иначе
+	# «перезаписать заново» вернуло бы прежний результат с reused: true.
+	[ "$overwrite_existing" = "yes" ] && body="$body,\"no_reuse\":true"
+	[ -n "$extra" ] && body="$body,$extra"
+	printf '%s}' "$body"
+}
+
+remote_submit() {
+	local answer jid
+	remote_http POST /jobs "$(remote_job_body "$@")"
+	answer="$REMOTE_HTTP_BODY"
+	if [ "$REMOTE_HTTP_CODE" != "200" ]; then
+		echo "[ОШИБКА] Служба отвергла задачу: HTTP $REMOTE_HTTP_CODE — $(remote_json_field "$answer" error)" >&2
+		return 1
+	fi
+	jid="$(remote_json_field "$answer" job_id)"
+	[ -n "$jid" ] || { echo "[ОШИБКА] Служба не вернула job_id." >&2; return 1; }
+	[ "$(remote_json_field "$answer" reused)" = "true" ] && \
+		log_msg "INFO" "Служба вернула готовый результат прежней задачи (дедупликация)"
+	printf '%s' "$jid"
+}
+
+remote_dry_run() {
+	local answer
+	remote_http POST /jobs "$(remote_job_body "$1" "$2" "$3" "${4:-}" '"dry_run":true')"
+	answer="$REMOTE_HTTP_BODY"
+	if [ "$REMOTE_HTTP_CODE" != "200" ]; then
+		echo "[ОШИБКА] Холостой прогон отвергнут: HTTP $REMOTE_HTTP_CODE — $(remote_json_field "$answer" error)" >&2
+		return 1
+	fi
+	# Печатаем ПЛАН целиком, а не одну команду: длинный файл служба режет,
+	# кодирует посегментно, склеивает и отдельным проходом обрабатывает звук —
+	# одной строкой это не описывается.
+	echo "[DRY-RUN][REMOTE] $answer"
+}
+
+# --- Ожидание ---
+REMOTE_CURRENT_JOB=""
+remote_wait() {
+	local jid="$1" label="$2" polls=0 answer state
+	REMOTE_CURRENT_JOB="$jid"
+	while :; do
+		remote_http GET "/jobs/$jid"
+		answer="$REMOTE_HTTP_BODY"
+		if [ "$REMOTE_HTTP_CODE" != "200" ]; then
+			echo "[ОШИБКА] Состояние задачи недоступно: HTTP $REMOTE_HTTP_CODE." >&2
+			REMOTE_CURRENT_JOB=""; return 1
+		fi
+		state="$(remote_json_field "$answer" state)"
+		case "$state" in
+			done)
+				show_progress_bar 100 "$label"; printf "\n"
+				REMOTE_CURRENT_JOB=""; return 0 ;;
+			failed|cancelled)
+				printf "\n"
+				echo "[ОШИБКА] Задача $state: $(remote_json_field "$answer" error)" >&2
+				REMOTE_CURRENT_JOB=""; return 1 ;;
+			waiting_gpu)
+				# Ожидание без объяснения неотличимо от зависания, поэтому
+				# показываем и сколько ждём, и сколько памяти не хватает.
+				printf "\r  ожидание карты: %s с, не хватает %s МиБ            " \
+					"$(remote_json_field "$answer" waiting_seconds)" \
+					"$(remote_json_field "$answer" missing_mib)" ;;
+			*)
+				show_progress_bar "$(remote_json_field "$answer" progress)" "$label" ;;
+		esac
+		polls=$((polls + 1))
+		if [ -n "${REMOTE_WAIT_MAX_POLLS:-}" ] && [ "$polls" -ge "$REMOTE_WAIT_MAX_POLLS" ]; then
+			printf "\n"; REMOTE_CURRENT_JOB=""; return 1
+		fi
+		sleep "${REMOTE_POLL_SECONDS:-2}"
+	done
+}
+
+# --- Результат ---
+# Пишем сразу в целевой временный файл через curl -o: тело может быть в
+# гигабайты, и держать его в переменной оболочки нельзя.
+remote_fetch() {
+	local jid="$1" dst="$2" curl_bin="${CURL_BIN:-curl}" code
+	code="$("$curl_bin" -sS -X GET \
+		-H "Authorization: Bearer ${remote_api_key}" \
+		-o "$dst" -w '%{http_code}' \
+		"${remote_endpoint}/jobs/${jid}/result" 2>/dev/null)" || {
+		echo "[ОШИБКА] Обрыв связи при скачивании результата." >&2
+		rm -f "$dst"; return 1
+	}
+	REMOTE_HTTP_CODE="$code"
+	if [ "$code" != "200" ]; then
+		echo "[ОШИБКА] Результат недоступен: HTTP $code." >&2
+		rm -f "$dst"; return 1
+	fi
+	return 0
+}
+
+# --- Отмена ---
+# Брошенная задача продолжит держать карту, ради вежливости к которой служба
+# и построена. Поэтому DELETE шлём даже когда уходим по прерыванию.
+remote_cancel() {
+	[ -n "${1:-}" ] || return 0
+	remote_http DELETE "/jobs/$1" >/dev/null 2>&1
+	return 0
+}

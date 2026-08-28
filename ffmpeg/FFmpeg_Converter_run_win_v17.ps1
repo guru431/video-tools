@@ -52,10 +52,16 @@ if (Test-Path -LiteralPath $configFile) {
         if ($curSection -and $line -match '^([^=]+?)\s*=\s*(.*)') {
             $val = $Matches[2] -replace '\s+#.*', ''
             # Подстановка ${ENV_VAR} из окружения (паритет с yt-dlp/CLI). Не задана → пусто + WARN.
+            # Кроме секции [remote]: там TRANSCODE_URL/TRANSCODE_API_KEY не заданы у всех,
+            # кто удалённым бэкендом не пользуется, и WARN сыпался бы при каждом старте GUI.
+            $_quiet = ($curSection -eq 'remote')
             $val = [regex]::Replace($val, '\$\{(\w+)\}', {
                 param($m)
                 $ev = [Environment]::GetEnvironmentVariable($m.Groups[1].Value)
-                if ([string]::IsNullOrEmpty($ev)) { Write-Host "WARN: переменная $($m.Groups[1].Value) не задана"; "" } else { $ev }
+                if ([string]::IsNullOrEmpty($ev)) {
+                    if (-not $_quiet) { Write-Host "WARN: переменная $($m.Groups[1].Value) не задана" }
+                    ""
+                } else { $ev }
             })
             $script:_configCache["${curSection}::$($Matches[1].Trim())"] = $val.Trim()
         }

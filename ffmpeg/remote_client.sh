@@ -106,3 +106,86 @@ remote_op_for_config() {
 
 	printf '%s\n{%s}\n' "$op" "$p"
 }
+
+# --- JSON: разбор плоских полей ---
+# Своего разборщика ровно столько, сколько нужно: ответы службы плоские, а
+# зависимости от `jq` быть не должно — в Git Bash его нет, и на машине
+# владельца это основная платформа.
+#
+# Ключ ищем с открывающей кавычкой и двоеточием, иначе "job" совпал бы с
+# началом "job_id" и вернул чужое значение.
+remote_json_field() {
+	local json="$1" key="$2" v
+	v="$(printf '%s' "$json" | sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -1)"
+	if [ -n "$v" ]; then printf '%s' "$v"; return 0; fi
+	v="$(printf '%s' "$json" | sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\([-0-9.]\{1,\}\|true\|false\).*/\1/p" | head -1)"
+	printf '%s' "$v"
+}
+
+# --- HTTP ---
+# Бинарь берём из CURL_BIN, чтобы тест подменил его моком. Тот же приём, что
+# у VOT_BIN/YTDLP_BIN в yt-dlp: без него тест ходил бы в настоящую сеть.
+#
+# Ответ отдаётся ДВУМЯ переменными, а не через stdout, и это не стиль, а
+# необходимость: `body="$(remote_http …)"` выполняет функцию в подоболочке, и
+# выставленный там REMOTE_HTTP_CODE до вызывающего не доходит вовсе — код
+# ответа молча оказался бы пустым, а `!= "200"` — истинным на каждом успехе.
+# Поэтому зовём БЕЗ подстановки команд и читаем REMOTE_HTTP_BODY.
+REMOTE_HTTP_CODE=""
+REMOTE_HTTP_BODY=""
+remote_http() {
+	local method="$1" path="$2" body="${3:-}"; shift 3 2>/dev/null || shift $#
+	local curl_bin="${CURL_BIN:-curl}"
+	local args=(-sS -X "$method" -H "Authorization: Bearer ${remote_api_key}" -w '\n%{http_code}')
+	local h
+	for h in "$@"; do args+=(-H "$h"); done
+	if [ -n "$body" ]; then
+		args+=(-H "Content-Type: application/json" --data-binary "$body")
+	fi
+	local out
+	REMOTE_HTTP_BODY=""
+	out="$("$curl_bin" "${args[@]}" "${remote_endpoint}${path}" 2>/dev/null)" || {
+		REMOTE_HTTP_CODE="000"; return 1
+	}
+	REMOTE_HTTP_CODE="${out##*$'\n'}"
+	REMOTE_HTTP_BODY="${out%$'\n'*}"
+	return 0
+}
+
+# --- Предпусковая проверка ---
+# Один раз за прогон, ДО первого файла. Всё, что может сделать невозможным
+# весь прогон, должно выясниться здесь: отказать на сотом файле из двухсот
+# дороже, чем на нулевом.
+REMOTE_CAPS_ARGS_VERSION=""
+REMOTE_CHUNK_SIZE=""
+remote_preflight() {
+	if [ -z "$remote_endpoint" ]; then
+		echo "[ОШИБКА] [remote] enabled = yes, но адрес службы пуст. Задайте переменную окружения TRANSCODE_URL." >&2
+		return 1
+	fi
+	if [ -z "$remote_api_key" ]; then
+		echo "[ОШИБКА] [remote] enabled = yes, но ключ службы пуст. Задайте переменную окружения TRANSCODE_API_KEY." >&2
+		return 1
+	fi
+	if ! command -v "${CURL_BIN:-curl}" >/dev/null 2>&1; then
+		echo "[ОШИБКА] Для удалённого бэкенда нужен curl, но он не найден." >&2
+		return 1
+	fi
+	local caps
+	remote_http GET /capabilities
+	caps="$REMOTE_HTTP_BODY"
+	if [ "$REMOTE_HTTP_CODE" != "200" ]; then
+		echo "[ОШИБКА] Служба конвертации недоступна: HTTP $REMOTE_HTTP_CODE." >&2
+		return 1
+	fi
+	REMOTE_CAPS_ARGS_VERSION="$(remote_json_field "$caps" args_version)"
+	REMOTE_CHUNK_SIZE="$(remote_json_field "$caps" chunk_size)"
+	[ -n "$REMOTE_CHUNK_SIZE" ] || REMOTE_CHUNK_SIZE=$((32 * 1024 * 1024))
+	# Версия сборщика аргументов службы. Расхождение не запрещает работу, но
+	# молча получить файл, собранный логикой, которой у нас нет, — хуже, чем шумно.
+	if [ -n "${REMOTE_KNOWN_ARGS_VERSION:-}" ] && \
+	   [ "$REMOTE_CAPS_ARGS_VERSION" != "$REMOTE_KNOWN_ARGS_VERSION" ]; then
+		echo "[ПРЕДУПРЕЖДЕНИЕ] Служба собирает аргументы версии $REMOTE_CAPS_ARGS_VERSION, клиент рассчитан на $REMOTE_KNOWN_ARGS_VERSION. Сверьте холостой прогон."
+	fi
+	return 0
+}

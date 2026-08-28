@@ -134,7 +134,10 @@ if not defined _val exit /b
 :_ee_loop
 if "!_val!"=="!_val:${=!" exit /b
 for /f "tokens=2 delims={}" %%V in ("!_val!") do set "_ee_name=%%V"
-if not defined !_ee_name! echo WARN: переменная !_ee_name! не задана 1>&2
+:: Кроме секции [remote]: TRANSCODE_URL/TRANSCODE_API_KEY не заданы у всех, кто
+:: удалённым бэкендом не пользуется, а он выключен по умолчанию — WARN печатался
+:: бы на каждом запуске. В CMD удалённый счёт и так не поддерживается.
+if /i not "!_section!"=="remote" if not defined !_ee_name! echo WARN: переменная !_ee_name! не задана 1>&2
 call set "_ee_val=%%%_ee_name%%%"
 set "_val=!_val:${%_ee_name%}=%_ee_val%!"
 goto :_ee_loop

@@ -121,6 +121,7 @@ FFMPEG_TESTS=(
     "$TESTS_DIR/ffmpeg/test_19_findings_paths.sh"
     "$TESTS_DIR/ffmpeg/test_20_remote_map.sh"
     "$TESTS_DIR/ffmpeg/test_21_remote_client.sh"
+    "$TESTS_DIR/ffmpeg/test_22_remote_ps1.sh"
 )
 
 YTDLP_TESTS=(

@@ -189,3 +189,102 @@ remote_preflight() {
 	fi
 	return 0
 }
+
+# --- sha256 ---
+# sha256sum есть в Linux и Git Bash, shasum — в macOS. Проверяем оба, потому
+# что macOS заявлена в поддержке проекта.
+remote_sha256() {
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha256sum "$1" | cut -d' ' -f1
+	elif command -v shasum >/dev/null 2>&1; then
+		shasum -a 256 "$1" | cut -d' ' -f1
+	else
+		echo "[ОШИБКА] Не найден ни sha256sum, ни shasum — подтвердить загрузку нечем." >&2
+		return 1
+	fi
+}
+
+# --- Загрузка кусками ---
+# Возобновляемость — не удобство, а условие работоспособности: файлы от
+# гигабайта, и одна POST-загрузка на 20 ГБ рвётся и начинается заново.
+# Перед отправкой спрашиваем у службы, сколько байт она уже приняла, и льём
+# только хвост.
+remote_upload() {
+	local file="$1" size offset=0 chunk uid answer
+	size="$(file_size "$file")"
+
+	remote_http POST /uploads
+	answer="$REMOTE_HTTP_BODY"
+	[ "$REMOTE_HTTP_CODE" = "200" ] || {
+		echo "[ОШИБКА] Служба не приняла загрузку: HTTP $REMOTE_HTTP_CODE." >&2
+		return 1
+	}
+	uid="$(remote_json_field "$answer" upload_id)"
+	[ -n "$uid" ] || { echo "[ОШИБКА] Служба не вернула upload_id." >&2; return 1; }
+
+	chunk="$(remote_json_field "$answer" chunk_size)"
+	[ -n "$chunk" ] && [ "$chunk" -gt 0 ] 2>/dev/null && REMOTE_CHUNK_SIZE="$chunk"
+
+	# Сколько уже принято. Пустой ответ — считаем, что ноль: лишний перезалив
+	# дешевле, чем пропущенное начало файла.
+	remote_http GET "/uploads/$uid"
+	if [ "$REMOTE_HTTP_CODE" = "200" ]; then
+		offset="$(remote_json_field "$REMOTE_HTTP_BODY" received)"
+		[ -n "$offset" ] || offset=0
+	fi
+
+	local tmp_chunk
+	tmp_chunk="$(mktemp "${TMPDIR:-/tmp}/ffconv_chunk_XXXXXX")"
+	while [ "$offset" -lt "$size" ]; do
+		local this=$((size - offset))
+		[ "$this" -gt "$REMOTE_CHUNK_SIZE" ] && this="$REMOTE_CHUNK_SIZE"
+		# dd со смещением в блоках самого куска: bs=1 на гигабайтах непригоден
+		# по скорости, а skip в блоках даёт точное смещение только когда оно
+		# кратно bs — что здесь всегда так, потому что кусок фиксированный.
+		dd if="$file" of="$tmp_chunk" bs="$REMOTE_CHUNK_SIZE" \
+		   skip=$((offset / REMOTE_CHUNK_SIZE)) count=1 2>/dev/null
+		remote_upload_chunk "$uid" "$tmp_chunk" "$offset" \
+			$((offset + this - 1)) "$size" || { rm -f "$tmp_chunk"; return 1; }
+		remote_report_upload "$((offset + this))" "$size"
+		offset=$((offset + this))
+	done
+	rm -f "$tmp_chunk"
+
+	local sha; sha="$(remote_sha256 "$file")" || return 1
+	remote_http POST "/uploads/$uid/complete" \
+		"{\"size\":$size,\"sha256\":\"$sha\"}"
+	if [ "$REMOTE_HTTP_CODE" != "200" ]; then
+		echo "[ОШИБКА] Служба не подтвердила загрузку: HTTP $REMOTE_HTTP_CODE." >&2
+		return 1
+	fi
+	printf '%s' "$uid"
+}
+
+# Отдельной функцией, потому что тело куска — двоичное и идёт из файла:
+# --data-binary @file, а не строкой, иначе нули и переводы строк исказятся.
+remote_upload_chunk() {
+	local uid="$1" chunk_file="$2" from="$3" to="$4" total="$5"
+	local curl_bin="${CURL_BIN:-curl}" out
+	out="$("$curl_bin" -sS -X PATCH \
+		-H "Authorization: Bearer ${remote_api_key}" \
+		-H "Content-Range: bytes ${from}-${to}/${total}" \
+		-H "Content-Type: application/octet-stream" \
+		--data-binary "@$chunk_file" \
+		-w '\n%{http_code}' \
+		"${remote_endpoint}/uploads/${uid}" 2>/dev/null)" || {
+		echo "[ОШИБКА] Обрыв связи при отправке куска ${from}-${to}." >&2
+		return 1
+	}
+	REMOTE_HTTP_CODE="${out##*$'\n'}"
+	[ "$REMOTE_HTTP_CODE" = "200" ] && return 0
+	echo "[ОШИБКА] Служба отвергла кусок ${from}-${to}: HTTP $REMOTE_HTTP_CODE." >&2
+	return 1
+}
+
+# Прогресс загрузки — отдельная фаза. На файле в 3 ГБ по сети это и есть
+# долгая часть: без своего индикатора прогресс стоял бы на нуле минутами.
+remote_report_upload() {
+	local done_b="$1" total_b="$2" pct=0
+	[ "$total_b" -gt 0 ] 2>/dev/null && pct=$((done_b * 100 / total_b))
+	show_progress_bar "$pct" "отправка"
+}

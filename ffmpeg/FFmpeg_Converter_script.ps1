@@ -502,6 +502,68 @@ function Get-PartialPath {
 	return (Join-Path $dir ".ffconv-partial-$leaf")
 }
 
+# Удалённый бэкенд — отдельный модуль: только объявляет функции, ничего не делает сам.
+$_remoteModule = Join-Path $PSScriptRoot 'remote_client.ps1'
+if (Test-Path -LiteralPath $_remoteModule) { . $_remoteModule }
+
+# --- Публикация результата: общая для локального и удалённого путей ---
+# Логика обязана существовать в одном экземпляре: разойдись она между путями,
+# «успех» значил бы разное, и сводка ok/fail перестала бы что-либо значить.
+#
+# $Verify есть только у удалённого пути и именно поэтому необязателен: размер и
+# читаемость проверяются у СКАЧАННОГО файла. Локальный ffmpeg с rc=0 нулевого
+# файла не оставляет, а оборванная загрузка — запросто; включать же проверку и
+# локально значило бы декодировать каждый выход вторым проходом целиком.
+function Publish-EncodedResult {
+	param($File, [string]$Tmp, [string]$Destination, $StartTime, [bool]$Verify = $false)
+	$elapsed = (Get-Date) - $StartTime
+	$elapsedStr = "{0}m {1}s" -f [int]$elapsed.TotalMinutes, $elapsed.Seconds
+
+	if ($Verify) {
+		$valid = $false
+		if ((Test-Path -LiteralPath $Tmp) -and (Get-Item -LiteralPath $Tmp).Length -gt 0) {
+			& $ffmpeg -nostdin -v error -i $Tmp -f null - 2>$null | Out-Null
+			$valid = ($LASTEXITCODE -eq 0)
+		}
+		if (-not $valid) {
+			Log-Msg "FAIL" "$($File.Name): результат не прошёл проверку"
+			if (Test-Path -LiteralPath $Tmp) { Remove-Item -LiteralPath $Tmp -Force -ErrorAction SilentlyContinue }
+			$script:anyFail = $true; $script:countFail++
+			Write-GUIProgress -FilePercent 0 -CurrentFile $File.Name
+			return $false
+		}
+	}
+
+	# F-rename. Публикацию подтверждаем: Move-Item -ErrorAction Stop И наличие
+	# файла-цели. Без -ErrorAction Stop сбой rename нетерминирующий — результат
+	# засчитался бы как OK, а manifest записался бы поверх отсутствующего файла.
+	try {
+		Move-Item -LiteralPath $Tmp -Destination $Destination -Force -ErrorAction Stop
+	} catch {
+		Log-Msg "FAIL" "$($File.Name): не удалось опубликовать результат (rename): $_"
+		if (Test-Path -LiteralPath $Tmp) { Remove-Item -LiteralPath $Tmp -Force -ErrorAction SilentlyContinue }
+		$script:anyFail = $true; $script:countFail++
+		Write-GUIProgress -FilePercent 0 -CurrentFile $File.Name
+		return $false
+	}
+	if (-not (Test-Path -LiteralPath $Destination -PathType Leaf)) {
+		Log-Msg "FAIL" "$($File.Name): результат не появился по целевому пути"
+		$script:anyFail = $true; $script:countFail++
+		return $false
+	}
+
+	Log-Msg "OK" "$($File.Name) -> $(Split-Path $Destination -Leaf) ($elapsedStr)"
+	$script:countOk++
+	$script:produced += $Destination
+	# F29. Вход — только с первой удавшейся части.
+	try {
+		if (-not $script:inReported) { $script:totalInBytes += $File.Length; $script:inReported = $true }
+		$script:totalOutBytes += (Get-Item -LiteralPath $Destination).Length
+	} catch {}
+	Write-GUIProgress -FilePercent 100 -CurrentFile $File.Name
+	return $true
+}
+
 # --- Manifest готовности: input → outputs → completion state ---
 # Построчный формат (не JSON: CMD его не разберёт), одинаковый на трёх платформах:
 #   # ffconv-manifest v1
@@ -948,13 +1010,19 @@ function Encode-File {
 	if ($start_coding_status -eq "+") { $num = @($start_coding_value) }
 
 	# Готовые выходы копим, чтобы записать manifest одной транзакцией после цикла.
-	$produced = @()
-	$anyFail = $false
+	# $script:, а не локальные: публикацию результата ведёт Publish-EncodedResult,
+	# общая с удалённым путём, — из своей области видимости она локальные не увидит
+	# и счётчики молча терялись бы.
+	$script:produced = @()
+	$script:anyFail = $false
+	# Одна загрузка на исходный файл, задач — по одной на часть.
+	$script:remoteUploadId = ''
+	$script:remoteSubId = ''
 
 	# F29. Размер входа засчитываем ОДИН раз на исходный файл. Раньше он прибавлялся
 	# на КАЖДУЮ часть, поэтому при разбиении на N частей вход суммировался N раз —
 	# сводка показывала завышенное сжатие. Выход при этом честно считается по частям.
-	$inReported = $false
+	$script:inReported = $false
 	$c = 1
 	foreach ($b in $num) {
 		$pref = ""
@@ -1048,8 +1116,58 @@ function Encode-File {
 		$ffmpegArgs += @($out_tmp, "-y")
 		$ffmpegArgs = $ffmpegArgs | Where-Object { $_ -ne "" -and $_ -ne $null }
 
+		# Удалённый бэкенд подменяет РОВНО этот участок: сборку argv и запуск
+		# ffmpeg. Всё до и после остаётся общим — поэтому один config.ini даёт
+		# один результат на обоих путях.
+		if ($remote_active -eq 'yes') {
+			$rLen = 0
+			if ($current_set_length -match '^-t\s+(\d+)') { $rLen = [int]$Matches[1] }
+			$rMap = Get-RemoteOpForConfig ([int]$b) $rLen
+			if ($null -eq $rMap) {
+				Log-Msg "FAIL" "$($file.Name): кодек $set_video_codec служба не поддерживает"
+				$script:anyFail = $true; $script:countFail++
+			} else {
+				if (-not $script:remoteUploadId) {
+					Log-Msg "INFO" "Отправка на сервер: $($file.Name)"
+					$script:remoteUploadId = Send-RemoteUpload $full_path
+					$script:remoteSubId = ''
+					# Файл субтитров приходит той же дорогой, что видео: путей в
+					# параметрах служба не принимает по построению.
+					if ($script:remoteUploadId -and $sub_found -and $sub_file) {
+						$script:remoteSubId = Send-RemoteUpload $sub_file
+					}
+				}
+				if (-not $script:remoteUploadId) {
+					Log-Msg "FAIL" "$($file.Name): загрузка не удалась"
+					$script:anyFail = $true; $script:countFail++
+				} elseif ($dry_run -eq 'yes') {
+					Invoke-RemoteDryRun $script:remoteUploadId $rMap.Op $rMap.Params $script:remoteSubId | Out-Null
+				} else {
+					$jobId = Submit-RemoteJob $script:remoteUploadId $rMap.Op $rMap.Params $script:remoteSubId
+					if (-not $jobId) {
+						Log-Msg "FAIL" "$($file.Name): служба отвергла задачу"
+						$script:anyFail = $true; $script:countFail++
+					} else {
+						$startTime = Get-Date
+						$onProgress = {
+							param($pct, $label)
+							Write-GUIProgress -FilePercent $pct -CurrentFile $label
+						}
+						$onCancel = { $guiCancelFile -and (Test-Path -LiteralPath $guiCancelFile) }
+						$ok = (Wait-RemoteJob $jobId $file.Name $onProgress $onCancel) -and
+						      (Receive-RemoteResult $jobId $out_tmp)
+						if ($ok) {
+							Publish-EncodedResult $file $out_tmp $out_file $startTime $true | Out-Null
+						} else {
+							Log-Msg "FAIL" "$($file.Name)"
+							if (Test-Path -LiteralPath $out_tmp) { Remove-Item -LiteralPath $out_tmp -Force -ErrorAction SilentlyContinue }
+							$script:anyFail = $true; $script:countFail++
+						}
+					}
+				}
+			}
 		# D7. Dry-run
-		if ($dry_run -eq "yes") {
+		} elseif ($dry_run -eq "yes") {
 			Write-Host "[DRY-RUN] $ffmpeg $($ffmpegArgs -join ' ')"
 			$_cmdStr = "$ffmpeg $($ffmpegArgs -join ' ')"
 			Write-GUIProgress -FilePercent 100 -CurrentFile $file.Name -Command $_cmdStr
@@ -1145,36 +1263,12 @@ function Encode-File {
 				# Ждём освобождения файла после Kill
 				Start-Sleep -Milliseconds 500
 				if (Test-Path -LiteralPath $out_tmp) { Remove-Item -LiteralPath $out_tmp -Force -ErrorAction SilentlyContinue }
-				$anyFail = $true
+				$script:anyFail = $true
 				$script:countFail++
 				Write-GUIProgress -FilePercent 0 -CurrentFile $file.Name
 			} else {
-				# F-rename. Публикацию подтверждаем: Move-Item -ErrorAction Stop + наличие
-				# файла-цели. Без -ErrorAction Stop сбой rename нетерминирующий — результат
-				# засчитался бы как OK, а manifest записался бы поверх отсутствующего файла.
-				$_published = $false
-				try {
-					Move-Item -LiteralPath $out_tmp -Destination $out_file -Force -ErrorAction Stop
-					if (Test-Path -LiteralPath $out_file -PathType Leaf) { $_published = $true }
-				} catch {
-					Log-Msg "FAIL" "$($file.Name): не удалось опубликовать результат (rename): $_"
-				}
-				if ($_published) {
-					Log-Msg "OK" "$($file.Name) -> $(Split-Path $out_file -Leaf) ($elapsedStr)"
-					$script:countOk++
-					$produced += $out_file
-					# F29. Вход — только с первой удавшейся части (см. $inReported выше).
-					try {
-						if (-not $inReported) { $script:totalInBytes += $file.Length; $inReported = $true }
-						$script:totalOutBytes += (Get-Item -LiteralPath $out_file).Length
-					} catch {}
-					Write-GUIProgress -FilePercent 100 -CurrentFile $file.Name
-				} else {
-					if (Test-Path -LiteralPath $out_tmp) { Remove-Item -LiteralPath $out_tmp -Force -ErrorAction SilentlyContinue }
-					$anyFail = $true
-					$script:countFail++
-					Write-GUIProgress -FilePercent 0 -CurrentFile $file.Name
-				}
+				# Публикация — общая с удалённым путём (см. Publish-EncodedResult выше).
+				Publish-EncodedResult $file $out_tmp $out_file $startTime | Out-Null
 			}
 		}
 		$c++
@@ -1183,8 +1277,8 @@ function Encode-File {
 	# Manifest пишем только когда удались ВСЕ части. Именно его отсутствие заставит
 	# следующий запуск доделать файл, вместо того чтобы принять уцелевшую (part.1) за
 	# готовый результат. Частичный успех manifest'а не получает намеренно.
-	if ($dry_run -ne "yes" -and -not $anyFail -and $produced.Count -gt 0) {
-		Write-Manifest $manifest $full_path $file_sig $produced
+	if ($dry_run -ne "yes" -and -not $script:anyFail -and $script:produced.Count -gt 0) {
+		Write-Manifest $manifest $full_path $file_sig $script:produced
 	}
 }
 
@@ -1199,6 +1293,27 @@ if ($copy_codecs -eq "yes")        { $_activeModes += "copy" }
 if ($audio_only -eq "yes")         { $_activeModes += "audio" }
 if ($_activeModes.Count -gt 1) {
 	Log-Msg "WARN" "Включено несколько взаимоисключающих режимов ($($_activeModes -join ' ')). Активен «$($_activeModes[0])» (приоритет merge>extract>frame>copy>audio), остальные проигнорированы."
+}
+
+# --- Удалённый бэкенд: включён ли он для ЭТОГО прогона ---
+$remote_active = 'no'
+if ($remote_enabled -eq 'yes') {
+	if (-not (Get-Command Set-RemoteActive -ErrorAction SilentlyContinue)) {
+		Write-Host "[ОШИБКА] [remote] enabled = yes, но рядом со скриптом нет remote_client.ps1."
+		Pause-Prompt "Нажмите [Enter], чтобы выйти..."
+		exit 1
+	}
+	Set-RemoteActive | Out-Null
+	if ($script:remote_fatal) {
+		# Preflight не прошёл — не трогаем ни одного файла. Отказать на сотом
+		# файле из двухсот дороже, чем на нулевом.
+		Pause-Prompt "Нажмите [Enter], чтобы выйти..."
+		exit 1
+	}
+	$remote_active = $script:remote_active
+	if ($remote_active -eq 'yes') {
+		Log-Msg "INFO" "Удалённый бэкенд включён: кодирование уходит на службу конвертации"
+	}
 }
 
 # --- Основная логика ---

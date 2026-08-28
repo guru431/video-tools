@@ -132,8 +132,10 @@ if [ -f "$DST/.rn.ffconv" ]; then pass "rename-успех: manifest записа
 rm -f "$IN/rn.mp4" "$DST/rn.mp4" "$DST/.rn.ffconv"
 
 # Паритет PS1/CMD (source-scan): rename проверяется.
-assert_contains "PS1 обычный путь: Move-Item -ErrorAction Stop"    'Move-Item -LiteralPath $out_tmp -Destination $out_file -Force -ErrorAction Stop' "$PS1_SRC"
-assert_contains "PS1 обычный путь: подтверждение публикации"       'Test-Path -LiteralPath $out_file -PathType Leaf' "$PS1_SRC"
+# Переименование и подтверждение живут в Publish-EncodedResult — общей функции
+# локального и удалённого путей, поэтому имена параметров, а не $out_tmp/$out_file.
+assert_contains "PS1 обычный путь: Move-Item -ErrorAction Stop"    'Move-Item -LiteralPath $Tmp -Destination $Destination -Force -ErrorAction Stop' "$PS1_SRC"
+assert_contains "PS1 обычный путь: подтверждение публикации"       'Test-Path -LiteralPath $Destination -PathType Leaf' "$PS1_SRC"
 assert_contains "PS1 merge: Move-Item -ErrorAction Stop"           'Move-Item -LiteralPath $mergeTmp -Destination $mergeTarget -Force -ErrorAction Stop' "$PS1_SRC"
 assert_contains "CMD обычный путь: errorlevel после move"          'move /y "!out_tmp!" "!out_file!" >nul 2>&1' "$CMD_SRC"
 assert_contains "CMD merge: errorlevel после move"                 'move /y "!_merge_tmp!" "!_merge_target!" >nul 2>&1' "$CMD_SRC"

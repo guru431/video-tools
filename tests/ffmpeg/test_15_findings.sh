@@ -552,7 +552,9 @@ CMD_SRC2="$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.cmd")"
 assert_contains     "PS1: есть Get-PartialPath"                 'function Get-PartialPath'          "$PS1_SRC2"
 assert_contains     "PS1: temp — префикс (расширение сохранено)" '".ffconv-partial-$leaf"'          "$PS1_SRC2"
 assert_contains     "PS1: ffmpeg пишет в out_tmp"               '$ffmpegArgs += @($out_tmp, "-y")'  "$PS1_SRC2"
-assert_contains     "PS1: цель появляется переименованием"      'Move-Item -LiteralPath $out_tmp -Destination $out_file -Force' "$PS1_SRC2"
+# Переименование живёт в Publish-EncodedResult — общей функции локального и
+# удалённого путей, поэтому имена параметров, а не $out_tmp/$out_file.
+assert_contains     "PS1: цель появляется переименованием"      'Move-Item -LiteralPath $Tmp -Destination $Destination -Force' "$PS1_SRC2"
 assert_not_contains "PS1: цель не передаётся ffmpeg напрямую"   '$ffmpegArgs += @($out_file, "-y")' "$PS1_SRC2"
 assert_contains     "CMD: temp — префикс (расширение сохранено)" 'set "out_tmp=%folder_destination%!file_path!.ffconv-partial-!file_name!!pref!.!current_format_out!"' "$CMD_SRC2"
 assert_contains     "CMD: ffmpeg пишет в out_tmp"               '!out_seek! "!out_tmp!" -y'         "$CMD_SRC2"

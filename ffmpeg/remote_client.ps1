@@ -79,6 +79,33 @@ function Get-RemoteOpForConfig {
 	return [pscustomobject]@{ Op = $op; Params = "{$p}" }
 }
 
+# Уезжает только то, где выигрывает карта. remux, concat, frames, audio и
+# extract_audio служба умеет, но карта в них не участвует: гнать гигабайты по
+# сети ради `-c copy` заведомо хуже локального прогона. Молчать нельзя —
+# режим, который тихо не уехал, неотличим от сломанного удалённого пути.
+#
+# Два разных «нет» обязаны различаться, поэтому кроме $script:remote_active
+# выставляется $script:remote_fatal: локальный по замыслу режим — это работа,
+# а отказ preflight — это конец прогона. Слей их, и запуск с пустым ключом
+# тихо ушёл бы на локальный процессор — тот самый молчаливый откат, которого
+# в этом проекте нет.
+function Set-RemoteActive {
+	$script:remote_active = 'no'
+	$script:remote_fatal = $false
+	if ($remote_enabled -ne 'yes') { return $false }
+	if ($merge_files -eq 'yes' -or $extract_audio_copy -eq 'yes' -or
+	    $create_frame -eq 'yes' -or $copy_codecs -eq 'yes' -or $audio_only -eq 'yes') {
+		Write-Host "[ИНФО] Удалённый бэкенд не используется в этом режиме (карта в нём не участвует) — считаем локально"
+		return $false
+	}
+	if (-not (Invoke-RemotePreflight)) { $script:remote_fatal = $true; return $false }
+	if ($hw_accel_status -eq '+' -and $hw_accel_value -eq 'intel') {
+		Write-Host "[ПРЕДУПРЕЖДЕНИЕ] hw_accel = intel: Intel-карты на сервере нет, служба посчитает на процессоре."
+	}
+	$script:remote_active = 'yes'
+	return $true
+}
+
 # --- HTTP ---
 # Единственная точка выхода в сеть. Тест подменяет ЭТУ функцию — поэтому все
 # остальные обязаны ходить только через неё.
@@ -241,10 +268,19 @@ function Invoke-RemoteDryRun {
 	return $true
 }
 
+# $OnCancel — проверка «пользователь нажал Стоп». Ждать здесь может быть долго
+# (очередь службы, ожидание карты), и это единственная точка, где удалённый путь
+# блокируется: локальная проверка отмены стоит в цикле ffmpeg, которого тут нет.
+# Задачу при этом отменяем на сервере — брошенная держала бы карту до таймаута.
 function Wait-RemoteJob {
-	param([string]$JobId, [string]$Label, [scriptblock]$OnProgress = $null)
+	param([string]$JobId, [string]$Label, [scriptblock]$OnProgress = $null, [scriptblock]$OnCancel = $null)
 	$script:RemoteCurrentJob = $JobId
 	while ($true) {
+		if ($OnCancel -and (& $OnCancel)) {
+			Stop-RemoteJob $JobId
+			$script:RemoteCurrentJob = ''
+			return $false
+		}
 		$r = Invoke-RemoteHttp GET "/jobs/$JobId"
 		if ($r.Code -ne 200) {
 			Write-Host "[ОШИБКА] Состояние задачи недоступно: HTTP $($r.Code)."

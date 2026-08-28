@@ -34,7 +34,7 @@ video/
 │   ├── run_tests.sh                     # Точка входа
 │   ├── lib/framework.sh                 # Assert-функции, форматированный вывод
 │   ├── mocks/{ffmpeg,ffprobe,yt-dlp}    # Mock-бинарники
-│   ├── ffmpeg/test_01..19*.sh           # 19 тест-файлов
+│   ├── ffmpeg/test_01..23*.sh           # 23 тест-файла
 │   ├── yt-dlp/test_01..14*.sh           # 14 тест-файлов
 │   └── common/test_*.sh                 # 9 файлов: кодировки, паритет, guardrail'ы, pre-commit, privacy-scan
 │
@@ -78,6 +78,21 @@ video/
 - **Нарезка:** по времени, по тишине (silencedetect)
 - **Контейнеры:** mp4, mkv, webm, avi, ts
 - **Прогресс-бар**, dry-run, логирование, итоговая сводка (ok/fail/skip)
+
+#### Удалённый счёт на сервере конвертации
+
+При `[remote] enabled = yes` кодирование уезжает на HTTP-службу конвертации, а
+обход папок, имена выходов и учёт готового остаются локальными. Адрес и ключ
+задаются переменными окружения `TRANSCODE_URL` и `TRANSCODE_API_KEY` — в
+`config.ini` стоят только их имена.
+
+Уезжает только то, где выигрывает карта: обычное перекодирование и отрезки.
+Режимы `copy_codecs`, `merge_files`, `create_frame`, `audio_only` и
+`extract_audio_copy` считаются локально — карта в них не участвует.
+
+Доступно в `.sh`, `.ps1` и GUI. В `.cmd` режим не поддерживается: в cmd.exe нет
+нарезки файла по смещениям, sha256 и разбора JSON — там печатается
+предупреждение, и файлы считаются локально.
 
 ### YT-DLP Downloader
 
@@ -141,12 +156,12 @@ yt-dlp/_VideoDownloader_v17.exe
 
 ```bash
 bash tests/run_tests.sh           # все тесты
-bash tests/run_tests.sh ffmpeg    # ffmpeg (19 файлов)
+bash tests/run_tests.sh ffmpeg    # ffmpeg (23 файла)
 bash tests/run_tests.sh yt-dlp    # yt-dlp (14 файлов)
 bash tests/run_tests.sh common    # кросс-платформенные инварианты (9 файлов)
 ```
 
-### Тест-модули FFmpeg (19 файлов)
+### Тест-модули FFmpeg (23 файла)
 
 | Файл | Что тестирует |
 |------|---------------|
@@ -169,6 +184,10 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 | `test_17_literal_paths` | PS1: пути с `[ ]` в именах (литеральные, без wildcard-глоббинга) |
 | `test_18_findings_audit` | Фиксы аудита: dry-run+overwrite не удаляет выход, merge in-place отклоняется, проверка финального rename, silence-настройки в signature |
 | `test_19_findings_paths` | Пути и выборка входов: хвостовой разделитель source, прямые слэши, каталог «season.mp4», dry-run без mkdir, `.ffconv-partial-*`, суффикс `(part.1)` в проверке in==out, диапазон скорости и overwrite в GUI |
+| `test_20_remote_map` | Удалённый бэкенд: отображение config.ini на операции службы (.sh) |
+| `test_21_remote_client` | Удалённый бэкенд: HTTP-слой, preflight, загрузка кусками, задача и отмена (мок curl) |
+| `test_22_remote_ps1` | Удалённый бэкенд: PS1-модуль клиента, загрузка через подменённый HTTP-слой |
+| `test_23_remote_parity` | Удалённый бэкенд: SH и PS1 собирают побайтово одинаковый JSON |
 
 ### Тест-модули YT-DLP (14 файлов)
 

@@ -309,9 +309,11 @@ TESTING_F="$TESTS_DIR/TESTING.md"
 # подстроку ("$n файлов") и была фиктивной: "6 файлов" находится внутри
 # "16 файлов", поэтому она не могла упасть и давала ложную уверенность.
 # Дерево структуры (строки вида "# N тест-файлов" / "# N файлов (").
-readme_ff=$(grep -oE '# [0-9]+ тест-файлов' "$README_F" | sed -n 1p | grep -oE '[0-9]+')
-readme_yt=$(grep -oE '# [0-9]+ тест-файлов' "$README_F" | sed -n 2p | grep -oE '[0-9]+')
-readme_cm=$(grep -oE '# [0-9]+ файлов' "$README_F" | sed -n 1p | grep -oE '[0-9]+')
+# Окончание зависит от самого числа (19 файлов, 23 файла, 21 файл), поэтому
+# шаблон принимает все три формы: иначе он вынуждал бы писать в README неграмотно.
+readme_ff=$(grep -oE '# [0-9]+ тест-файл(ов|а)?' "$README_F" | sed -n 1p | grep -oE '[0-9]+')
+readme_yt=$(grep -oE '# [0-9]+ тест-файл(ов|а)?' "$README_F" | sed -n 2p | grep -oE '[0-9]+')
+readme_cm=$(grep -oE '# [0-9]+ файл(ов|а)?' "$README_F" | sed -n 1p | grep -oE '[0-9]+')
 assert_eq "README (дерево): ffmpeg-файлов = runner" "$n_ff" "${readme_ff:-НЕ_НАЙДЕНО}"
 assert_eq "README (дерево): yt-dlp-файлов = runner" "$n_yt" "${readme_yt:-НЕ_НАЙДЕНО}"
 assert_eq "README (дерево): common-файлов = runner" "$n_cm" "${readme_cm:-НЕ_НАЙДЕНО}"
@@ -319,9 +321,9 @@ assert_eq "README (дерево): common-файлов = runner" "$n_cm" "${readm
 # Блок примеров запуска (строки "bash tests/run_tests.sh <модуль> ... N файлов").
 # Запятая перед числом НЕ обязательна: раньше числа файлов стояли после числа тестов
 # ("(617 тестов, 18 файлов)"), теперь тестов в документах нет — см. проверку ниже.
-usage_ff=$(grep -oE 'run_tests\.sh ffmpeg[^#]*#[^)]*[0-9]+ файлов' "$README_F" | grep -oE '[0-9]+ файлов' | grep -oE '[0-9]+')
-usage_yt=$(grep -oE 'run_tests\.sh yt-dlp[^#]*#[^)]*[0-9]+ файлов' "$README_F" | grep -oE '[0-9]+ файлов' | grep -oE '[0-9]+')
-usage_cm=$(grep -oE 'run_tests\.sh common[^#]*#[^)]*[0-9]+ файлов' "$README_F" | grep -oE '[0-9]+ файлов' | grep -oE '[0-9]+')
+usage_ff=$(grep -oE 'run_tests\.sh ffmpeg[^#]*#[^)]*[0-9]+ файл(ов|а)?' "$README_F" | grep -oE '[0-9]+ файл(ов|а)?' | grep -oE '[0-9]+')
+usage_yt=$(grep -oE 'run_tests\.sh yt-dlp[^#]*#[^)]*[0-9]+ файл(ов|а)?' "$README_F" | grep -oE '[0-9]+ файл(ов|а)?' | grep -oE '[0-9]+')
+usage_cm=$(grep -oE 'run_tests\.sh common[^#]*#[^)]*[0-9]+ файл(ов|а)?' "$README_F" | grep -oE '[0-9]+ файл(ов|а)?' | grep -oE '[0-9]+')
 assert_eq "README (примеры): ffmpeg-файлов = runner" "$n_ff" "${usage_ff:-НЕ_НАЙДЕНО}"
 assert_eq "README (примеры): yt-dlp-файлов = runner" "$n_yt" "${usage_yt:-НЕ_НАЙДЕНО}"
 assert_eq "README (примеры): common-файлов = runner" "$n_cm" "${usage_cm:-НЕ_НАЙДЕНО}"
@@ -554,5 +556,27 @@ assert_contains "SH: шаблон silence_start учитывает знак"  "s
 assert_contains "SH: шаблон silence_end учитывает знак"    "silence_end: -?[0-9.]+"   "$ffsh"
 assert_contains "PS1: шаблон silence_start учитывает знак" 'silence_start:\s+(-?[\d.]+)' "$ffps1"
 assert_contains "PS1: шаблон silence_end учитывает знак"   'silence_end:\s+(-?[\d.]+)'   "$ffps1"
+
+# ══════════════════════════════════════════════════════════════
+suite "приватность: адрес и ключ службы не в репозитории"
+# ══════════════════════════════════════════════════════════════
+# Литеральный адрес службы или ключ в коммитимом файле — это утечка, а
+# репозиторий публичный. Ищем по форме, а не по конкретному значению:
+# конкретные значения нельзя записать в тест по той же причине.
+_priv_hits="$(git -C "$PROJECT_DIR" grep -nIE \
+    'https?://(10|192\.168|172\.(1[6-9]|2[0-9]|3[01]))\.[0-9]+\.[0-9]+' \
+    -- ':!tests/*' ':!docs/*' 2>/dev/null || true)"
+assert_empty "нет приватных IP в URL" "$_priv_hits"
+
+_key_hits="$(git -C "$PROJECT_DIR" grep -nIE \
+    '^[[:space:]]*api_key[[:space:]]*=[[:space:]]*[^$[:space:]].*' \
+    -- 'ffmpeg/config.ini' 'yt-dlp/config.ini*' 2>/dev/null || true)"
+assert_empty "api_key задан только переменной" "$_key_hits"
+
+# endpoint — тем же правилом: подставлять туда живой адрес нельзя даже разово.
+_ep_hits="$(git -C "$PROJECT_DIR" grep -nIE \
+    '^[[:space:]]*endpoint[[:space:]]*=[[:space:]]*[^$[:space:]].*' \
+    -- 'ffmpeg/config.ini' 2>/dev/null || true)"
+assert_empty "endpoint задан только переменной" "$_ep_hits"
 
 summary

@@ -141,6 +141,15 @@ split_by_silence="$(read_config "split_by_silence" "split" "no")"
 silence_duration="$(read_config "silence_duration" "split" "2.0")"
 silence_threshold="$(read_config "silence_threshold" "split" "-30dB")"
 
+remote_enabled="$(read_config "enabled" "remote" "no")"
+remote_endpoint="$(read_config "endpoint" "remote" "")"
+remote_api_key="$(read_config "api_key" "remote" "")"
+remote_prefer="$(read_config "prefer" "remote" "auto")"
+remote_wait_timeout="$(read_config "wait_timeout" "remote" "1800")"
+# Хвостовой слэш в адресе даёт "…/v1//jobs" — служба отвечает 404 на путь,
+# который человеку выглядит верным. Снимаем здесь, в единственном месте чтения.
+remote_endpoint="${remote_endpoint%/}"
+
 save_old_extension="$(read_config "save_old_extension" "other" "no")"
 format_files_in="$(read_config "format_files_in" "other" "3gp,avi,flv,mp4,mpg,mpeg,wmv,mov,asf,mkv,m4v,webm,mts,vob,m4b,mp3,wma,ogg,m4a,aac")"
 subtitles_style="$(read_config "subtitles_style" "other" "FontName=Arial,FontSize=24,PrimaryColour=&HFFFFFF&")"

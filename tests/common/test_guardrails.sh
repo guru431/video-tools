@@ -337,12 +337,25 @@ assert_eq "README (примеры): common-файлов = runner" "$n_cm" "${usa
 # и CLAUDE.md повторяли «1479/617/454/408», и эти числа устаревали при каждом новом
 # assert — ровно тот дефект, ради которого писалась проверка числа файлов выше.
 _stale_counts=""
-for _d in "$README_F" "$TESTING_F" "$PROJECT_DIR/CLAUDE.md"; do
+for _d in "$README_F" "$TESTING_F" "$PROJECT_DIR/CLAUDE.md" "$PROJECT_DIR/AGENTS.md"; do
     [ -f "$_d" ] || continue
     _hit=$(grep -oiE '[0-9]{3,}[[:space:]]+(тест|test)[a-zа-я]*' "$_d" | head -1)
     [ -n "$_hit" ] && _stale_counts="$_stale_counts $(basename "$_d"):$_hit"
 done
 assert_empty "в документах нет захардкоженных чисел тестов (источник — раннер)" "$_stale_counts"
+
+# То же и для числа ФАЙЛОВ, но только в CLAUDE.md/AGENTS.md. В README числа файлов
+# остаются: там их сверяют три пары assert'ов выше. В агентских документах сверять
+# было нечем, и они разошлись молча — CLAUDE.md заявлял ffmpeg/yt-dlp/common одними
+# числами, раннер регистрировал другие, причём внутри одного файла два места
+# противоречили друг другу. Дешевле запретить число, чем сверять его в двух местах.
+_stale_files=""
+for _d in "$PROJECT_DIR/CLAUDE.md" "$PROJECT_DIR/AGENTS.md"; do
+    [ -f "$_d" ] || continue
+    _hit=$(grep -oiE '[0-9]+[[:space:]]+(файл|file)[a-zа-я]*' "$_d" | head -1)
+    [ -n "$_hit" ] && _stale_files="$_stale_files $(basename "$_d"):$_hit"
+done
+assert_empty "CLAUDE/AGENTS: нет чисел тест-файлов (сверяются только в README)" "$_stale_files"
 
 readme_txt="$(cat "$README_F")"
 

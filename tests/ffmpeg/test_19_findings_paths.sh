@@ -64,7 +64,10 @@ SH_SRC="$(cat "$SCRIPT")"
 PS1_SRC="$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1")"
 CMD_SRC="$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.cmd")"
 GUI_SRC="$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v18.ps1")"
-CFG_SRC="$(cat "$PROJECT_DIR/ffmpeg/config.ini")"
+# Шаблон, а не рабочий config.ini: последний gitignored, и на свежем клоне его
+# нет — cat вернул бы пустоту, а assert_contains по пустой строке провалился бы
+# с необъяснимым «Получено: ''». Документация диапазонов живёт в шаблоне.
+CFG_SRC="$(cat "$PROJECT_DIR/ffmpeg/config.ini.example")"
 
 # ══════════════════════════════════════════════════════════════
 suite "P1: хвостовой разделитель в source не уводит выход мимо destination"

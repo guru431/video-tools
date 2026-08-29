@@ -95,10 +95,12 @@ function Invoke-RemoteHttp {
 	if (\$Method -eq 'GET' -and \$Path -like '/uploads/*') {
 		return [pscustomobject]@{ Code = 200; Body = '{"received":0}' }
 	}
+	if (\$Path -like '*/complete') { return [pscustomobject]@{ Code = 200; Body = '{"duration":42}' } }
 	return [pscustomobject]@{ Code = 200; Body = '{}' }
 }
 \$uid = Send-RemoteUpload '$_payload_win'
 Write-Output "UID=\$uid"
+Write-Output "DUR=\$(\$script:RemoteUploadDuration)"
 \$script:calls | ForEach-Object { Write-Output \$_ }
 PSEOF
 
@@ -111,6 +113,118 @@ assert_contains "завершение"    "/uploads/up-99/complete" "$_out"
 assert_contains "хеш отправлен" '"sha256"' "$_out"
 # Тот же вход, что в .sh-тесте: хеш обязан совпасть на обеих платформах.
 assert_not_contains "хеш не пустой" '"sha256":""' "$_out"
+assert_contains "длительность из complete запомнена" "DUR=" "$_out"
 rm -f "$_harness" "$_payload"
+
+# ══════════════════════════════════════════════════════════════
+suite "remote PS1: нормализация адреса и экранирование"
+# ══════════════════════════════════════════════════════════════
+# Двойники remote_normalize_endpoint / remote_json_escape из .sh. Их равенство
+# и есть предмет паритета: раньше .sh снимал один хвостовой слэш, PS1 — все,
+# а Trim пробелов был только в GUI.
+assert_eq "один хвостовой слэш" "http://h/v1" "$(run_ps "Format-RemoteEndpoint 'http://h/v1/'")"
+assert_eq "несколько слэшей"    "http://h/v1" "$(run_ps "Format-RemoteEndpoint 'http://h/v1//'")"
+assert_eq "пробелы по краям"    "http://h/v1" "$(run_ps "Format-RemoteEndpoint '  http://h/v1  '")"
+assert_eq "обратный слэш удваивается" 'a\\b\"c/\\d' "$(run_ps "ConvertTo-RemoteJsonString 'a\\b\"c/\\d'")"
+
+# ══════════════════════════════════════════════════════════════
+suite "remote PS1: сверка кодека по семейству"
+# ══════════════════════════════════════════════════════════════
+# Служба перечисляет энкодеры, мы отправляем семейство: наличие h264_nvenc
+# означает, что h264 она посчитает. Литеральная сверка противоречила бы
+# отображению Get-RemoteCodec.
+assert_eq "h264 при h264_nvenc" "True"  "$(run_ps "Test-RemoteCodecSupported 'h264' @('h264_nvenc','hevc_nvenc')")"
+assert_eq "h264 при libx264"    "True"  "$(run_ps "Test-RemoteCodecSupported 'h264' @('libx264')")"
+assert_eq "h264 без h264"       "False" "$(run_ps "Test-RemoteCodecSupported 'h264' @('hevc_nvenc','av1_nvenc')")"
+assert_eq "пустой список не отказ" "True" "$(run_ps "Test-RemoteCodecSupported 'h264' @()")"
+
+# ══════════════════════════════════════════════════════════════
+suite "remote PS1: короткое чтение и повтор куска"
+# ══════════════════════════════════════════════════════════════
+# Stream.Read по контракту возвращает НЕ БОЛЕЕ запрошенного; отброшенное
+# возвращаемое значение оставляло хвост куска нулями, и sha256 в complete не
+# сходился. Сетевые шары, где короткое чтение — норма, для этого проекта штатны.
+# Здесь проверяем сами отправленные БАЙТЫ: позиционная разметка показывает,
+# что уехало ровно содержимое файла, а не буфер с нулями.
+_harness="$(mktemp_suffix "${TMPDIR:-/tmp}/remote_short_" .ps1)"
+_payload="$(mktemp "${TMPDIR:-/tmp}/remote_payload_XXXXXX")"
+: > "$_payload"
+for _i in 0 1 2; do
+    printf 'BLOCK%d' "$_i" >> "$_payload"
+    head -c 1018 /dev/zero | tr '\0' "$_i" >> "$_payload"
+done                                    # 3 блока по 1024 = 3072
+_payload_win="$(cygpath -w "$_payload" 2>/dev/null || echo "$_payload")"
+
+cat > "$_harness" <<PSEOF
+. '$MODULE'
+\$script:calls = New-Object System.Collections.ArrayList
+\$script:patchCount = 0
+function Invoke-RemoteHttp {
+	param([string]\$Method, [string]\$Path, [string]\$Body = '',
+	      [hashtable]\$Headers = @{}, [string]\$OutFile = '', [string]\$InFile = '')
+	if (\$Method -eq 'POST' -and \$Path -eq '/uploads') {
+		return [pscustomobject]@{ Code = 200; Body = '{"upload_id":"up-77","chunk_size":1024}' }
+	}
+	if (\$Method -eq 'PATCH') {
+		\$script:patchCount++
+		\$head = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes(\$InFile), 0, 6)
+		[void]\$script:calls.Add("PATCH \$(\$Headers['Content-Range']) HEAD=\$head")
+		# Первый кусок отвергаем с 503: повтор обязан пройти.
+		if (\$script:patchCount -eq 1) { return [pscustomobject]@{ Code = 503; Body = '{}' } }
+		return [pscustomobject]@{ Code = 200; Body = '{}' }
+	}
+	if (\$Path -like '*/complete') { return [pscustomobject]@{ Code = 200; Body = '{"duration":7}' } }
+	return [pscustomobject]@{ Code = 200; Body = '{}' }
+}
+\$env:REMOTE_RETRY_SECONDS = '0'
+\$uid = Send-RemoteUpload '$_payload_win'
+Write-Output "UID=\$uid"
+Write-Output "PATCHES=\$(\$script:patchCount)"
+Write-Output "DUR=\$(\$script:RemoteUploadDuration)"
+\$script:calls | ForEach-Object { Write-Output \$_ }
+PSEOF
+
+_out="$("$PS_BIN" -NoProfile -NonInteractive -File "$_harness" 2>&1 | tr -d '\r')"
+assert_contains "загрузка завершилась"      "UID=up-77"  "$_out"
+assert_contains "503 повторён, а не провален" "PATCHES=4" "$_out"
+assert_contains "длительность из complete"  "DUR=7"      "$_out"
+assert_contains "кусок 0 несёт свои байты"  "bytes 0-1023/3072 HEAD=BLOCK0"    "$_out"
+assert_contains "кусок 1 несёт свои байты"  "bytes 1024-2047/3072 HEAD=BLOCK1" "$_out"
+assert_contains "кусок 2 несёт свои байты"  "bytes 2048-3071/3072 HEAD=BLOCK2" "$_out"
+rm -f "$_harness" "$_payload"
+
+# ══════════════════════════════════════════════════════════════
+suite "remote PS1: клиентский предел ожидания задачи"
+# ══════════════════════════════════════════════════════════════
+# `while ($true)` без предела означал, что застрявшая в running задача держит
+# прогон вечно. У .sh был хотя бы тестовый предохранитель, здесь не было и его.
+_harness="$(mktemp_suffix "${TMPDIR:-/tmp}/remote_wait_" .ps1)"
+cat > "$_harness" <<PSEOF
+# Консоль PowerShell по умолчанию отдаёт вывод в OEM-кодировке (866), и
+# кириллица в сообщении об ошибке приходит в bash мусором. Ассерт по русскому
+# тексту без этой строки проверял бы не текст, а кодировку.
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+. '$MODULE'
+\$script:calls = New-Object System.Collections.ArrayList
+function Invoke-RemoteHttp {
+	param([string]\$Method, [string]\$Path, [string]\$Body = '',
+	      [hashtable]\$Headers = @{}, [string]\$OutFile = '', [string]\$InFile = '')
+	[void]\$script:calls.Add("\$Method \$Path")
+	return [pscustomobject]@{ Code = 200; Body = '{"state":"running","progress":10}' }
+}
+\$remote_wait_timeout = 1
+\$env:REMOTE_WAIT_FACTOR = '1'
+\$env:REMOTE_POLL_SECONDS = '1'
+\$ok = Wait-RemoteJob 'job-5' 'файл'
+Write-Output "OK=\$ok"
+\$script:calls | ForEach-Object { Write-Output \$_ }
+PSEOF
+_out="$("$PS_BIN" -NoProfile -NonInteractive -File "$_harness" 2>&1 | tr -d '\r')"
+assert_contains "застрявшая задача не ждётся вечно" "OK=False" "$_out"
+assert_contains "задача отменена на сервере"        "DELETE /jobs/job-5" "$_out"
+assert_contains "предел назван словами"             "не завершилась за"  "$_out"
+assert_eq "предел считается от wait_timeout" "5400" \
+  "$(run_ps '$remote_wait_timeout = 1800; Get-RemoteWaitDeadline')"
+rm -f "$_harness"
 
 summary

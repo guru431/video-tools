@@ -149,6 +149,7 @@ COMMON_TESTS=(
     "$TESTS_DIR/common/test_config_keys.sh"
     "$TESTS_DIR/common/test_config_contract.sh"
     "$TESTS_DIR/common/test_guardrails.sh"
+    "$TESTS_DIR/common/test_docs_links.sh"
     "$TESTS_DIR/common/test_pre_commit_hook.sh"
     "$TESTS_DIR/common/test_privacy_scan.sh"
     "$TESTS_DIR/common/test_path_matrix.sh"

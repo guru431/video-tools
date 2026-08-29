@@ -136,6 +136,11 @@ $_cfg_remote_ep    = Read-Config "endpoint" "remote" ""
 $_cfg_remote_key   = Read-Config "api_key" "remote" ""
 $_cfg_remote_pref  = Read-Config "prefer" "remote" "auto"
 $_cfg_remote_wait  = Read-Config "wait_timeout" "remote" "1800"
+# Своих полей у этих двух в форме нет: api_key_command может спрашивать пароль,
+# а on_failure меняет политику отказов — обоим место в config.ini, а не в
+# галочке, которую поставили один раз и забыли. Читаем и передаём как есть.
+$_cfg_remote_keycmd = Read-Config "api_key_command" "remote" ""
+$_cfg_remote_onfail = Read-Config "on_failure" "remote" "abort"
 $_cfg_formats      = Read-Config "format_files_in"    "other" "3gp,avi,flv,mp4,mpg,mpeg,wmv,mov,asf,mkv,m4v,webm,mts,vob,m4b,mp3,wma,ogg,m4a,aac"
 $_cfg_sub_style    = Read-Config "subtitles_style"    "other" "FontName=Arial,FontSize=24,PrimaryColour=&HFFFFFF&"
 $_cfg_dry_run      = Read-Config "dry_run"            "other" "no"
@@ -1492,11 +1497,17 @@ $buttonRun.Add_Click({
     # где допустима и подстановка ${TRANSCODE_URL}, развёрнутая при чтении).
     # $script:, как и остальные значения формы: сбор в runspace идёт через
     # Get-Variable -Scope Script, и локальная переменная обработчика туда не попадёт.
-    $script:remote_enabled      = if ($chkRemote.Checked) { "yes" } else { "no" }
-    $script:remote_endpoint     = $txtRemoteEndpoint.Text.Trim().TrimEnd("/")
-    $script:remote_api_key      = $txtRemoteApiKey.Text.Trim()
-    $script:remote_prefer       = [string]$cmbRemotePrefer.SelectedItem
-    $script:remote_wait_timeout = $txtRemoteWait.Text
+    # Нормализация адреса — одна на платформу, в Format-RemoteEndpoint
+    # (remote_client.ps1, вызов из Invoke-RemotePreflight). Здесь только Trim
+    # поля формы: раньше GUI снимал все хвостовые слэши, CLI-PS1 тоже, а .sh —
+    # ровно один, и один config.ini давал «…/v1//jobs» из CLI.
+    $script:remote_enabled         = if ($chkRemote.Checked) { "yes" } else { "no" }
+    $script:remote_endpoint        = $txtRemoteEndpoint.Text.Trim()
+    $script:remote_api_key         = $txtRemoteApiKey.Text.Trim()
+    $script:remote_api_key_command = $_cfg_remote_keycmd
+    $script:remote_prefer          = [string]$cmbRemotePrefer.SelectedItem
+    $script:remote_wait_timeout    = $txtRemoteWait.Text
+    $script:remote_on_failure      = $_cfg_remote_onfail
 
     # Собираем все переменные для передачи в runspace
     $varsToPass = @{}
@@ -1511,7 +1522,8 @@ $buttonRun.Add_Click({
         'start_coding','length_coding','split_by_silence','silence_duration','silence_threshold',
         'ffmpeg','save_old_extension','format_files_in','subtitles_style',
         'dry_run','enable_log','log_file',
-        'remote_enabled','remote_endpoint','remote_api_key','remote_prefer','remote_wait_timeout'
+        'remote_enabled','remote_endpoint','remote_api_key','remote_api_key_command',
+        'remote_prefer','remote_wait_timeout','remote_on_failure'
     )) {
         $v = Get-Variable -Name $varName -Scope Script -ErrorAction SilentlyContinue
         $varsToPass[$varName] = if ($v) { $v.Value } else { $null }
@@ -1606,7 +1618,14 @@ $buttonRun.Add_Click({
                 $progressBarFile.Value  = [Math]::Min($json.filePercent,  100)
                 $progressBarTotal.Value = [Math]::Min($json.totalPercent, 100)
                 if ($json.currentFile) {
-                    $labelProgressFile.Text = "$($json.currentFile)"
+                    # Фаза удалённого пути (отправка / ожидание карты /
+                    # кодирование / скачивание). Без неё минуты «ничего не
+                    # происходит» неотличимы от зависания.
+                    if ($json.phase) {
+                        $labelProgressFile.Text = "$($json.currentFile) · $($json.phase)"
+                    } else {
+                        $labelProgressFile.Text = "$($json.currentFile)"
+                    }
                 }
                 if ($json.totalFiles -gt 0) {
                     $labelProgressTotal.Text = "Файл $($json.fileNum) из $($json.totalFiles)"

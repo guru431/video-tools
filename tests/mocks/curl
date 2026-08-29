@@ -1,43 +1,114 @@
 #!/bin/bash
 # ============================================================
-# Mock curl — отдаёт консервированный ответ и пишет вызов в лог.
+# Mock curl — отдаёт ответ по маршруту и пишет вызов в лог.
 #
 # Переменные окружения:
 #   MOCK_CURL_LOG      — файл лога вызовов (по умолчанию /tmp/mock_curl_calls.txt)
-#   MOCK_CURL_BODY     — тело ответа
+#   MOCK_CURL_BODY     — тело ответа (когда маршрутов нет)
 #   MOCK_CURL_CODE     — HTTP-код (по умолчанию 200)
 #   MOCK_CURL_BODY_FILE — файл, содержимое которого отдать вместо MOCK_CURL_BODY
 #   MOCK_CURL_FAIL=1   — имитировать сетевой отказ (exit 7, как настоящий curl
 #                        при "Failed to connect")
+#   MOCK_CURL_ROUTES   — таблица маршрутов, по строке на маршрут:
+#                          МЕТОД<пробел>ШАБЛОН-ПУТИ<TAB>КОД<TAB>ТЕЛО
+#                        Шаблон — glob для `case` (например `/v1/uploads/*`).
+#                        Первое совпадение выигрывает. Путь, не совпавший ни с
+#                        одним шаблоном, — ОШИБКА (exit 99), а не молчаливый 200.
+#
+# Маршрутизация появилась не для красоты. Пока мок отдавал одно и то же тело на
+# ЛЮБОЙ URL, путь эндпоинта не проверялся ничем: клиент ходил по /jobs, спека и
+# тест — по /v1/jobs, и весь набор оставался зелёным. Ассерт по логу ловит только
+# то, что написано руками и постфактум; маршрут — то, что клиент действительно
+# запросил.
 #
 # Клиент зовёт curl с `-w '\n%{http_code}'`: код идёт последней строкой тела.
 # Мок обязан повторять именно этот контракт, иначе тест разрешит код, который
 # на настоящем curl не работает.
+#
+# Ключ приходит НЕ в argv, а в конфиге на stdin (`--config -`): так его не видно
+# в /proc/<pid>/cmdline. Мок обязан прочитать stdin и записать его в лог — иначе
+# проверка «ключ ушёл в заголовке» стала бы непроверяемой.
 # ============================================================
 
 LOG_FILE="${MOCK_CURL_LOG:-/tmp/mock_curl_calls.txt}"
 echo "$@" >> "$LOG_FILE"
 
-[ "${MOCK_CURL_FAIL:-0}" = "1" ] && exit 7
-
-# -o <файл>: тело пишется в файл, а на stdout уходит только код.
+METHOD="GET"
+URL=""
 OUT_FILE=""
+READ_CONFIG=0
 PREV=""
 for arg in "$@"; do
-	[ "$PREV" = "-o" ] && OUT_FILE="$arg" && break
+	case "$PREV" in
+		-X) METHOD="$arg" ;;
+		-o) OUT_FILE="$arg" ;;
+	esac
+	case "$arg" in
+		http://*|https://*) URL="$arg" ;;
+	esac
+	# Тело куска приходит файлом (--data-binary @file). Под MOCK_CURL_LOG_DATA=1
+	# кладём его содержимое в лог: без этого проверить, КАКИЕ байты уехали, нечем —
+	# а именно там жил дефект чтения куска с невыровненного смещения.
+	if [ "${MOCK_CURL_LOG_DATA:-0}" = "1" ] && [ "$PREV" = "--data-binary" ]; then
+		case "$arg" in
+			@*) [ -f "${arg#@}" ] && echo "DATA: $(cat "${arg#@}")" >> "$LOG_FILE" ;;
+		esac
+	fi
+	[ "$PREV" = "--config" ] && [ "$arg" = "-" ] && READ_CONFIG=1
 	PREV="$arg"
 done
 
+# Конфиг на stdin: читаем целиком и кладём в лог, чтобы заголовок с ключом
+# остался проверяемым.
+if [ "$READ_CONFIG" = "1" ]; then
+	while IFS= read -r _cfg_line; do
+		[ -n "$_cfg_line" ] && echo "$_cfg_line" >> "$LOG_FILE"
+	done
+fi
+
+[ "${MOCK_CURL_FAIL:-0}" = "1" ] && exit 7
+
+# Путь без схемы и хоста: маршруты пишутся так, как их видит служба.
+PATH_ONLY="${URL#*://}"
+case "$PATH_ONLY" in
+	*/*) PATH_ONLY="/${PATH_ONLY#*/}" ;;
+	*)   PATH_ONLY="/" ;;
+esac
+PATH_ONLY="${PATH_ONLY%%\?*}"
+
+CODE="${MOCK_CURL_CODE:-200}"
 if [ -n "${MOCK_CURL_BODY_FILE:-}" ] && [ -f "$MOCK_CURL_BODY_FILE" ]; then
 	BODY="$(cat "$MOCK_CURL_BODY_FILE")"
 else
 	BODY="${MOCK_CURL_BODY:-}"
 fi
 
+if [ -n "${MOCK_CURL_ROUTES:-}" ]; then
+	MATCHED=0
+	while IFS=$'\t' read -r _spec _code _body; do
+		[ -n "$_spec" ] || continue
+		case "$_spec" in \#*) continue ;; esac
+		_rm="${_spec%% *}"
+		_rp="${_spec#* }"
+		[ "$_rm" = "$METHOD" ] || continue
+		# shellcheck disable=SC2254 — шаблон обязан работать как glob.
+		case "$PATH_ONLY" in
+			$_rp) CODE="$_code"; BODY="$_body"; MATCHED=1; break ;;
+		esac
+	done <<EOF
+$MOCK_CURL_ROUTES
+EOF
+	if [ "$MATCHED" = "0" ]; then
+		echo "MOCK CURL: нет маршрута для $METHOD $PATH_ONLY" >> "$LOG_FILE"
+		echo "MOCK CURL: нет маршрута для $METHOD $PATH_ONLY (URL: $URL)" >&2
+		exit 99
+	fi
+fi
+
 if [ -n "$OUT_FILE" ]; then
 	printf '%s' "$BODY" > "$OUT_FILE"
-	printf '%s' "${MOCK_CURL_CODE:-200}"
+	printf '%s' "$CODE"
 else
-	printf '%s\n%s' "$BODY" "${MOCK_CURL_CODE:-200}"
+	printf '%s\n%s' "$BODY" "$CODE"
 fi
 exit 0

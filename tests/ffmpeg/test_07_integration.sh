@@ -51,6 +51,7 @@ default_vars() {
     audio_only="no"; merge_files="no"; create_frame="no"
     copy_codecs="no"; extract_audio_copy="no"
     remote_enabled="no"; remote_endpoint=""; remote_api_key=""
+    remote_api_key_command=""; remote_on_failure="abort"
     remote_prefer="auto"; remote_wait_timeout="1800"
 }
 
@@ -317,6 +318,69 @@ _out="$(MOCK_CURL_LOG="$CURL_LOG" MOCK_CURL_CODE=200 \
         'dry_run="yes"')"
 assert_contains "сказано о включении" "Удалённый бэкенд включён" "$_out"
 assert_contains "preflight спросил возможности" "/v1/capabilities" "$(cat "$CURL_LOG")"
+rm -f "$CURL_LOG"
+
+# ══════════════════════════════════════════════════════════════
+suite "remote: адрес без версии API назван до запроса"
+# ══════════════════════════════════════════════════════════════
+# Клиент собирает «<endpoint>/capabilities», служба слушает «/v1/capabilities».
+# Адрес без /v1 давал HTTP 404 и сообщение, из которого причина не следует.
+_out="$(MOCK_CURL_LOG="$CURL_LOG" MOCK_CURL_CODE=200     MOCK_CURL_BODY='{"args_version":"1","chunk_size":1048576}'     run_script_out         'remote_enabled="yes"'         'remote_endpoint="http://mock.invalid"'         'remote_api_key="k"'         'dry_run="yes"')"
+assert_contains "предупреждение про /v1" "не оканчивается версией API" "$_out"
+rm -f "$CURL_LOG"
+
+# ══════════════════════════════════════════════════════════════
+suite "remote: on_failure = local — откат шумный, а не молчаливый"
+# ══════════════════════════════════════════════════════════════
+# Отказ от МОЛЧАЛИВОГО отката остаётся в силе. on_failure = local снимает потерю
+# работы, но не тишину: причина печатается, файл считается локально, и это видно
+# в вызове mock ffmpeg. Служба отвечает 500 на всё, кроме /capabilities.
+if [ "$HAS_TEST_VIDEO" = "1" ]; then
+    rm -f "$CURL_LOG" "$FFMPEG_LOG"
+    _routes="$(printf 'GET /v1/capabilities	200	{"args_version":"1","chunk_size":1048576}
+POST /v1/uploads	500	{"error":"нет места"}
+')"
+    _out="$(MOCK_CURL_LOG="$CURL_LOG" MOCK_CURL_ROUTES="$_routes"         REMOTE_RETRY_SECONDS=0         run_script_out             'remote_enabled="yes"'             'remote_endpoint="http://mock.invalid/v1"'             'remote_api_key="k"'             'remote_on_failure="local"')"
+    assert_contains "причина отката названа"     "считаем локально"   "$_out"
+    assert_contains "счётчик в сводке"           "Посчитано локально" "$_out"
+    if [ -f "$FFMPEG_LOG" ] && grep -qF -- "-c:v libx264" "$FFMPEG_LOG"; then
+        pass "файл действительно посчитан локальным ffmpeg"
+    else
+        fail "файл действительно посчитан локальным ffmpeg" "вызов ffmpeg с -c:v" "вызова нет"
+    fi
+
+    # Умолчание abort обязано остаться прежним поведением до буквы.
+    rm -f "$CURL_LOG" "$FFMPEG_LOG"
+    _out="$(MOCK_CURL_LOG="$CURL_LOG" MOCK_CURL_ROUTES="$_routes"         run_script_out             'remote_enabled="yes"'             'remote_endpoint="http://mock.invalid/v1"'             'remote_api_key="k"')"
+    assert_not_contains "abort не откатывается" "считаем локально" "$_out"
+    assert_contains     "abort сообщает об ошибке" "Ошибки:" "$_out"
+    if [ -f "$FFMPEG_LOG" ] && grep -qF -- "-c:v libx264" "$FFMPEG_LOG"; then
+        fail "abort не зовёт локальный ffmpeg для кодирования" "вызова нет" "вызов есть"
+    else
+        pass "abort не зовёт локальный ffmpeg для кодирования"
+    fi
+else
+    skip "on_failure = local" "ffmpeg не установлен для создания тестового файла"
+fi
+rm -f "$CURL_LOG"
+
+# ══════════════════════════════════════════════════════════════
+suite "remote: без локального ffmpeg прогон не обрывается"
+# ══════════════════════════════════════════════════════════════
+# Заявленный сценарий «тонкий клиент»: слабая машина гонит пакет, не имея ffmpeg
+# вовсе. Проверка ffmpeg стоит раньше, чем что-либо знает про [remote], и раньше
+# обрывала запуск. Отключённое при этом обязано быть названо вслух.
+_out="$(MOCK_CURL_LOG="$CURL_LOG" MOCK_CURL_CODE=200     MOCK_CURL_BODY='{"args_version":"1","chunk_size":1048576}'     run_script_out         'ffmpeg="/nonexistent/ffmpeg-does-not-exist"'         'remote_enabled="yes"'         'remote_endpoint="http://mock.invalid/v1"'         'remote_api_key="k"'         'dry_run="yes"')"
+assert_contains "прогон продолжен"       "Удалённый бэкенд включён" "$_out"
+assert_contains "об отключённом сказано" "Без локального ffmpeg отключены" "$_out"
+
+# split_by_silence без ffmpeg — явный отказ, а не тихое разбиение не там.
+_out="$(MOCK_CURL_LOG="$CURL_LOG" MOCK_CURL_CODE=200     MOCK_CURL_BODY='{"args_version":"1","chunk_size":1048576}'     run_script_out         'ffmpeg="/nonexistent/ffmpeg-does-not-exist"'         'remote_enabled="yes"'         'remote_endpoint="http://mock.invalid/v1"'         'remote_api_key="k"'         'split_by_silence="yes"'         'length_coding=":+:00-05-00"')"
+assert_contains "split_by_silence отклонён явно" "требует локального ffmpeg" "$_out"
+
+# Локальный режим без ffmpeg обязан отказать: считать нечем.
+_out="$(run_script_out         'ffmpeg="/nonexistent/ffmpeg-does-not-exist"'         'remote_enabled="yes"'         'remote_endpoint="http://mock.invalid/v1"'         'remote_api_key="k"'         'copy_codecs="yes"')"
+assert_contains "локальный режим без ffmpeg отвергнут" "считается локально" "$_out"
 rm -f "$CURL_LOG"
 
 # ── Cleanup ───────────────────────────────────────────────────

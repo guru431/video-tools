@@ -31,9 +31,20 @@ profiles=(
   "битрейт вместо quality|bitrate"
   "поворот и скорость|rotate_speed"
   "прожиг субтитров со стилем|subs"
+  # Единственное свободное текстовое поле, уезжающее на службу, — subtitles_style,
+  # и оно единственное проходит через экранирование. Профиль выше подавал
+  # «FontName=Arial,FontSize=24» — ни `\`, ни `"`, ни `/`, ни кириллицы, то есть
+  # обходил стороной ровно ту функцию, которая эти строки преобразует. Значение
+  # ниже пишет человек руками, и `\` в ASS/SSA законен.
+  "стиль со спецсимволами|subs_escapes"
   "GPU-пресеты|gpu"
   "звук без перекодирования|audio_copy"
 )
+
+# Одно значение на обе платформы: `\` (законен в ASS/SSA), `"`, `/` и кириллица.
+# Держим в переменной, чтобы SH и PS1 получили БУКВАЛЬНО одну и ту же строку —
+# иначе тест сравнивал бы не экранирование, а два разных входа.
+STYLE_ESCAPES='Font\Name="Шрифт",Path=C:\a/b\c'
 
 sh_vars() {
   set_video_codec="libx264"
@@ -58,6 +69,7 @@ sh_vars() {
     bitrate)      video_quality_status="-"; video_bitrate_status="+" ;;
     rotate_speed) video_rotation_status="+"; playback_speed_status="+"; playback_speed_value="1.75" ;;
     subs)         video_subtitles_status="+"; subtitles_style="FontName=Arial,FontSize=24" ;;
+    subs_escapes) video_subtitles_status="+"; subtitles_style="$STYLE_ESCAPES" ;;
     gpu)          gpu_preset_status="+"; gpu_tune_status="+"; gpu_rc_status="+" ;;
     audio_copy)   audio_codec_status="-" ;;
   esac
@@ -88,6 +100,10 @@ PSEOF
     bitrate)      echo '$video_quality_status="-"; $video_bitrate_status="+"' ;;
     rotate_speed) echo '$video_rotation_status="+"; $playback_speed_status="+"; $playback_speed_value="1.75"' ;;
     subs)         echo '$video_subtitles_status="+"; $subtitles_style="FontName=Arial,FontSize=24"' ;;
+    subs_escapes) echo '$video_subtitles_status="+"'
+                  # Одинарные кавычки PS1 обязаны дойти до PowerShell, поэтому
+                  # printf, а не echo: '' внутри bash-строки схлопывается.
+                  printf '$subtitles_style = %s%s%s\n' "'" "$STYLE_ESCAPES" "'" ;;
     gpu)          echo '$gpu_preset_status="+"; $gpu_tune_status="+"; $gpu_rc_status="+"' ;;
     audio_copy)   echo '$audio_codec_status="-"' ;;
   esac
@@ -103,7 +119,11 @@ for entry in "${profiles[@]}"; do
     sh_op="$(printf '%s' "$sh_out" | head -1)"
     sh_params="$(printf '%s' "$sh_out" | tail -1)"
     ps_script="$(ps_vars "$key")"
+    # Консоль PowerShell по умолчанию отдаёт вывод в OEM-кодировке (866), и
+    # кириллица в значении приходит в bash мусором: сравнение строк целиком
+    # ловило бы кодировку вместо экранирования.
     ps_res="$("$PS_BIN" -NoProfile -NonInteractive -Command "
+      [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
       . '$MODULE'
       $ps_script
       \$r = Get-RemoteOpForConfig $1 $2
@@ -115,6 +135,23 @@ for entry in "${profiles[@]}"; do
     assert_eq "$name ($1/$2): операция" "$sh_op" "$ps_op"
     assert_eq "$name ($1/$2): параметры" "$sh_params" "$ps_params"
   done
+done
+
+# ══════════════════════════════════════════════════════════════
+suite "remote: паритет нормализации адреса SH ↔ PS1"
+# ══════════════════════════════════════════════════════════════
+# Нормализация жила в run-файлах, а этот тест смотрел только на сборку JSON —
+# и расхождение прошло мимо: `${x%/}` снимал ОДИН хвостовой слэш, TrimEnd — все,
+# а Trim пробелов был только в GUI. Теперь функция одна на платформу, и её
+# равенство сверяется здесь, а не подразумевается.
+for _ep in "http://h/v1" "http://h/v1/" "http://h/v1//" "  http://h/v1  " " http://h/v1// " "http://h" ""; do
+  sh_norm="$(remote_normalize_endpoint "$_ep")"
+  ps_norm="$("$PS_BIN" -NoProfile -NonInteractive -Command "
+    . '$MODULE'
+    Write-Output ('[' + (Format-RemoteEndpoint '$_ep') + ']')
+  " 2>&1 | tr -d '\r' | head -1)"
+  ps_norm="${ps_norm#[}"; ps_norm="${ps_norm%]}"
+  assert_eq "нормализация «$_ep»" "$sh_norm" "$ps_norm"
 done
 
 summary

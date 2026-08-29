@@ -24,8 +24,13 @@ else
 fi
 
 suite "remote: экранирование JSON"
-assert_eq "кавычка"     'a\"b'   "$(remote_json_escape 'a"b')"
-assert_eq "обратный слэш" 'a\b' "$(remote_json_escape 'a\b')"
+# Прежняя версия этого assert'а закрепляла ДЕФЕКТ: она ожидала, что обратный
+# слэш останется одиночным. В JSON одиночный `\` перед буквой — невалидная
+# escape-последовательность, и служба обязана отвергнуть тело. Подробный разбор
+# и профили с `/`, кириллицей и путями Windows — в test_21.
+assert_eq "кавычка"       'a\"b'  "$(remote_json_escape 'a"b')"
+assert_eq "обратный слэш" 'a\\b'  "$(remote_json_escape 'a\b')"
+assert_eq "слэш не теряется" 'a/\\b' "$(remote_json_escape 'a/\b')"
 
 # Минимальный набор переменных, какой даёт FFmpeg_Converter_script.sh после парсинга.
 _setup_cfg() {

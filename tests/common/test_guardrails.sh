@@ -608,6 +608,74 @@ done
 assert_empty "нет BRE-альтернации '\\|' в sed (BSD sed её не понимает)" "$_sed_alt"
 
 # ══════════════════════════════════════════════════════════════
+suite "функции, печатающие в stdout, не зовутся через \$( )"
+# ══════════════════════════════════════════════════════════════
+# Класс дефекта, сработавший в этом проекте дважды. Шапка remote_client.sh
+# разбирает его на примере remote_http («подстановка команд выполнит функцию в
+# подоболочке»), а соседний remote_upload в него же и провалился: печатал
+# прогресс-бар и одновременно возвращал upload_id через stdout — служба получала
+# идентификатор вместе с баром и обязана была отвечать 400 на каждом файле.
+# Тест этого не увидел, потому что подменил show_progress_bar пустышкой.
+#
+# Проверка статическая и потому не зависит от того, что подменили моки: строим
+# транзитивное замыкание «функция печатает» от корневого набора и запрещаем
+# любое её появление внутри $( ). Три прохода: цепочки глубже трёх в этих
+# файлах нет (show_progress_bar → remote_report_upload → remote_upload).
+_scan_sources=()
+for _s in "$PROJECT_DIR"/ffmpeg/*.sh "$PROJECT_DIR"/yt-dlp/*.sh; do
+    [ -f "$_s" ] && _scan_sources+=("$_s")
+done
+
+# Все объявленные функции — чтобы рёбра графа вызовов не забивались именами
+# переменных. Полный перебор «функция × печатающая» на каждом проходе стоил бы
+# десятки тысяч форков grep; здесь два прохода awk и замыкание в памяти.
+_all_fns="$(grep -hoE '^[a-z_][a-z0-9_]*\(\) \{' "${_scan_sources[@]}" | sed 's/() {$//' | sort -u | tr '\n' ' ')"
+_fn_edges="$(awk -v known=" $_all_fns " '
+    /^[a-z_][a-z0-9_]*\(\) \{/ { fn = $0; sub(/\(\) \{.*/, "", fn); next }
+    /^\}/ { fn = ""; next }
+    fn != "" {
+        line = $0
+        sub(/#.*/, "", line)
+        n = split(line, tok, /[^A-Za-z0-9_]+/)
+        for (i = 1; i <= n; i++) {
+            if (tok[i] == "" || tok[i] == fn) continue
+            if (index(known, " " tok[i] " ") > 0) print fn "\t" tok[i]
+        }
+    }
+' "${_scan_sources[@]}" | sort -u)"
+
+_printers=" show_progress_bar log_msg log_info log_warn log_error "
+_changed=1
+while [ "$_changed" = "1" ]; do
+    _changed=0
+    while IFS=$'\t' read -r _caller _callee; do
+        [ -n "$_caller" ] || continue
+        case "$_printers" in *" $_caller "*) continue ;; esac
+        case "$_printers" in *" $_callee "*) _printers="$_printers$_caller "; _changed=1 ;; esac
+    done <<< "$_fn_edges"
+done
+
+# Одна альтернация на файл вместо grep'а на каждую функцию.
+_printers_re="$(printf '%s' "$_printers" | sed -e 's/^ //' -e 's/ $//' -e 's/ /|/g')"
+_subst_offenders=""
+for _s in "${_scan_sources[@]}"; do
+    _hit="$(grep -v '^[[:space:]]*#' "$_s" | grep -oE "\\\$\([[:space:]]*($_printers_re)([[:space:]]|\))" | head -1)"
+    [ -n "$_hit" ] && _subst_offenders="$_subst_offenders $(basename "$_s"):$_hit"
+done
+assert_empty "ни одна печатающая функция не вызвана через \$( )" "$_subst_offenders"
+
+# Замыкание обязано что-то находить: пустой список печатающих функций сделал бы
+# проверку выше вечнозелёной (ровно тот дефект, что и у барьера приватности).
+case "$_printers" in
+    *" remote_upload "*) pass "замыкание доходит до remote_upload (через remote_report_upload)" ;;
+    *) fail "замыкание доходит до remote_upload" "remote_upload в списке печатающих" "$_printers" ;;
+esac
+case "$_printers" in
+    *" remote_submit "*) pass "замыкание доходит до remote_submit (через log_msg)" ;;
+    *) fail "замыкание доходит до remote_submit" "remote_submit в списке печатающих" "$_printers" ;;
+esac
+
+# ══════════════════════════════════════════════════════════════
 suite "приватность: адрес и ключ службы не в репозитории"
 # ══════════════════════════════════════════════════════════════
 # Литеральный адрес службы или ключ в коммитимом файле — это утечка, а

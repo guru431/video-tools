@@ -53,8 +53,10 @@ set "log_file=ffmpeg_convert.log"
 set "remote_enabled=no"
 set "remote_endpoint="
 set "remote_api_key="
+set "remote_api_key_command="
 set "remote_prefer=auto"
 set "remote_wait_timeout=1800"
+set "remote_on_failure=abort"
 
 :: --- Чтение config.ini ---
 set "CONFIG_FILE=%~dp0config.ini"
@@ -207,8 +209,10 @@ if /i "!_section!"=="remote" (
 	if /i "!_key!"=="enabled" set "remote_enabled=!_val!"
 	if /i "!_key!"=="endpoint" set "remote_endpoint=!_val!"
 	if /i "!_key!"=="api_key" set "remote_api_key=!_val!"
+	if /i "!_key!"=="api_key_command" set "remote_api_key_command=!_val!"
 	if /i "!_key!"=="prefer" set "remote_prefer=!_val!"
 	if /i "!_key!"=="wait_timeout" set "remote_wait_timeout=!_val!"
+	if /i "!_key!"=="on_failure" set "remote_on_failure=!_val!"
 )
 exit /b
 

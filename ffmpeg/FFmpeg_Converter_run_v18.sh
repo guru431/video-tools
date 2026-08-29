@@ -148,11 +148,14 @@ silence_threshold="$(read_config "silence_threshold" "split" "-30dB")"
 remote_enabled="$(read_config "enabled" "remote" "no")"
 remote_endpoint="$(read_config "endpoint" "remote" "")"
 remote_api_key="$(read_config "api_key" "remote" "")"
+remote_api_key_command="$(read_config "api_key_command" "remote" "")"
 remote_prefer="$(read_config "prefer" "remote" "auto")"
 remote_wait_timeout="$(read_config "wait_timeout" "remote" "1800")"
-# Хвостовой слэш в адресе даёт "…/v1//jobs" — служба отвечает 404 на путь,
-# который человеку выглядит верным. Снимаем здесь, в единственном месте чтения.
-remote_endpoint="${remote_endpoint%/}"
+remote_on_failure="$(read_config "on_failure" "remote" "abort")"
+# Нормализация адреса живёт в ОДНОМ месте на платформу — remote_normalize_endpoint
+# в remote_client.sh, вызывается из remote_preflight. Здесь её нет намеренно:
+# раньше `${x%/}` снимал один хвостовой слэш, TrimEnd в PS1 — все, а Trim пробелов
+# был только в GUI, и один config.ini давал разные адреса на разных входах.
 
 save_old_extension="$(read_config "save_old_extension" "other" "no")"
 format_files_in="$(read_config "format_files_in" "other" "3gp,avi,flv,mp4,mpg,mpeg,wmv,mov,asf,mkv,m4v,webm,mts,vob,m4b,mp3,wma,ogg,m4a,aac")"
@@ -176,6 +179,21 @@ esac
 # разойтись с оригиналом: в ней не было подстановки ${ENV_VAR}, то есть тест «парсера
 # конфига» эту ветку не проверял вовсе, а сломать её в production можно было незаметно.
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+	# Единственный флаг командной строки. Боевая проверка удалённого пути на
+	# пробном ролике: иначе первый настоящий контакт со службой происходит на
+	# пакете из двухсот файлов, и всё, что расходится на стыке, выясняется там же.
+	for _arg in "$@"; do
+		case "$_arg" in
+			--remote-selftest) export FFCONV_REMOTE_SELFTEST=1 ;;
+			-h|--help)
+				echo "Использование: $(basename "${BASH_SOURCE[0]}") [--remote-selftest]"
+				echo "  --remote-selftest  прогнать удалённый путь целиком на пробном ролике и выйти"
+				exit 0 ;;
+			*)
+				echo "Неизвестный аргумент: $_arg (см. --help)" >&2
+				exit 1 ;;
+		esac
+	done
 	if [ ! -f "${SCRIPT_DIR}/FFmpeg_Converter_script.sh" ]; then
 		echo "Ошибка: не найден FFmpeg_Converter_script.sh рядом с этим файлом." >&2
 		exit 1

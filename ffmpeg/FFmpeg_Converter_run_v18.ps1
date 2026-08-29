@@ -124,13 +124,17 @@ $split_by_silence  = Read-Config "split_by_silence"  "split" "no"
 $silence_duration  = Read-Config "silence_duration"  "split" "2.0"
 $silence_threshold = Read-Config "silence_threshold" "split" "-30dB"
 
-# Хвостовой слэш в адресе даёт "…/v1//jobs" — служба отвечает 404 на путь,
-# который человеку выглядит верным. Снимаем здесь, в единственном месте чтения.
-$remote_enabled      = Read-Config "enabled" "remote" "no"
-$remote_endpoint     = (Read-Config "endpoint" "remote" "").TrimEnd('/')
-$remote_api_key      = Read-Config "api_key" "remote" ""
-$remote_prefer       = Read-Config "prefer" "remote" "auto"
-$remote_wait_timeout = Read-Config "wait_timeout" "remote" "1800"
+# Нормализация адреса живёт в ОДНОМ месте на платформу — Format-RemoteEndpoint
+# в remote_client.ps1, вызывается из Invoke-RemotePreflight. Здесь её нет
+# намеренно: раньше `${x%/}` в .sh снимал один хвостовой слэш, TrimEnd здесь —
+# все, а Trim пробелов был только в GUI, и один config.ini давал разные адреса.
+$remote_enabled         = Read-Config "enabled" "remote" "no"
+$remote_endpoint        = Read-Config "endpoint" "remote" ""
+$remote_api_key         = Read-Config "api_key" "remote" ""
+$remote_api_key_command = Read-Config "api_key_command" "remote" ""
+$remote_prefer          = Read-Config "prefer" "remote" "auto"
+$remote_wait_timeout    = Read-Config "wait_timeout" "remote" "1800"
+$remote_on_failure      = Read-Config "on_failure" "remote" "abort"
 
 $save_old_extension = Read-Config "save_old_extension" "other" "no"
 $format_files_in    = Read-Config "format_files_in"    "other" "3gp,avi,flv,mp4,mpg,mpeg,wmv,mov,asf,mkv,m4v,webm,mts,vob,m4b,mp3,wma,ogg,m4a,aac"
@@ -151,6 +155,10 @@ if (-not [System.IO.Path]::IsPathRooted($log_file)) { $log_file = Join-Path $PSS
 # (BASH_SOURCE == $0) и с $env:YTDLP_TEST в yt-dlp GUI. Копия успела разойтись с
 # оригиналом, а тест паритета SH↔PS1 и вовсе сравнивал копию с копией.
 if ($env:FFCONV_TEST -ne '1') {
+	# Единственный флаг командной строки. Боевая проверка удалённого пути на
+	# пробном ролике: иначе первый настоящий контакт со службой происходит на
+	# пакете из двухсот файлов, и всё, что расходится на стыке, выясняется там же.
+	if ($args -contains '--remote-selftest') { $env:FFCONV_REMOTE_SELFTEST = '1' }
 	$scriptPath = Join-Path $PSScriptRoot "FFmpeg_Converter_script.ps1"
 	# -LiteralPath: каталог установки с [ ] ? * (video[1] после распаковки архива)
 	# иначе трактуется как wildcard — «не найден» при существующем файле.

@@ -73,10 +73,22 @@ if ([string]::IsNullOrWhiteSpace($folder_destination)) {
 # CreateDirectory идемпотентен — предварительный Test-Path не нужен
 New-DirLiteral $folder_destination
 
-try { & $ffmpeg -version 2>&1 | Out-Null } catch {
-	Write-Host "`n[ОШИБКА] ffmpeg не найден: $ffmpeg`n"
-	Pause-Prompt "Нажмите [Enter], чтобы выйти..."
-	exit 1
+# ffmpeg обязателен ровно тогда, когда именно он и считает. При
+# [remote] enabled = yes считает служба, и требовать локальный ffmpeg значило бы
+# закрывать заявленный сценарий «тонкий клиент». Отсутствие НЕ бесплатно: без
+# него недоступны проверка скачанного результата и определение длительности —
+# поэтому говорим вслух, а ниже отдельно отказываем там, где без него нельзя.
+$ffmpeg_available = $true
+try { & $ffmpeg -version 2>&1 | Out-Null } catch { $ffmpeg_available = $false }
+if (-not $ffmpeg_available) {
+	if ($remote_enabled -eq 'yes') {
+		Write-Host "`n[ПРЕДУПРЕЖДЕНИЕ] ffmpeg не найден ($ffmpeg), но [remote] enabled = yes — кодирование считает служба."
+		Write-Host "[ПРЕДУПРЕЖДЕНИЕ] Без локального ffmpeg отключены: проверка скачанного результата и определение длительности.`n"
+	} else {
+		Write-Host "`n[ОШИБКА] ffmpeg не найден: $ffmpeg`n"
+		Pause-Prompt "Нажмите [Enter], чтобы выйти..."
+		exit 1
+	}
 }
 
 # --- Парсинг настроек (формат :+:value или :-:value) ---
@@ -118,7 +130,7 @@ $set_video_resolution = if ($video_resolution_status -eq "+") { $video_resolutio
 
 # --- Многопоточность ---
 $threads = if ($multithreads_status -eq "+") { $multithreads_value } else { "1" }
-# parallel_files реализован ТОЛЬКО в .sh (там `xargs -P`); в PS1 и CMD параллельной
+# parallel_files реализован ТОЛЬКО в .sh (там пул фоновых подоболочек); в PS1 и CMD параллельной
 # ветки нет. Раньше значение просто молча игнорировалось: один и тот же config.ini на
 # Linux давал параллель, на Windows — последовательную обработку, и нигде об этом не
 # говорилось. Считать $parallel_count незачем — говорим вслух и работаем последовательно.
@@ -502,9 +514,49 @@ function Get-PartialPath {
 	return (Join-Path $dir ".ffconv-partial-$leaf")
 }
 
+# Прогресс отправки в GUI. Объявлено ДО дот-сорса модуля намеренно: модуль
+# определяет свою версию (Write-Progress) под guard'ом «функции ещё нет», и
+# Write-Progress из фонового runspace до формы не доходит — фаза отправки в GUI
+# оставалась без индикатора вовсе, хотя на файле в 3 ГБ это и есть долгая часть.
+# Комментарий в модуле обещал это переопределение, а его не существовало.
+function Write-RemoteUploadProgress {
+	param([int64]$Done, [int64]$Total)
+	if ($Total -le 0) { return }
+	$pct = [int]($Done * 100 / $Total)
+	if ($guiProgressFile) {
+		Write-GUIProgress -FilePercent $pct -CurrentFile $script:_remoteUploadName -Phase 'отправка'
+	} else {
+		Write-Progress -Activity "Отправка на сервер" -PercentComplete $pct
+	}
+}
+
 # Удалённый бэкенд — отдельный модуль: только объявляет функции, ничего не делает сам.
 $_remoteModule = Join-Path $PSScriptRoot 'remote_client.ps1'
 if (Test-Path -LiteralPath $_remoteModule) { . $_remoteModule }
+
+# --- Откат на локальный ffmpeg: только по ключу и только шумно ---
+# Отказ от МОЛЧАЛИВОГО отката остаётся в силе и обоснован: тихий переход на
+# процессор на двухстах файлах неотличим от зависания. Но между «тихо считать
+# локально» и «бросить остаток пакета, если служба легла на сотом файле» есть
+# третье поведение, и выбирает его пользователь, а не мы за него.
+#
+# Умолчание [remote] on_failure = abort — прежнее поведение до буквы. При
+# on_failure = local каждый откат печатает причину, попадает в отдельный счётчик
+# сводки и делает код возврата ненулевым.
+$script:countLocalFallback = 0
+function Test-RemoteFallbackAllowed {
+	param([string]$Name, [string]$Reason)
+	if ($remote_on_failure -ne 'local') { return $false }
+	# Тонкий клиент без ffmpeg откатываться некуда — честнее сказать это вслух.
+	if (-not $ffmpeg_available) {
+		Log-Msg "WARN" "${Name}: $Reason, а локального ffmpeg нет — откат невозможен"
+		return $false
+	}
+	Write-Host "[ПРЕДУПРЕЖДЕНИЕ] ${Name}: $Reason — считаем локально (on_failure = local)."
+	Log-Msg "WARN" "${Name}: $Reason — откат на локальный ffmpeg"
+	$script:countLocalFallback++
+	return $true
+}
 
 # --- Публикация результата: общая для локального и удалённого путей ---
 # Логика обязана существовать в одном экземпляре: разойдись она между путями,
@@ -522,8 +574,16 @@ function Publish-EncodedResult {
 	if ($Verify) {
 		$valid = $false
 		if ((Test-Path -LiteralPath $Tmp) -and (Get-Item -LiteralPath $Tmp).Length -gt 0) {
-			& $ffmpeg -nostdin -v error -i $Tmp -f null - 2>$null | Out-Null
-			$valid = ($LASTEXITCODE -eq 0)
+			# Без локального ffmpeg декодировать нечем: остаётся проверка на
+			# непустой файл (она уже прошла выше). Пропускать её молча нельзя —
+			# оборванная загрузка выглядела бы успехом.
+			if (-not $ffmpeg_available) {
+				Log-Msg "WARN" "$($File.Name): без локального ffmpeg результат проверен только по размеру"
+				$valid = $true
+			} else {
+				& $ffmpeg -nostdin -v error -i $Tmp -f null - 2>$null | Out-Null
+				$valid = ($LASTEXITCODE -eq 0)
+			}
 		}
 		if (-not $valid) {
 			Log-Msg "FAIL" "$($File.Name): результат не прошёл проверку"
@@ -625,9 +685,13 @@ function Write-GUIProgress {
 	# F17. state/exitCode/message — контракт с GUI. Раньше воркер писал финальное
 	# «Готово» независимо от countFail, а `exit 1` не создаёт ErrorRecord, поэтому GUI
 	# не мог отличить успешный батч от провального и показывал «Готово» после ошибок.
+	# $Phase — подпись фазы удалённого пути (отправка → очередь/ожидание карты →
+	# кодирование → скачивание). Локальный путь состоит из одной фазы и подписи
+	# не ставит; удалённый без неё показывал «ничего не происходит» минутами,
+	# что неотличимо от зависания.
 	param([int]$FilePercent = 0, [string]$CurrentFile = "", [string]$Command = "",
 	      [ValidateSet("running","success","failed","cancelled")][string]$State = "running",
-	      [int]$ExitCode = -1, [string]$Message = "")
+	      [int]$ExitCode = -1, [string]$Message = "", [string]$Phase = "")
 	if (-not $guiProgressFile) { return }
 	if ($Command) { $script:_lastCommand = $Command }
 	$totalPct = if ($script:totalFiles -gt 0) { [int](($script:fileNum - 1 + $FilePercent / 100) * 100 / $script:totalFiles) } else { 0 }
@@ -640,6 +704,7 @@ function Write-GUIProgress {
 		fileNum      = $script:fileNum
 		totalFiles   = $script:totalFiles
 		currentFile  = if ($CurrentFile) { $CurrentFile } else { "" }
+		phase        = $Phase
 		ok           = $script:countOk
 		fail         = $script:countFail
 		skip         = $script:countSkip
@@ -1119,53 +1184,93 @@ function Encode-File {
 		# Удалённый бэкенд подменяет РОВНО этот участок: сборку argv и запуск
 		# ffmpeg. Всё до и после остаётся общим — поэтому один config.ini даёт
 		# один результат на обоих путях.
-		if ($remote_active -eq 'yes') {
+		#
+		# $partRemote — решение ДЛЯ ЭТОЙ ЧАСТИ, а не для прогона: при
+		# [remote] on_failure = local неудача службы переводит часть на локальный
+		# ffmpeg, и она обязана провалиться в тот же самый код, что и обычный
+		# локальный путь. Дубль локальной ветки означал бы два разных
+		# «кодирования» из одного config.ini.
+		$partRemote = ($remote_active -eq 'yes')
+		$partDone = $false
+		if ($partRemote) {
 			$rLen = 0
 			if ($current_set_length -match '^-t\s+(\d+)') { $rLen = [int]$Matches[1] }
 			$rMap = Get-RemoteOpForConfig ([int]$b) $rLen
 			if ($null -eq $rMap) {
 				Log-Msg "FAIL" "$($file.Name): кодек $set_video_codec служба не поддерживает"
 				$script:anyFail = $true; $script:countFail++
-			} else {
-				if (-not $script:remoteUploadId) {
-					Log-Msg "INFO" "Отправка на сервер: $($file.Name)"
-					$script:remoteUploadId = Send-RemoteUpload $full_path
+				$partRemote = $false; $partDone = $true
+			} elseif (-not $script:remoteUploadId) {
+				Log-Msg "INFO" "Отправка на сервер: $($file.Name)"
+				$script:_remoteUploadName = $file.Name
+				# Sidecar рядом с manifest'ом: повторный запуск после обрыва
+				# доходит до GET /uploads/<id> с настоящим смещением вместо того,
+				# чтобы просить новую загрузку и лить гигабайты заново.
+				$script:RemoteUploadSidecar = "$manifest.upload"
+				$script:remoteUploadId = Send-RemoteUpload $full_path
+				$script:RemoteUploadSidecar = ''
+				if ($script:remoteUploadId) {
+					# Длительность из ответа службы — запасной источник для тонкого
+					# клиента без локального ffmpeg.
+					if ((-not $file_duration -or $file_duration -le 0) -and $script:RemoteUploadDuration) {
+						$file_duration = [int]([double]$script:RemoteUploadDuration)
+					}
 					$script:remoteSubId = ''
 					# Файл субтитров приходит той же дорогой, что видео: путей в
 					# параметрах служба не принимает по построению.
-					if ($script:remoteUploadId -and $sub_found -and $sub_file) {
+					if ($sub_found -and $sub_file) {
 						$script:remoteSubId = Send-RemoteUpload $sub_file
 					}
-				}
-				if (-not $script:remoteUploadId) {
-					Log-Msg "FAIL" "$($file.Name): загрузка не удалась"
-					$script:anyFail = $true; $script:countFail++
-				} elseif ($dry_run -eq 'yes') {
-					Invoke-RemoteDryRun $script:remoteUploadId $rMap.Op $rMap.Params $script:remoteSubId | Out-Null
 				} else {
-					$jobId = Submit-RemoteJob $script:remoteUploadId $rMap.Op $rMap.Params $script:remoteSubId
-					if (-not $jobId) {
-						Log-Msg "FAIL" "$($file.Name): служба отвергла задачу"
-						$script:anyFail = $true; $script:countFail++
+					if (Test-RemoteFallbackAllowed $file.Name "загрузка не удалась") {
+						$partRemote = $false
 					} else {
-						$startTime = Get-Date
-						$onProgress = {
-							param($pct, $label)
-							Write-GUIProgress -FilePercent $pct -CurrentFile $label
-						}
-						$onCancel = { $guiCancelFile -and (Test-Path -LiteralPath $guiCancelFile) }
-						$ok = (Wait-RemoteJob $jobId $file.Name $onProgress $onCancel) -and
-						      (Receive-RemoteResult $jobId $out_tmp)
-						if ($ok) {
-							Publish-EncodedResult $file $out_tmp $out_file $startTime $true | Out-Null
-						} else {
-							Log-Msg "FAIL" "$($file.Name)"
-							if (Test-Path -LiteralPath $out_tmp) { Remove-Item -LiteralPath $out_tmp -Force -ErrorAction SilentlyContinue }
-							$script:anyFail = $true; $script:countFail++
-						}
+						Log-Msg "FAIL" "$($file.Name): загрузка не удалась"
+						$script:anyFail = $true; $script:countFail++
+						$partRemote = $false; $partDone = $true
 					}
 				}
 			}
+		}
+
+		if ($partRemote -and $dry_run -eq 'yes') {
+			Invoke-RemoteDryRun $script:remoteUploadId $rMap.Op $rMap.Params $script:remoteSubId | Out-Null
+			$partDone = $true
+		} elseif ($partRemote) {
+			$jobId = Submit-RemoteJob $script:remoteUploadId $rMap.Op $rMap.Params $script:remoteSubId
+			if ($jobId) {
+				$startTime = Get-Date
+				$onProgress = {
+					param($pct, $label, $phase)
+					Write-GUIProgress -FilePercent $pct -CurrentFile $label -Phase $phase
+				}
+				$onCancel = { $guiCancelFile -and (Test-Path -LiteralPath $guiCancelFile) }
+				if ((Wait-RemoteJob $jobId $file.Name $onProgress $onCancel)) {
+					Write-GUIProgress -FilePercent 100 -CurrentFile $file.Name -Phase 'скачивание'
+					if (Receive-RemoteResult $jobId $out_tmp) {
+						Publish-EncodedResult $file $out_tmp $out_file $startTime $true | Out-Null
+						$partDone = $true
+					}
+				}
+				if (-not $partDone -and (Test-Path -LiteralPath $out_tmp)) {
+					Remove-Item -LiteralPath $out_tmp -Force -ErrorAction SilentlyContinue
+				}
+			}
+			# Не получилось — либо откат на локальный ffmpeg (шумный, по ключу),
+			# либо fail. Молчаливого отката здесь нет ни в одной ветке.
+			if (-not $partDone) {
+				if (Test-RemoteFallbackAllowed $file.Name "удалённое кодирование не удалось") {
+					$partRemote = $false
+				} else {
+					Log-Msg "FAIL" "$($file.Name)"
+					$script:anyFail = $true; $script:countFail++
+					$partDone = $true
+				}
+			}
+		}
+
+		if ($partDone) {
+			# Часть уже обработана удалённым путём (или явно провалена).
 		# D7. Dry-run
 		} elseif ($dry_run -eq "yes") {
 			Write-Host "[DRY-RUN] $ffmpeg $($ffmpegArgs -join ' ')"
@@ -1312,8 +1417,44 @@ if ($remote_enabled -eq 'yes') {
 	}
 	$remote_active = $script:remote_active
 	if ($remote_active -eq 'yes') {
+		if ($remote_on_failure -eq 'local' -and -not $ffmpeg_available) {
+			Write-Host "[ПРЕДУПРЕЖДЕНИЕ] on_failure = local, но локального ffmpeg нет: откатываться будет некуда."
+		}
+		# Границы «тонкого клиента». Разбиение по тишине читает границы у
+		# ЛОКАЛЬНОГО ffmpeg (silencedetect); брать их у службы отклонено спекой
+		# (раздел 3.1) как второй источник правды. Без ffmpeg честнее отказать
+		# явно, чем молча разбить файл не там.
+		if (-not $ffmpeg_available -and $split_by_silence -eq 'yes') {
+			Write-Host "[ОШИБКА] split_by_silence = yes требует локального ffmpeg (silencedetect), а он не найден."
+			Pause-Prompt "Нажмите [Enter], чтобы выйти..."
+			exit 1
+		}
 		Log-Msg "INFO" "Удалённый бэкенд включён: кодирование уходит на службу конвертации"
 	}
+	# Режим оказался локальным (merge/copy/frames/audio), а ffmpeg нет — дальше
+	# идти некуда, и сказать об этом надо здесь, а не падать на первом файле.
+	if ($remote_active -ne 'yes' -and -not $ffmpeg_available) {
+		Write-Host "`n[ОШИБКА] ffmpeg не найден ($ffmpeg), а этот режим считается локально.`n"
+		Pause-Prompt "Нажмите [Enter], чтобы выйти..."
+		exit 1
+	}
+}
+
+# --- Боевая самопроверка удалённого пути ---
+# Отдельный режим, а не часть прогона: он ничего не конвертирует и обязан
+# завершиться до того, как будет тронут хоть один файл пользователя.
+if ($env:FFCONV_REMOTE_SELFTEST -eq '1') {
+	if ($remote_enabled -ne 'yes') {
+		Write-Host "[ОШИБКА] --remote-selftest требует [remote] enabled = yes в config.ini."
+		exit 1
+	}
+	if (-not (Get-Command Invoke-RemoteSelftest -ErrorAction SilentlyContinue)) {
+		Write-Host "[ОШИБКА] Рядом со скриптом нет remote_client.ps1 — самопроверка невозможна."
+		exit 1
+	}
+	$_stRc = Invoke-RemoteSelftest
+	Pause-Prompt "Нажмите [Enter], чтобы выйти..."
+	exit $_stRc
 }
 
 # --- Основная логика ---
@@ -1401,6 +1542,9 @@ if (-not $guiProgressFile) {
 	Write-Host ("  Обработано:  {0} файлов" -f $script:countOk)
 	Write-Host ("  Пропущено:   {0} (уже существуют)" -f $script:countSkip)
 	Write-Host ("  Ошибки:      {0}" -f $script:countFail)
+	if ($script:countLocalFallback -gt 0) {
+		Write-Host ("  Посчитано локально: {0} (служба была недоступна)" -f $script:countLocalFallback)
+	}
 	Write-Host ("  Время:       {0}" -f $elapsedAllStr)
 	if ($script:totalInBytes -gt 0) {
 		function Format-Bytes($b) {
@@ -1428,5 +1572,9 @@ if (-not $guiProgressFile) {
 }
 
 # Exit code отражает наличие ошибок — cron/CI могут детектировать провал батча.
+# Откат на локальный ffmpeg тоже даёт ненулевой код: пользователь просил считать
+# на сервере, и то, что он получил результат другим способом, обязано быть видно
+# и в автоматике, а не только в сводке на экране.
 if ($script:countFail -gt 0) { exit 1 }
+if ($script:countLocalFallback -gt 0) { exit 1 }
 exit 0

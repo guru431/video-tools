@@ -85,7 +85,7 @@ for /f "tokens=1,2 delims=:" %%a in ("%gpu_tune%") do (set "gpu_tune_status=%%a"
 for /f "tokens=1,2 delims=:" %%a in ("%gpu_rc%") do (set "gpu_rc_status=%%a" & set "gpu_rc_value=%%b")
 for /f "tokens=1,2 delims=:" %%a in ("%playback_speed%") do (set "playback_speed_status=%%a" & set "playback_speed_value=%%b")
 
-rem parallel_files реализован ТОЛЬКО в .sh (там xargs -P); в CMD и PS1 параллельной
+rem parallel_files реализован ТОЛЬКО в .sh (там пул фоновых подоболочек); в CMD и PS1 параллельной
 rem ветки нет. Раньше ключ молча игнорировался: один config.ini на Linux давал
 rem параллель, на Windows — последовательную обработку, и об этом нигде не говорилось.
 if "!parallel_files_status!"=="+" if not "!parallel_files_value!"=="1" (

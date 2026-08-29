@@ -13,7 +13,7 @@ ffmpeg:
   rule: "read in run.sh AND run.cmd AND run.ps1"
   platforms: [sh, cmd, ps1]
   exceptions:
-    # Параллелизм файлов — только Bash (xargs -P); в .cmd/.ps1 игнорируется, но ключ
+    # Параллелизм файлов — только Bash (пул фоновых подоболочек); в .cmd/.ps1 игнорируется, но ключ
     # там всё равно присутствует (читается/логируется), поэтому в общем правиле остаётся.
     sh_only_behavior:
       - parallel_files
@@ -25,8 +25,10 @@ ffmpeg:
       - enabled
       - endpoint
       - api_key
+      - api_key_command
       - prefer
       - wait_timeout
+      - on_failure
 
 yt-dlp:
   # Нет мёртвых ключей: каждый читается хотя бы в .sh ИЛИ .ps1.

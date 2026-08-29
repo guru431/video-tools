@@ -45,10 +45,23 @@ if [ ! -d "$folder_destination" ]; then
 	fi
 fi
 
+# ffmpeg обязателен ровно тогда, когда именно он и считает. При
+# [remote] enabled = yes считает служба, и требовать локальный ffmpeg значило бы
+# закрывать заявленный сценарий «тонкий клиент»: слабая машина гонит пакет, не
+# имея ffmpeg вовсе. Отсутствие при этом НЕ бесплатно — без него недоступны
+# проверка скачанного результата и локальное определение длительности, поэтому
+# говорим об этом вслух, а ниже отдельно отказываем там, где без него нельзя.
+ffmpeg_available="yes"
 if ! command -v "$ffmpeg" &> /dev/null; then
-	echo -e "\n[ОШИБКА] ffmpeg не найден: $ffmpeg\n"
-	pause_prompt "Нажмите [Enter], чтобы выйти..."
-	exit 1
+	if [ "${remote_enabled:-no}" = "yes" ]; then
+		ffmpeg_available="no"
+		echo -e "\n[ПРЕДУПРЕЖДЕНИЕ] ffmpeg не найден ($ffmpeg), но [remote] enabled = yes — кодирование считает служба."
+		echo -e "[ПРЕДУПРЕЖДЕНИЕ] Без локального ffmpeg отключены: проверка скачанного результата и определение длительности.\n"
+	else
+		echo -e "\n[ОШИБКА] ffmpeg не найден: $ffmpeg\n"
+		pause_prompt "Нажмите [Enter], чтобы выйти..."
+		exit 1
+	fi
 fi
 
 # Удалённый бэкенд — отдельный модуль. Подключаем всегда: он ничего не делает
@@ -501,6 +514,19 @@ partial_path() { printf '%s/.ffconv-partial-%s' "$(dirname "$1")" "$(basename "$
 publish_result() {
 	local src="$1" tmp="$2" dst="$3" started="$4" verify="${5:-no}"
 	local elapsed=$(( $(date +%s) - started ))
+	# Без локального ffmpeg декодировать нечем: остаётся проверка на непустой
+	# файл. Пропускать её молча нельзя — оборванная загрузка выглядит успехом.
+	if [ "$verify" = "yes" ] && [ "$ffmpeg_available" != "yes" ]; then
+		verify="size-only"
+		log_msg "WARN" "$(basename "$src"): без локального ffmpeg результат проверен только по размеру"
+	fi
+	if [ "$verify" = "size-only" ] && [ ! -s "$tmp" ]; then
+		log_msg "FAIL" "$(basename "$src"): скачан пустой результат"
+		rm -f "$tmp"
+		any_fail="yes"
+		echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+		return 1
+	fi
 	if [ "$verify" = "yes" ]; then
 		if [ ! -s "$tmp" ] || ! "$ffmpeg" -nostdin -v error -i "$tmp" -f null - 2>/dev/null; then
 			log_msg "FAIL" "$(basename "$src"): результат не прошёл проверку"
@@ -528,6 +554,30 @@ publish_result() {
 	any_fail="yes"
 	echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
 	return 1
+}
+
+# --- Откат на локальный ffmpeg: только по ключу и только шумно ---
+# Отказ от МОЛЧАЛИВОГО отката остаётся в силе и обоснован: тихий переход на
+# процессор на двухстах файлах неотличим от зависания. Но между «тихо считать
+# локально» и «бросить остаток пакета, если служба легла на сотом файле» есть
+# третье поведение, и выбирает его пользователь, а не мы за него.
+#
+# Умолчание [remote] on_failure = abort — прежнее поведение до буквы. При
+# on_failure = local каждый откат печатает причину, попадает в отдельный счётчик
+# сводки и делает код возврата ненулевым: тишины по-прежнему нет ни в одной точке,
+# снимается только потеря работы.
+remote_fallback_allowed() {
+	local src="$1" reason="$2"
+	[ "${remote_on_failure:-abort}" = "local" ] || return 1
+	# Тонкий клиент без ffmpeg откатываться некуда — честнее сказать это вслух.
+	if ! command -v "$ffmpeg" >/dev/null 2>&1; then
+		log_msg "WARN" "$(basename "$src"): $reason, а локального ffmpeg нет — откат невозможен"
+		return 1
+	fi
+	echo "[ПРЕДУПРЕЖДЕНИЕ] $(basename "$src"): $reason — считаем локально (on_failure = local)."
+	log_msg "WARN" "$(basename "$src"): $reason — откат на локальный ffmpeg"
+	echo "local" > "$(mktemp "$results_dir/lf_XXXXXXXX")"
+	return 0
 }
 
 # --- Manifest готовности: input → outputs → completion state ---
@@ -613,12 +663,20 @@ case "$canon_destination" in
 esac
 
 # --- J1. Прогресс-бар в CLI ---
+# Третий аргумент — ПОДПИСЬ ФАЗЫ, и она отделена от имени файла намеренно.
+# Локальный путь состоит из одной фазы, поэтому подписи там нет; удалённый — из
+# четырёх (отправка → очередь/ожидание карты → кодирование → скачивание), и
+# раньше каждая называла себя по-своему: слово «отправка» подставлялось ВМЕСТО
+# имени файла, ожидание карты печатало свою строку поверх бара, а скачивание не
+# показывало ничего. На файле в 3 ГБ «ничего не происходит» длится минуты и
+# неотличимо от зависания — ровно того, ради недопущения которого писалась вся
+# политика отказов удалённого пути.
 show_progress_bar() {
-	local pct=$1 label="$2"
+	local pct=$1 label="$2" phase="${3:-}"
 	local filled=$((pct / 2)) empty=$((50 - pct / 2)) bar=""
 	for ((j=0; j<filled; j++)); do bar="${bar}#"; done
 	for ((j=0; j<empty; j++)); do bar="${bar}."; done
-	printf "\r  [%s] %3d%%  %s" "$bar" "$pct" "$(basename "$label")"
+	printf "\r  [%s] %3d%%  %s%s" "$bar" "$pct" "$(basename "$label")" "${phase:+  · $phase}"
 }
 
 # --- Функция кодирования одного файла ---
@@ -775,8 +833,13 @@ encode_file() {
 	# новыми настройками (ffmpeg -y перезапишет). Иначе валидный файл пропускается.
 	if [ "$overwrite_existing" != "yes" ]; then
 		if [ -f "${folder_destination}${file_path}${file_name}${part_suffix_known}.${current_format_out}" ]; then
-			# E3. Проверка валидности существующего файла
-			if "$ffmpeg" -nostdin -v error -i "${folder_destination}${file_path}${file_name}${part_suffix_known}.${current_format_out}" -f null - 2>/dev/null; then
+			# E3. Проверка валидности существующего файла. Без локального ffmpeg
+			# проверить нечем, и «не прошёл проверку» означало бы УДАЛЕНИЕ готового
+			# файла из-за отсутствия инструмента — считаем такой файл готовым.
+			if [ "$ffmpeg_available" != "yes" ]; then
+				echo "skip" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+				return
+			elif "$ffmpeg" -nostdin -v error -i "${folder_destination}${file_path}${file_name}${part_suffix_known}.${current_format_out}" -f null - 2>/dev/null; then
 				echo "skip" > "$(mktemp "$results_dir/r_XXXXXXXX")"
 				return
 			else
@@ -788,8 +851,10 @@ encode_file() {
 
 	# E4 + J1. Один вызов ffmpeg -i для получения битрейта и длительности (раньше
 	# запускались два отдельных pipeline'а на тот же файл — лишняя задержка для больших библиотек).
-	local ffmpeg_info
-	ffmpeg_info=$("$ffmpeg" -i "$full_path" 2>&1)
+	local ffmpeg_info=""
+	if [ "$ffmpeg_available" = "yes" ]; then
+		ffmpeg_info=$("$ffmpeg" -i "$full_path" 2>&1)
+	fi
 
 	# Битрейт ИМЕННО видеопотока: строка `Stream #0:0: Video: ..., 1808 kb/s`.
 	# Раньше брали `Duration: ..., bitrate: 2000 kb/s` — это битрейт КОНТЕЙНЕРА
@@ -1043,7 +1108,16 @@ encode_file() {
 		# ffmpeg. Всё до (manifest, коллизии, имена частей) и всё после
 		# (валидация, mv, сводка, manifest_write) остаётся общим — именно
 		# поэтому один config.ini даёт один результат на обоих путях.
-		if [ "$remote_active" = "yes" ]; then
+		#
+		# part_remote — решение ДЛЯ ЭТОЙ ЧАСТИ, а не для прогона: при
+		# [remote] on_failure = local неудача службы переводит часть на
+		# локальный ffmpeg, и она обязана провалиться в тот же самый код, что
+		# и обычный локальный путь. Дубль локальной ветки означал бы два
+		# разных «кодирования» из одного config.ini — ровно то, что
+		# publish_result держит в одном экземпляре.
+		local part_remote="$remote_active"
+		local part_done="no"
+		if [ "$part_remote" = "yes" ]; then
 			local r_len=0
 			[[ "$current_set_length" == "-t "* ]] && r_len="${current_set_length#-t }"
 			local r_op r_params r_out
@@ -1058,47 +1132,83 @@ encode_file() {
 
 			# Загрузка одна на файл, задач — по одной на часть. Второй раз те же
 			# гигабайты не отправляются.
-			if [ -z "${remote_upload_id:-}" ]; then
+			#
+			# remote_upload и remote_submit возвращают результат ПЕРЕМЕННОЙ
+			# (REMOTE_UPLOAD_ID / REMOTE_JOB_ID), а не через stdout. Вызов через
+			# `$( )` складывал в переменную прогресс-бар и строки лога вместе с
+			# идентификатором — служба обязана была отвечать 400 на каждом файле.
+			if [ "$part_remote" = "yes" ] && [ -z "${remote_upload_id:-}" ]; then
 				log_msg "INFO" "Отправка на сервер: $(basename "$full_path")"
-				remote_upload_id="$(remote_upload "$full_path")" || {
-					log_msg "FAIL" "$(basename "$full_path"): загрузка не удалась"
-					any_fail="yes"
-					echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
-					((c+=1)); continue
-				}
-				printf "\n"
-				# Файл субтитров приходит той же дорогой, что видео: путей в
-				# параметрах служба не принимает по построению.
-				remote_sub_id=""
-				if [ "$sub_found" = "1" ] && [ -n "${sub_file:-}" ]; then
-					remote_sub_id="$(remote_upload "$sub_file")" || remote_sub_id=""
+				# Sidecar рядом с manifest'ом: повторный запуск после обрыва
+				# доходит до GET /uploads/<id> с настоящим смещением вместо того,
+				# чтобы просить новую загрузку и лить гигабайты заново.
+				REMOTE_UPLOAD_SIDECAR="${manifest}.upload"
+				if remote_upload "$full_path"; then
+					remote_upload_id="$REMOTE_UPLOAD_ID"
+					printf "\n"
+					# Длительность из ответа службы — запасной источник для тонкого
+					# клиента без локального ffmpeg (см. remote_active ниже).
+					if [ "${file_duration:-0}" -le 0 ] 2>/dev/null && \
+					   [ -n "${REMOTE_UPLOAD_DURATION:-}" ]; then
+						file_duration="${REMOTE_UPLOAD_DURATION%%.*}"
+					fi
+					# Файл субтитров приходит той же дорогой, что видео: путей в
+					# параметрах служба не принимает по построению.
+					remote_sub_id=""
+					if [ "$sub_found" = "1" ] && [ -n "${sub_file:-}" ]; then
+						if remote_upload "$sub_file"; then remote_sub_id="$REMOTE_UPLOAD_ID"; fi
+					fi
+				else
+					printf "\n"
+					if remote_fallback_allowed "$full_path" "загрузка не удалась"; then
+						part_remote="no"
+					else
+						log_msg "FAIL" "$(basename "$full_path"): загрузка не удалась"
+						any_fail="yes"
+						echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+						REMOTE_UPLOAD_SIDECAR=""
+						((c+=1)); continue
+					fi
 				fi
+				REMOTE_UPLOAD_SIDECAR=""
 			fi
+		fi
 
-			if [ "$dry_run" = "yes" ]; then
-				remote_dry_run "$remote_upload_id" "$r_op" "$r_params" "${remote_sub_id:-}"
-			else
-				local r_job
-				r_job="$(remote_submit "$remote_upload_id" "$r_op" "$r_params" "${remote_sub_id:-}")" || {
-					log_msg "FAIL" "$(basename "$full_path"): служба отвергла задачу"
-					any_fail="yes"
-					echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
-					((c+=1)); continue
-				}
+		if [ "$part_remote" = "yes" ] && [ "$dry_run" = "yes" ]; then
+			remote_dry_run "$remote_upload_id" "$r_op" "$r_params" "${remote_sub_id:-}"
+			part_done="yes"
+		elif [ "$part_remote" = "yes" ]; then
+			local r_job
+			if remote_submit "$remote_upload_id" "$r_op" "$r_params" "${remote_sub_id:-}"; then
+				r_job="$REMOTE_JOB_ID"
 				local out_tmp; out_tmp="$(partial_path "$out_file")"
 				rm -f "$out_tmp"
 				_current_out_tmp="$out_tmp"
 				local encode_start=$(date +%s)
-				if remote_wait "$r_job" "$full_path" && remote_fetch "$r_job" "$out_tmp"; then
+				if remote_wait "$r_job" "$full_path" && remote_fetch "$r_job" "$out_tmp" "$full_path"; then
 					publish_result "$full_path" "$out_tmp" "$out_file" "$encode_start" "yes"
+					part_done="yes"
 				else
-					log_msg "FAIL" "$(basename "$full_path")"
 					rm -f "$out_tmp"
-					any_fail="yes"
-					echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
 				fi
 				_current_out_tmp=""
 			fi
+			# Не получилось — либо откат на локальный ffmpeg (шумный, по ключу),
+			# либо fail. Молчаливого отката здесь нет ни в одной ветке.
+			if [ "$part_done" = "no" ]; then
+				if remote_fallback_allowed "$full_path" "удалённое кодирование не удалось"; then
+					part_remote="no"
+				else
+					log_msg "FAIL" "$(basename "$full_path")"
+					any_fail="yes"
+					echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+					((c+=1)); continue
+				fi
+			fi
+		fi
+
+		if [ "$part_done" = "yes" ]; then
+			:
 		# D7. Dry-run
 		elif [ "$dry_run" = "yes" ]; then
 			echo "[DRY-RUN] $ffmpeg -nostdin -hide_banner -strict -2 $hw_decode_args $in_seek -i \"$full_path\" ${subtitles_params[*]} $convert_settings $thread_args ${vf_args[*]} ${af_args[*]} $current_set_length $out_seek \"$out_file\""
@@ -1307,8 +1417,45 @@ if [ "$remote_enabled" = "yes" ]; then
 		if [ "$hw_accel_status" = "+" ] && [ "$hw_accel_value" = "intel" ]; then
 			echo "[ПРЕДУПРЕЖДЕНИЕ] hw_accel = intel: Intel-карты на сервере нет, служба посчитает на процессоре."
 		fi
+		if [ "${remote_on_failure:-abort}" = "local" ] && [ "$ffmpeg_available" != "yes" ]; then
+			echo "[ПРЕДУПРЕЖДЕНИЕ] on_failure = local, но локального ffmpeg нет: откатываться будет некуда."
+		fi
+		# Границы «тонкого клиента». Разбиение по тишине читает границы у
+		# ЛОКАЛЬНОГО ffmpeg (silencedetect); брать их у службы отклонено спекой
+		# (раздел 3.1) как второй источник правды. Без ffmpeg честнее отказать
+		# явно, чем молча разбить файл не там.
+		if [ "$ffmpeg_available" != "yes" ] && [ "$split_by_silence" = "yes" ]; then
+			echo "[ОШИБКА] split_by_silence = yes требует локального ffmpeg (silencedetect), а он не найден." >&2
+			pause_prompt "Нажмите [Enter], чтобы выйти..."
+			exit 1
+		fi
 		log_msg "INFO" "Удалённый бэкенд включён: кодирование уходит на службу конвертации"
 	fi
+	# Режим оказался локальным (merge/copy/frames/audio), а ffmpeg нет — дальше
+	# идти некуда, и сказать об этом надо здесь, а не падать на первом файле.
+	if [ "$remote_active" != "yes" ] && [ "$ffmpeg_available" != "yes" ]; then
+		echo -e "\n[ОШИБКА] ffmpeg не найден ($ffmpeg), а этот режим считается локально.\n" >&2
+		pause_prompt "Нажмите [Enter], чтобы выйти..."
+		exit 1
+	fi
+fi
+
+# --- Боевая самопроверка удалённого пути ---
+# Отдельный режим, а не часть прогона: он ничего не конвертирует и обязан
+# завершиться до того, как будет тронут хоть один файл пользователя.
+if [ "${FFCONV_REMOTE_SELFTEST:-}" = "1" ]; then
+	if [ "$remote_enabled" != "yes" ]; then
+		echo "[ОШИБКА] --remote-selftest требует [remote] enabled = yes в config.ini." >&2
+		exit 1
+	fi
+	if ! type remote_selftest >/dev/null 2>&1; then
+		echo "[ОШИБКА] Рядом со скриптом нет remote_client.sh — самопроверка невозможна." >&2
+		exit 1
+	fi
+	remote_selftest; _st_rc=$?
+	rm -rf "$results_dir"
+	pause_prompt "Нажмите [Enter], чтобы выйти..."
+	exit "$_st_rc"
 fi
 
 # --- Основная логика ---
@@ -1436,6 +1583,13 @@ for f in "$results_dir"/r_*; do
 		skip) ((total_skip++)) ;;
 	esac
 done
+# Откаты на локальный ffmpeg считаются отдельно и отдельной же строкой видны в
+# сводке: «посчитано локально» не должно раствориться внутри «обработано».
+total_local=0
+for f in "$results_dir"/lf_*; do
+	[ -f "$f" ] || continue
+	((total_local++))
+done
 rm -rf "$results_dir"
 [ -n "$collisions_file" ] && rm -f "$collisions_file"
 
@@ -1449,6 +1603,7 @@ echo "════════════════════════�
 echo "  Обработано:  ${total_ok} файлов"
 echo "  Пропущено:   ${total_skip} (уже существуют)"
 echo "  Ошибки:      ${total_fail}"
+[ "$total_local" -gt 0 ] && echo "  Посчитано локально: ${total_local} (служба была недоступна)"
 printf "  Время:       %d мин %d сек\n" "$elapsed_global_min" "$elapsed_global_sec"
 if [ "$total_in_bytes" -gt 0 ]; then
 	in_hr=$(human_size $total_in_bytes)
@@ -1464,5 +1619,9 @@ echo "════════════════════════�
 echo -e "\n"
 pause_prompt "Нажмите [Enter], чтобы продолжить..."
 # Exit code отражает наличие ошибок — cron/CI/GUI могут детектировать провал батча.
+# Откат на локальный ffmpeg тоже даёт ненулевой код: пользователь просил считать
+# на сервере, и то, что он получил результат другим способом, обязано быть видно
+# и в автоматике, а не только в сводке на экране.
 [ "$total_fail" -gt 0 ] && exit 1
+[ "$total_local" -gt 0 ] && exit 1
 exit 0

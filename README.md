@@ -9,7 +9,7 @@ ffmpeg/yt-dlp скрипты для загрузки и конвертации �
 ```
 video/
 ├── ffmpeg/                              # Конвертер видео/аудио
-│   ├── config.ini                       # Настройки: кодеки, GPU, нарезка, фильтры
+│   ├── config.ini.example               # Шаблон настроек (скопировать в config.ini)
 │   ├── FFmpeg_Converter_run_v18.sh      # Загрузчик конфига (Bash)
 │   ├── FFmpeg_Converter_run_v18.cmd     # Загрузчик конфига (CMD)
 │   ├── FFmpeg_Converter_run_v18.ps1     # Загрузчик конфига (PowerShell)
@@ -50,7 +50,15 @@ video/
 - **deno.exe** (опционально, для AI-перевода) — https://github.com/denoland/deno/releases (`deno-x86_64-pc-windows-msvc.zip`), положить в `yt-dlp/`
 - **vot-cli-live.exe** (опционально, AI-перевод) — собирается из https://github.com/FOSWLY/vot-cli, положить в `yt-dlp/`
 
-Перед первым запуском yt-dlp: `cp yt-dlp/config.ini.example yt-dlp/config.ini` и отредактировать под себя.
+Перед первым запуском скопировать шаблоны конфигов и отредактировать под себя:
+
+```bash
+cp ffmpeg/config.ini.example ffmpeg/config.ini
+cp yt-dlp/config.ini.example yt-dlp/config.ini
+```
+
+Оба `config.ini` в `.gitignore` — в них попадают приватные значения (прокси
+с логином и паролем, адрес и ключ службы конвертации), а репозиторий публичный.
 
 ---
 
@@ -83,8 +91,13 @@ video/
 
 При `[remote] enabled = yes` кодирование уезжает на HTTP-службу конвертации, а
 обход папок, имена выходов и учёт готового остаются локальными. Адрес и ключ
-задаются переменными окружения `TRANSCODE_URL` и `TRANSCODE_API_KEY` — в
-`config.ini` стоят только их имена.
+пишутся в `[remote] endpoint` и `api_key` вашего `config.ini` — он не коммитится,
+поэтому значения можно вписать как есть. Подстановка из окружения тоже работает
+(`endpoint = ${TRANSCODE_URL}`), если ключ удобнее держать вне файла.
+
+В GUI эти два поля — в группе «Сервер конвертации» внутри свёрнутого блока
+«Дополнительные настройки»; ключ на экране замаскирован. Правка в полях действует
+на текущий запуск, конфиг GUI не переписывает.
 
 Уезжает только то, где выигрывает карта: обычное перекодирование и отрезки.
 Режимы `copy_codecs`, `merge_files`, `create_frame`, `audio_only` и

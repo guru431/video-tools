@@ -167,11 +167,11 @@ REMOTE_CAPS_ARGS_VERSION=""
 REMOTE_CHUNK_SIZE=""
 remote_preflight() {
 	if [ -z "$remote_endpoint" ]; then
-		echo "[ОШИБКА] [remote] enabled = yes, но адрес службы пуст. Задайте переменную окружения TRANSCODE_URL." >&2
+		echo "[ОШИБКА] [remote] enabled = yes, но адрес службы пуст. Задайте [remote] endpoint в config.ini (или переменную окружения TRANSCODE_URL)." >&2
 		return 1
 	fi
 	if [ -z "$remote_api_key" ]; then
-		echo "[ОШИБКА] [remote] enabled = yes, но ключ службы пуст. Задайте переменную окружения TRANSCODE_API_KEY." >&2
+		echo "[ОШИБКА] [remote] enabled = yes, но ключ службы пуст. Задайте [remote] api_key в config.ini (или переменную окружения TRANSCODE_API_KEY)." >&2
 		return 1
 	fi
 	if ! command -v "${CURL_BIN:-curl}" >/dev/null 2>&1; then

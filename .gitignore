@@ -9,6 +9,10 @@ yt-dlp/vot-cli-live.exe
 # Template committed as yt-dlp/config.ini.example
 yt-dlp/config.ini
 
+# Same scheme for ffmpeg: the [remote] endpoint and API key of the transcode
+# service are written here in plain text. Template: ffmpeg/config.ini.example
+ffmpeg/config.ini
+
 # Local channel list — may reveal real channels/interests/work sources.
 # Template committed as yt-dlp/channels.txt.example
 yt-dlp/channels.txt

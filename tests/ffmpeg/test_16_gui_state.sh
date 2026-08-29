@@ -138,10 +138,16 @@ gui_text="$(cat "$GUI")"
 assert_contains "галка удалённого счёта" 'chkRemote'        "$gui_text"
 assert_contains "выбор prefer"           'cmbRemotePrefer'  "$gui_text"
 assert_contains "поле таймаута"          'txtRemoteWait'    "$gui_text"
-assert_contains "метка состояния ключа"  'lblRemoteCreds'   "$gui_text"
-# Приватное из GUI не редактируется и, значит, не может попасть в config.ini.
-assert_not_contains "нет поля ввода адреса" 'txtRemoteEndpoint' "$gui_text"
-assert_not_contains "нет поля ввода ключа"  'txtRemoteApiKey'   "$gui_text"
+# Адрес и ключ живут в личном config.ini (он gitignored, как у yt-dlp), а GUI
+# показывает их в полях и передаёт в запуск. Раньше здесь стояла метка
+# «задано/не задано»: значения приходили только из переменных окружения.
+assert_contains "поле ввода адреса"      'txtRemoteEndpoint' "$gui_text"
+assert_contains "поле ввода ключа"       'txtRemoteApiKey'   "$gui_text"
+# Ключ не должен читаться с экрана через плечо и на скриншотах.
+assert_contains "ключ на экране замаскирован" 'txtRemoteApiKey.UseSystemPasswordChar = $true' "$gui_text"
+# GUI ничего не пишет в config.ini — паритет с yt-dlp, где запись конфига
+# из интерфейса тоже отсутствует. Правка в поле действует на текущий запуск.
+assert_not_contains "GUI не сохраняет конфиг" 'Save-Config' "$gui_text"
 # Галка без передачи переменных в runspace не делала бы ничего: скрипт читает
 # именно эти имена, и без них удалённый бэкенд из GUI не включается вовсе.
 for _v in remote_enabled remote_endpoint remote_api_key remote_prefer remote_wait_timeout; do

@@ -171,11 +171,11 @@ function Invoke-RemoteHttp {
 
 function Invoke-RemotePreflight {
 	if (-not $remote_endpoint) {
-		Write-Host "[ОШИБКА] [remote] enabled = yes, но адрес службы пуст. Задайте переменную окружения TRANSCODE_URL."
+		Write-Host "[ОШИБКА] [remote] enabled = yes, но адрес службы пуст. Задайте [remote] endpoint в config.ini (или переменную окружения TRANSCODE_URL)."
 		return $false
 	}
 	if (-not $remote_api_key) {
-		Write-Host "[ОШИБКА] [remote] enabled = yes, но ключ службы пуст. Задайте переменную окружения TRANSCODE_API_KEY."
+		Write-Host "[ОШИБКА] [remote] enabled = yes, но ключ службы пуст. Задайте [remote] api_key в config.ini (или переменную окружения TRANSCODE_API_KEY)."
 		return $false
 	}
 	$r = Invoke-RemoteHttp GET '/capabilities'

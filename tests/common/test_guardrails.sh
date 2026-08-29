@@ -618,15 +618,29 @@ _priv_hits="$(git -C "$PROJECT_DIR" grep -nIE \
     -- ':!tests/*' ':!docs/*' 2>/dev/null || true)"
 assert_empty "нет приватных IP в URL" "$_priv_hits"
 
+# Схема хранения та же, что у yt-dlp: рабочий config.ini не коммитится, а в
+# репозитории лежит config.ini.example. Поэтому адрес и ключ пишутся в личный
+# config.ini открытым текстом, а барьер приватности смотрит в шаблон.
+#
+# Сначала — что шаблон вообще отслеживается, а рабочий конфиг нет. Без этой пары
+# проверок обе следующие бессмысленны: `git grep` по нетрекаемому пути молча
+# возвращает пусто, assert_empty проходит, и барьер становится вечнозелёным.
+# Именно так он и сломался бы, если бы ffmpeg/config.ini просто ушёл в .gitignore.
+_tracked_example="$(git -C "$PROJECT_DIR" ls-files -- 'ffmpeg/config.ini.example' 2>/dev/null || true)"
+assert_contains "ffmpeg/config.ini.example отслеживается" "ffmpeg/config.ini.example" "$_tracked_example"
+
+_tracked_cfg="$(git -C "$PROJECT_DIR" ls-files -- 'ffmpeg/config.ini' 2>/dev/null || true)"
+assert_empty "ffmpeg/config.ini НЕ отслеживается" "$_tracked_cfg"
+
 _key_hits="$(git -C "$PROJECT_DIR" grep -nIE \
     '^[[:space:]]*api_key[[:space:]]*=[[:space:]]*[^$[:space:]].*' \
-    -- 'ffmpeg/config.ini' 'yt-dlp/config.ini*' 2>/dev/null || true)"
-assert_empty "api_key задан только переменной" "$_key_hits"
+    -- 'ffmpeg/config.ini.example' 'yt-dlp/config.ini.example' 2>/dev/null || true)"
+assert_empty "api_key в шаблоне пуст" "$_key_hits"
 
 # endpoint — тем же правилом: подставлять туда живой адрес нельзя даже разово.
 _ep_hits="$(git -C "$PROJECT_DIR" grep -nIE \
     '^[[:space:]]*endpoint[[:space:]]*=[[:space:]]*[^$[:space:]].*' \
-    -- 'ffmpeg/config.ini' 2>/dev/null || true)"
-assert_empty "endpoint задан только переменной" "$_ep_hits"
+    -- 'ffmpeg/config.ini.example' 2>/dev/null || true)"
+assert_empty "endpoint в шаблоне пуст" "$_ep_hits"
 
 summary

@@ -1129,8 +1129,10 @@ $_goth.Add($textSubtitlesStyle)
 
 # Группа «Сервер». Вложена в «Дополнительные настройки», чтобы не сдвигать кнопки
 # и прогресс ниже — их Y задан абсолютными числами.
-# Адрес и ключ здесь ТОЛЬКО показываются: правь мы их из GUI, приватное значение
-# рано или поздно оказалось бы в config.ini, а репозиторий публичный.
+# Адрес и ключ берутся из config.ini (он gitignored — та же схема, что у yt-dlp,
+# поэтому приватное значение лежит там открытым текстом и в репозиторий не уедет).
+# Правка в полях действует на текущий запуск: GUI конфиг не переписывает, как и
+# GUI yt-dlp. Постоянное значение задаётся в самом config.ini.
 $grpRemote = [System.Windows.Forms.GroupBox]::new()
 $grpRemote.Location = [System.Drawing.Point]::new(8, 92)
 $grpRemote.Size = [System.Drawing.Size]::new(750, 92)
@@ -1165,16 +1167,30 @@ $txtRemoteWait.Location = [System.Drawing.Point]::new(616, 17)
 $txtRemoteWait.Size = [System.Drawing.Size]::new(70, 20)
 $txtRemoteWait.Text = $_cfg_remote_wait
 
-$lblRemoteCreds = [System.Windows.Forms.Label]::new()
-$lblRemoteCreds.Location = [System.Drawing.Point]::new(8, 46)
-$lblRemoteCreds.Size = [System.Drawing.Size]::new(730, 34)
-$lblRemoteCreds.Text = if ($_cfg_remote_ep -and $_cfg_remote_key) {
-	"Адрес и ключ: заданы (переменные окружения)"
-} else {
-	"Адрес и ключ: НЕ заданы — задайте TRANSCODE_URL и TRANSCODE_API_KEY"
-}
+$lblRemoteEndpoint = [System.Windows.Forms.Label]::new()
+$lblRemoteEndpoint.Location = [System.Drawing.Point]::new(8, 49)
+$lblRemoteEndpoint.Size = [System.Drawing.Size]::new(52, 16)
+$lblRemoteEndpoint.Text = "Адрес:"
 
-$grpRemote.Controls.AddRange(@($chkRemote, $lblRemotePrefer, $cmbRemotePrefer, $lblRemoteWait, $txtRemoteWait, $lblRemoteCreds))
+$txtRemoteEndpoint = [System.Windows.Forms.TextBox]::new()
+$txtRemoteEndpoint.Location = [System.Drawing.Point]::new(62, 46)
+$txtRemoteEndpoint.Size = [System.Drawing.Size]::new(380, 20)
+$txtRemoteEndpoint.Text = $_cfg_remote_ep
+
+$lblRemoteApiKey = [System.Windows.Forms.Label]::new()
+$lblRemoteApiKey.Location = [System.Drawing.Point]::new(450, 49)
+$lblRemoteApiKey.Size = [System.Drawing.Size]::new(44, 16)
+$lblRemoteApiKey.Text = "Ключ:"
+
+$txtRemoteApiKey = [System.Windows.Forms.TextBox]::new()
+$txtRemoteApiKey.Location = [System.Drawing.Point]::new(498, 46)
+$txtRemoteApiKey.Size = [System.Drawing.Size]::new(188, 20)
+# Ключ не должен читаться через плечо и попадать на скриншоты окна.
+$txtRemoteApiKey.UseSystemPasswordChar = $true
+$txtRemoteApiKey.Text = $_cfg_remote_key
+
+$grpRemote.Controls.AddRange(@($chkRemote, $lblRemotePrefer, $cmbRemotePrefer, $lblRemoteWait, $txtRemoteWait,
+	$lblRemoteEndpoint, $txtRemoteEndpoint, $lblRemoteApiKey, $txtRemoteApiKey))
 $_goth.Add($grpRemote)
 $groupOther.Controls.AddRange($_goth.ToArray())
 $_regFont = $groupOther.Font
@@ -1472,13 +1488,13 @@ $buttonRun.Add_Click({
     }
 
     # ---- Удалённый бэкенд ----
-    # Адрес и ключ идут из config.ini как есть (в нём — только ${TRANSCODE_URL} и
-    # ${TRANSCODE_API_KEY}, развёрнутые при чтении). GUI их не редактирует.
+    # Адрес и ключ берутся из полей формы (их начальное значение — из config.ini,
+    # где допустима и подстановка ${TRANSCODE_URL}, развёрнутая при чтении).
     # $script:, как и остальные значения формы: сбор в runspace идёт через
     # Get-Variable -Scope Script, и локальная переменная обработчика туда не попадёт.
     $script:remote_enabled      = if ($chkRemote.Checked) { "yes" } else { "no" }
-    $script:remote_endpoint     = $_cfg_remote_ep.TrimEnd("/")
-    $script:remote_api_key      = $_cfg_remote_key
+    $script:remote_endpoint     = $txtRemoteEndpoint.Text.Trim().TrimEnd("/")
+    $script:remote_api_key      = $txtRemoteApiKey.Text.Trim()
     $script:remote_prefer       = [string]$cmbRemotePrefer.SelectedItem
     $script:remote_wait_timeout = $txtRemoteWait.Text
 

@@ -1,6 +1,6 @@
 ﻿{
     "build_version":  "18.0.0.0",
-    "source_commit":  "c80fe394c5e5af357f461b4e054fec9e369ff6d4",
+    "source_commit":  "0878d872375c29bd35c49b670e30b49c266ac20d",
     "source_tree_dirty":  false,
     "ps2exe":  {
                    "commit":  "d32d5ce21c458696e860a7533943b1466d925be9",
@@ -10,12 +10,12 @@
                       {
                           "path":  "ffmpeg/_VideoConverter_v18.exe",
                           "source":  "ffmpeg/FFmpeg_Converter_run_win_v18.ps1",
-                          "sha256":  "41ECCD358F364A1D1ED260862593CE3B64A36F84B41534EBD7F1DF471829BAC0"
+                          "sha256":  "015671E5A18FE2246EFFC7A59E167CA87266703253CBC27B37CFD4EE03B1624B"
                       },
                       {
                           "path":  "yt-dlp/_VideoDownloader_v18.exe",
                           "source":  "yt-dlp/Downloading_from_YouTube_v18.ps1",
-                          "sha256":  "9D71BD3FD69805022B63772D84663722635EB8ABF9B0358BD6AA668C5D9E6102"
+                          "sha256":  "A3191155DD6D5BA6BAFEA74C6475D5F445259DD78DEBA2DFDD4A4DB8BF8EA6BE"
                       }
                   ]
 }

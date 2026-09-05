@@ -38,7 +38,7 @@ video/
 │   ├── mocks/                           # ffmpeg, ffmpeg.cmd, ffprobe, yt-dlp, curl, vot-cli-live
 │   ├── ffmpeg/test_01..24*.sh           # 24 тест-файла
 │   ├── yt-dlp/test_01..15*.sh           # 15 тест-файлов
-│   └── common/test_*.sh                 # 10 файлов: кодировки, паритет, guardrail'ы, ссылки в документации, pre-commit, privacy-scan
+│   └── common/test_*.sh                 # 11 файлов: кодировки, паритет, guardrail'ы, ссылки в документации, pre-commit, privacy-scan, вырезание комментариев при сборке
 │
 └── README.md
 ```
@@ -221,7 +221,7 @@ yt-dlp/_VideoDownloader_v18.exe
 bash tests/run_tests.sh           # все тесты
 bash tests/run_tests.sh ffmpeg    # ffmpeg (24 файла)
 bash tests/run_tests.sh yt-dlp    # yt-dlp (15 файлов)
-bash tests/run_tests.sh common    # кросс-платформенные инварианты (10 файлов)
+bash tests/run_tests.sh common    # кросс-платформенные инварианты (11 файлов)
 ```
 
 ### Тест-модули FFmpeg (24 файла)
@@ -273,7 +273,7 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 | `test_14_stop_and_window` | «Остановить» снимает дерево процессов; свёрнутое окно не трогаем |
 | `test_15_cmd_smoke` | Сквозной прогон интерактивного `.cmd` целиком: меню, argv дочерних процессов, коды возврата (моки — настоящие EXE) |
 
-### Тест-модули Common (10 файлов)
+### Тест-модули Common (11 файлов)
 
 | Файл | Что тестирует |
 |------|---------------|
@@ -284,6 +284,7 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 | `test_guardrails` | Статические guardrail'ы против регресса опасных паттернов |
 | `test_path_matrix` | Adversarial имена/пути: Quote-WinArg + CMD `!`-детект |
 | `test_ytdlp_preset_parity` | Паритет таблиц форматов yt-dlp SH ↔ PS1 |
+| `test_build_strip` | Комментарии не попадают в собранный EXE: сборка зовёт вырезание, вырезание не трогает код и строки |
 | `test_pre_commit_hook` | pre-commit на реальном temp-репо: блок секрета, разрешение удаления утечки |
 | `test_privacy_scan` | privacy-scan на реальном temp-репо: RFC1918 IP / e-mail, файлы с пробелами и кириллицей, `*.example` |
 | `test_docs_links` | Ссылки и пути в документации ведут на существующие файлы; имена EXE в CI ↔ файлы на диске |

@@ -185,6 +185,7 @@ COMMON_TESTS=(
     "$TESTS_DIR/common/test_privacy_scan.sh"
     "$TESTS_DIR/common/test_path_matrix.sh"
     "$TESTS_DIR/common/test_ytdlp_preset_parity.sh"
+    "$TESTS_DIR/common/test_build_strip.sh"
 )
 
 # ── Баннер ───────────────────────────────────────────────────────────────────

@@ -10,7 +10,7 @@ Assert-Ps2Exe $ps2exePs
 
 # --- Встраиваем script.ps1 в run_win.ps1 ---
 Write-Host "Embedding FFmpeg_Converter_script.ps1..."
-$scriptContent = [System.IO.File]::ReadAllText($scriptPs1, [System.Text.Encoding]::UTF8)
+$scriptContent = Remove-PsComments ([System.IO.File]::ReadAllText($scriptPs1, [System.Text.Encoding]::UTF8))
 
 # Модуль удалённого бэкенда встраиваем в ту же строку: EXE обязан быть
 # самодостаточным, а рядом с EXE файла remote_client.ps1 нет, и удалённый счёт молча
@@ -20,7 +20,7 @@ $scriptContent = [System.IO.File]::ReadAllText($scriptPs1, [System.Text.Encoding
 $remotePs1 = Join-Path $PSScriptRoot 'remote_client.ps1'
 if (Test-Path -LiteralPath $remotePs1) {
     Write-Host 'Embedding remote_client.ps1...'
-    $remoteContent = [System.IO.File]::ReadAllText($remotePs1, [System.Text.Encoding]::UTF8)
+    $remoteContent = Remove-PsComments ([System.IO.File]::ReadAllText($remotePs1, [System.Text.Encoding]::UTF8))
     $scriptContent = $remoteContent + "`n" + $scriptContent
 }
 
@@ -43,7 +43,11 @@ $scriptContent
 # === END EMBEDDED SCRIPT ===
 "@
 
-$mainContent = [System.IO.File]::ReadAllText($src, [System.Text.Encoding]::UTF8)
+# Комментарии снимаются со ВСЕХ трёх исходников этого EXE: и со встраиваемых, и с
+# самого GUI. Текст комментариев входит в сумму признаков, по которой антивирус
+# выносит вердикт — измерено в этом репозитории (docs/knowledge-base.md), см.
+# Remove-PsComments в tools/_build_common.ps1. В репозитории врезки остаются.
+$mainContent = Remove-PsComments ([System.IO.File]::ReadAllText($src, [System.Text.Encoding]::UTF8))
 # Вставляем встроенный скрипт ПЕРЕД первой строкой кода (после комментариев)
 $combined = $embedBlock + "`n" + $mainContent
 [System.IO.File]::WriteAllText($tmpSrc, $combined, [System.Text.Encoding]::UTF8)

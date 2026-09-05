@@ -175,6 +175,78 @@ assert_contains "адрес без версии назван до запроса
 assert_contains "404 объяснён" "/v1" "$out"
 remote_endpoint="http://mock.invalid/v1"
 
+# ══════════════════════════════════════════════════════════════
+suite "remote: контракт службы args_version 2"
+# ══════════════════════════════════════════════════════════════
+# Класс «клиент разошёлся с живой службой» до 2026-09-05 не проверялся ничем:
+# мок отдавал форму v1, спека описывала v1, и первый же настоящий запрос к
+# службе показал, что удалённый счёт не работает вовсе. Ниже — ровно те формы
+# ответа, которые служба отдаёт на самом деле.
+
+# encoders приходит ОБЪЕКТОМ по месту счёта, а не плоским списком.
+CAPS_V2='{"args_version":2,"encoders":{"gpu":["h264_nvenc","hevc_nvenc","av1_nvenc"],"cpu":["libx264","libx265","libsvtav1"]},"limits":{"chunk_size":1048576,"wait_timeout_max_s":3600},"ops":{"transcode":{"sample":{},"values":{"container":["avi","mkv","mp4","ts","webm"]}}}}'
+MOCK_CURL_ROUTES="$(routes "GET /v1/capabilities|200|$CAPS_V2")"
+set_video_codec="libx264"; remote_wait_timeout=1800
+output_container_status="-"; output_container_value="mp4"
+if remote_preflight >/dev/null 2>&1; then pass "encoders объектом {gpu,cpu} — служба принята"
+else fail "encoders объектом {gpu,cpu} — служба принята" "код 0" "код 1"; fi
+assert_eq "версия сборщика прочитана" "2" "$REMOTE_CAPS_ARGS_VERSION"
+assert_eq "chunk_size взят из limits" "1048576" "$REMOTE_CHUNK_SIZE"
+assert_contains "энкодеры разобраны из обеих групп" "h264_nvenc" "$REMOTE_CAPS_ENCODERS"
+assert_contains "программные энкодеры тоже" "libsvtav1" "$REMOTE_CAPS_ENCODERS"
+# Имена групп — не энкодеры и в перечень попадать не должны: иначе они уедут
+# в сообщение об ошибке и будут выглядеть как объявленные кодеки.
+assert_not_contains "имя группы gpu не попало в список" '"gpu"' "$REMOTE_CAPS_ENCODERS"
+
+# Сверка семейства работает и на объектной форме.
+set_video_codec="libsvtav1"
+if remote_preflight >/dev/null 2>&1; then pass "av1 найден в группе gpu"
+else fail "av1 найден в группе gpu" "код 0" "код 1"; fi
+
+# Пустые группы — это «служба не умеет ничего», и отказ обязан быть.
+MOCK_CURL_ROUTES="$(routes 'GET /v1/capabilities|200|{"args_version":2,"encoders":{"gpu":[],"cpu":[]},"limits":{"chunk_size":1048576}}')"
+set_video_codec="libx264"
+out="$(remote_preflight 2>&1)"; rc=$?
+assert_eq "пустые группы энкодеров → отказ" "1" "$rc"
+assert_contains "сказано, что считать нечем" "пустой список" "$out"
+
+# ── Потолок ожидания карты ────────────────────────────────────────────────
+# Служба объявляет его в limits и отвергает превышение 400-м на POST /jobs —
+# то есть уже ПОСЛЕ отправки файла целиком. Спрашиваем до загрузки.
+MOCK_CURL_ROUTES="$(routes "GET /v1/capabilities|200|$CAPS_V2")"
+set_video_codec="libx264"; remote_wait_timeout=7200
+out="$(remote_preflight 2>&1)"; rc=$?
+assert_eq "wait_timeout выше потолка → отказ до загрузки" "1" "$rc"
+assert_contains "назван потолок службы" "3600" "$out"
+remote_wait_timeout=3600
+if remote_preflight >/dev/null 2>&1; then pass "wait_timeout ровно по потолку принят"
+else fail "wait_timeout ровно по потолку принят" "код 0" "код 1"; fi
+remote_wait_timeout=1800
+
+# ── Контейнер выхода ──────────────────────────────────────────────────────
+output_container_status="+"; output_container_value="mov"
+out="$(remote_preflight 2>&1)"; rc=$?
+assert_eq "контейнер вне списка службы → отказ до загрузки" "1" "$rc"
+assert_contains "контейнер назван" "mov" "$out"
+output_container_status="+"; output_container_value="mkv"
+if remote_preflight >/dev/null 2>&1; then pass "объявленный контейнер принят"
+else fail "объявленный контейнер принят" "код 0" "код 1"; fi
+# Список не разобран — молчание службы не повод отказывать.
+MOCK_CURL_ROUTES="$(routes 'GET /v1/capabilities|200|{"args_version":2,"encoders":{"gpu":["h264_nvenc"]}}')"
+output_container_status="+"; output_container_value="mov"
+if remote_preflight >/dev/null 2>&1; then pass "без списка контейнеров прогон не рвётся"
+else fail "без списка контейнеров прогон не рвётся" "код 0" "код 1"; fi
+output_container_status="-"; output_container_value="mp4"
+
+# ── Плоская форма encoders обязана продолжать работать ────────────────────
+# Совместимость в обе стороны: за обратным прокси может стоять служба прежней
+# версии, и «починили новую, сломали старую» — та же авария зеркально.
+MOCK_CURL_ROUTES="$(routes 'GET /v1/capabilities|200|{"args_version":2,"encoders":["h264_nvenc","libx264"],"chunk_size":2097152}')"
+set_video_codec="libx264"
+if remote_preflight >/dev/null 2>&1; then pass "плоский список encoders по-прежнему принят"
+else fail "плоский список encoders по-прежнему принят" "код 0" "код 1"; fi
+assert_eq "chunk_size с верхнего уровня тоже читается" "2097152" "$REMOTE_CHUNK_SIZE"
+
 MOCK_CURL_ROUTES="$(routes 'GET /v1/capabilities|200|{"args_version":"3"}')"
 remote_endpoint=""
 out="$(remote_preflight 2>&1)"; rc=$?

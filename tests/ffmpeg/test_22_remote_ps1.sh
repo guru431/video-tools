@@ -140,6 +140,26 @@ assert_eq "h264 без h264"       "False" "$(run_ps "Test-RemoteCodecSupported 
 assert_eq "пустой список не отказ" "True" "$(run_ps "Test-RemoteCodecSupported 'h264' @()")"
 
 # ══════════════════════════════════════════════════════════════
+suite "remote PS1: контракт службы args_version 2"
+# ══════════════════════════════════════════════════════════════
+# Служба отдаёт encoders ОБЪЕКТОМ по месту счёта. У объекта @(...).Count равен
+# единице, поэтому проверка «список пуст» не срабатывала, а сверка кодека
+# приводила объект к строке и не находила ничего: служба «не умела» ни одного
+# кодека. Сводим обе формы к плоскому перечню — как это делает .sh.
+assert_eq "объект {gpu,cpu} разворачивается" "h264_nvenc hevc_nvenc libx264"     "$(run_ps "(Get-RemoteCapsEncoders ([pscustomobject]@{gpu=@('h264_nvenc','hevc_nvenc');cpu=@('libx264')})) -join ' '")"
+assert_eq "плоский список остаётся собой" "h264_nvenc libx264"     "$(run_ps "(Get-RemoteCapsEncoders @('h264_nvenc','libx264')) -join ' '")"
+assert_eq "пустые группы дают пустой перечень" "0"     "$(run_ps "@(Get-RemoteCapsEncoders ([pscustomobject]@{gpu=@();cpu=@()})).Count")"
+assert_eq "отсутствие поля даёт пустой перечень" "0"     "$(run_ps "@(Get-RemoteCapsEncoders \$null).Count")"
+# Имена групп — не энкодеры: попав в перечень, они выглядели бы объявленными кодеками.
+assert_eq "имена групп не попадают в перечень" "False"     "$(run_ps "((Get-RemoteCapsEncoders ([pscustomobject]@{gpu=@('h264_nvenc')})) -contains 'gpu').ToString()")"
+# Сверка семейства обязана работать поверх развёрнутого перечня.
+assert_eq "h264 находится в группе gpu" "True"     "$(run_ps "Test-RemoteCodecSupported 'h264' (Get-RemoteCapsEncoders ([pscustomobject]@{gpu=@('h264_nvenc');cpu=@('libx265')}))")"
+assert_eq "av1 не находится, когда его нет" "False"     "$(run_ps "Test-RemoteCodecSupported 'av1' (Get-RemoteCapsEncoders ([pscustomobject]@{gpu=@('h264_nvenc');cpu=@('libx264')}))")"
+# Версия сборщика аргументов у обеих платформ одна: расхождение означало бы, что
+# одна из них молча собирает тело по контракту, которого у службы больше нет.
+assert_eq "версия сборщика = 2" "2" "$(run_ps "\$script:RemoteClientArgsVersion")"
+
+# ══════════════════════════════════════════════════════════════
 suite "remote PS1: короткое чтение и повтор куска"
 # ══════════════════════════════════════════════════════════════
 # Stream.Read по контракту возвращает НЕ БОЛЕЕ запрошенного; отброшенное

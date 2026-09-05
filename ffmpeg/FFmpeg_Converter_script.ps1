@@ -661,7 +661,15 @@ function Publish-EncodedResult {
 			# Без локального ffmpeg декодировать нечем: остаётся проверка на
 			# непустой файл (она уже прошла выше). Пропускать её молча нельзя —
 			# оборванная загрузка выглядела бы успехом.
-			if (-not $ffmpeg_available) {
+			if ((Get-Command Receive-RemoteResult -ErrorAction SilentlyContinue) -and
+			    $script:RemoteResultVerified -eq 'yes') {
+				# Служба назвала размер результата, и скачанное с ним сошлось — это
+				# ответ на тот же вопрос, что `-f null -`, но почти бесплатно.
+				# Второй полный декод трёхгигабайтного выхода стоил бы минут НА ФАЙЛ,
+				# и именно поэтому проверка содержимого включена только на удалённом
+				# пути. Паритет с publish_result в .sh.
+				$valid = $true
+			} elseif (-not $ffmpeg_available) {
 				Log-Msg "WARN" "$($File.Name): без локального ffmpeg результат проверен только по размеру"
 				$valid = $true
 			} else {

@@ -112,7 +112,16 @@ remote_op_for_config() {
 		p="$p,\"keep_aspect\":false"
 	fi
 	[ "$video_number_frames_status" = "+" ] && p="$p,\"fps\":$video_number_frames_value"
-	[ "$video_rotation_status" = "+" ]      && p="$p,\"rotate\":\"$video_rotation_value\""
+	# rotate служба принимает числом (1 или 2) либо строкой "off": допустимые
+	# значения у неё — ("off", 1, 2), и "2" В КАВЫЧКАХ в этот список не входит.
+	# Отказ приходил 400-м и ПОСЛЕ полной загрузки файла — то есть цена ошибки
+	# равнялась времени отправки гигабайтов.
+	if [ "$video_rotation_status" = "+" ]; then
+		case "$video_rotation_value" in
+			1|2) p="$p,\"rotate\":$video_rotation_value" ;;
+			*) echo "[ПРЕДУПРЕЖДЕНИЕ] [video] rotation = '$video_rotation_value': служба принимает только 1 или 2 — поворот на удалённом пути не применяется." >&2 ;;
+		esac
+	fi
 	# speed=1.0 не отправляем: это умолчание службы, и лишнее поле только
 	# расширяет площадь расхождения при сверке холостых прогонов.
 	if [ "$playback_speed_status" = "+" ] && [ "$playback_speed_value" != "1.0" ]; then
@@ -294,12 +303,16 @@ remote_http_retry() {
 # весь прогон, должно выясниться здесь: отказать на сотом файле из двухсот
 # дороже, чем на нулевом.
 REMOTE_CAPS_ARGS_VERSION=""
+# Потолок ожидания карты и список контейнеров — из ответа службы, а не из
+# констант клиента: оба уже отвергались 400-м, но ПОСЛЕ загрузки файла.
+REMOTE_CAPS_WAIT_MAX=""
+REMOTE_CAPS_CONTAINERS=""
 REMOTE_CAPS_ENCODERS=""
 REMOTE_CHUNK_SIZE=""
 # Версия сборщика аргументов, на которую рассчитан ЭТОТ клиент. Бампить вместе с
 # изменением набора полей в remote_op_for_config/remote_job_body. Значение обязано
 # совпадать в .sh и .ps1 — это сверяет test_23_remote_parity.sh.
-REMOTE_CLIENT_ARGS_VERSION="1"
+REMOTE_CLIENT_ARGS_VERSION="2"
 
 # Ключ службы из внешнего источника. Приоритет: api_key_command → api_key.
 # Файл config.ini не коммитится, но остаётся в бэкапах и в синхронизируемой
@@ -338,7 +351,47 @@ remote_resolve_api_key() {
 # tr '\n' ' ' — pretty-printed JSON: без склейки строк список энкодеров, разбитый
 # на строки, не находится вовсе, и «служба не объявила» принимало ЛЮБОЙ кодек.
 remote_caps_encoders() {
-	printf '%s' "$1" | tr '\n' ' ' | sed -n 's/.*"encoders"[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/p' | head -1
+	# Форм у поля ДВЕ, и обе законны: плоский список ["h264_nvenc", …] и объект
+	# по месту счёта {"gpu":[…],"cpu":[…]} — вторую служба отдаёт с
+	# args_version 2. Прежний разбор знал только первую, на второй возвращал
+	# пустоту, и preflight честно печатал «служба объявила пустой список
+	# энкодеров — считать нечем», хотя энкодеры в ответе были. Удалённый счёт
+	# не работал вовсе, и увидеть это мог только --remote-selftest: мок curl
+	# отдаёт форму v1.
+	#
+	# Поэтому берём ЗНАЧЕНИЕ ключа целиком (список или объект) и вынимаем из
+	# него все строки в кавычках. Имена вложенных ключей ("gpu"/"cpu") сначала
+	# срезаем вместе с двоеточием — иначе они попали бы в перечень наравне с
+	# энкодерами и оказались бы в сообщении об ошибке.
+	# Альтернацию \| в sed понимает только GNU: BSD sed на macOS считает её
+	# литералом и молча возвращает пустоту — то есть ровно тот отказ, который
+	# здесь и чинится. Поэтому форму выбирает оболочка, а sed зовётся под каждую
+	# отдельно.
+	local v
+	v="$(printf '%s' "$1" | tr '\n' ' ' | sed -n 's/.*"encoders"[[:space:]]*:[[:space:]]*//p' | head -1)"
+	case "$v" in
+		\[*) v="$(printf '%s' "$v" | sed -n 's/^\(\[[^]]*\]\).*/\1/p')" ;;
+		\{*) v="$(printf '%s' "$v" | sed -n 's/^\({[^}]*}\).*/\1/p')" ;;
+		*)   return 0 ;;
+	esac
+	printf '%s' "$v" \
+		| sed 's/"[A-Za-z_][A-Za-z0-9_]*"[[:space:]]*:[[:space:]]*//g' \
+		| grep -o '"[^"]*"' | tr '\n' ' '
+}
+
+# Список контейнеров берётся из ops.transcode.values.container. Хвост режем
+# от ПЕРВОГО "transcode" и в нём ищем ПЕРВЫЙ "container": у соседних операций
+# (concat, remux) свои списки, и жадный поиск подставил бы чужой. Не нашли —
+# молчим и ничего не проверяем: отсутствие поля не повод отказывать.
+remote_caps_containers() {
+	local tail
+	tail="$(printf '%s' "$1" | tr '\n' ' ')"
+	case "$tail" in *'"transcode"'*) ;; *) return 0 ;; esac
+	tail="${tail#*\"transcode\"}"
+	case "$tail" in *'"container"'*) ;; *) return 0 ;; esac
+	tail="${tail#*\"container\"}"
+	printf '%s' "$tail" | sed -n 's/^[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/p' \
+		| grep -o '"[^"]*"' | tr '\n' ' '
 }
 
 # Пустой список ("encoders": []) и отсутствие ключа — РАЗНЫЕ вещи. Первое означает
@@ -443,6 +496,8 @@ remote_preflight() {
 	REMOTE_CAPS_ENCODERS="$(remote_caps_encoders "$caps")"
 	REMOTE_CHUNK_SIZE="$(remote_json_field "$caps" chunk_size)"
 	[ -n "$REMOTE_CHUNK_SIZE" ] || REMOTE_CHUNK_SIZE=$((32 * 1024 * 1024))
+	REMOTE_CAPS_WAIT_MAX="$(remote_json_field "$caps" wait_timeout_max_s)"
+	REMOTE_CAPS_CONTAINERS="$(remote_caps_containers "$caps")"
 	# Энкодер — здесь, а не на каждом файле. Контракт preflight именно такой:
 	# «отказать на сотом файле из двухсот дороже, чем на нулевом». Раньше список
 	# encoders из ответа игнорировался вовсе, а поддержку определяла статическая
@@ -462,6 +517,26 @@ remote_preflight() {
 	if ! remote_caps_has_codec "$family" "$REMOTE_CAPS_ENCODERS"; then
 		echo "[ОШИБКА] Служба не умеет кодек «${family}» (из [video] codec = $set_video_codec). Служба объявила: $REMOTE_CAPS_ENCODERS" >&2
 		return 1
+	fi
+	# Потолок ожидания карты объявляет служба. Больше него — 400 на POST /jobs,
+	# то есть уже ПОСЛЕ отправки файла целиком. Спрашиваем здесь.
+	case "$REMOTE_CAPS_WAIT_MAX" in
+		''|*[!0-9]*) ;;
+		*) if [ "${remote_wait_timeout:-1800}" -gt "$REMOTE_CAPS_WAIT_MAX" ] 2>/dev/null; then
+				echo "[ОШИБКА] [remote] wait_timeout = ${remote_wait_timeout} больше потолка службы (${REMOTE_CAPS_WAIT_MAX} с) — задача была бы отвергнута после загрузки файла." >&2
+				return 1
+			fi ;;
+	esac
+	# Контейнер выхода — тоже 400 после загрузки. Проверяем только когда список
+	# разобран: молчание службы не повод отказывать.
+	if [ -n "$REMOTE_CAPS_CONTAINERS" ]; then
+		local want="mp4"
+		[ "$output_container_status" = "+" ] && want="$output_container_value"
+		case "$REMOTE_CAPS_CONTAINERS" in
+			*"\"$want\""*) ;;
+			*) echo "[ОШИБКА] Служба не умеет контейнер «${want}» (из [video] container). Служба объявила: $REMOTE_CAPS_CONTAINERS" >&2
+			   return 1 ;;
+		esac
 	fi
 	# Версия сборщика аргументов службы. Расхождение не запрещает работу, но
 	# молча получить файл, собранный логикой, которой у нас нет, — хуже, чем шумно.
@@ -679,7 +754,17 @@ remote_upload() {
 	# Длительность службе уже известна: файл она приняла и разобрала. Локальный
 	# ffprobe остаётся основным источником, а это — запасной для тонкого клиента
 	# без локального ffmpeg (см. remote_active в script.sh).
+	#
+	# Ответ на complete её НЕ содержит — там только upload_id и status, — поэтому
+	# запасной источник был мёртв с самого начала и молча давал пустую строку.
+	# Разбор входа отдаёт отдельная ручка; её отказ не фатален, ради длительности
+	# ронять загрузку нельзя.
 	REMOTE_UPLOAD_DURATION="$(remote_json_field "$REMOTE_HTTP_BODY" duration)"
+	if [ -z "$REMOTE_UPLOAD_DURATION" ]; then
+		remote_http GET "/uploads/$uid/probe"
+		[ "$REMOTE_HTTP_CODE" = "200" ] && \
+			REMOTE_UPLOAD_DURATION="$(remote_json_field "$REMOTE_HTTP_BODY" duration)"
+	fi
 	REMOTE_UPLOAD_ID="$uid"
 	remote_upload_sidecar_clear
 	return 0
@@ -687,12 +772,18 @@ remote_upload() {
 
 # Отдельной функцией, потому что тело куска — двоичное и идёт из файла:
 # --data-binary @file, а не строкой, иначе нули и переводы строк исказятся.
-# Ключ, как и везде, уходит через stdin (--config -), а не аргументом.
 # Кусок уходит ПОТОКОМ со стандартного ввода (`--data-binary @-`), без temp-файла:
 # прежняя схема писала на диск лишние байты в размер всего исходника — по куску за
-# раз, но 20 ГБ суммарно на 20-гигабайтном файле. Ключ при этом по-прежнему вне
-# argv: curl-конфиг подаётся process substitution'ом `--config <(…)`, который есть
-# и в bash 3.2, и потому больше не занимает stdin.
+# раз, но 20 ГБ суммарно на 20-гигабайтном файле.
+#
+# Ключ при этом обязан остаться вне argv (`/proc/<pid>/cmdline` читает любой
+# локальный пользователь, а отправка 32-МБ куска живёт секунды). Stdin занят телом,
+# поэтому конфиг подаётся ФАЙЛОМ. Process substitution `--config <(…)` здесь стоял
+# раньше и не работал на главной платформе проекта: curl из Git Bash — mingw-сборка,
+# она не открывает `/proc/<pid>/fd/N` и отвечает «cannot read config from …».
+# Windows-отправка куска не работала НИ РАЗУ, а `2>/dev/null` превращал внятную
+# жалобу curl в «обрыв связи» — сообщение уводило в сторону сети. Файл создаётся
+# правами 0600 и живёт ровно один запрос.
 #
 # %{size_upload} обязателен: раньше «сколько байт реально отправлено» проверялось
 # по размеру temp-файла, и без файла эта проверка исчезла бы. Короткое чтение с
@@ -703,21 +794,46 @@ remote_upload() {
 # рассчитанного на короткие запросы.
 remote_upload_chunk() {
 	local uid="$1" file="$2" from="$3" to="$4" total="$5"
-	local curl_bin="${CURL_BIN:-curl}" out
+	local curl_bin="${CURL_BIN:-curl}" out cfg err rc
 	local this=$((to - from + 1))
+	cfg="$(mktemp "${TMPDIR:-/tmp}/ffconv_auth_XXXXXX")" || {
+		echo "[ОШИБКА] Не удалось создать временный файл для ключа службы." >&2
+		REMOTE_HTTP_CODE="000"; return 1
+	}
+	# Права снимаем ДО записи ключа: между mktemp и chmod файл пуст.
+	chmod 600 "$cfg" 2>/dev/null
+	remote_curl_auth > "$cfg"
+	# Файл для stderr создаётся БЕЗУСЛОВНО: перенаправление нельзя получить
+	# раскрытием переменной. `${err:+2>"$err"}` разворачивается не в редирект, а в
+	# лишний АРГУМЕНТ `2>/tmp/…`, и curl честно отвечает «URL rejected: Bad
+	# hostname» — на второй URL в команде.
+	err="$(mktemp "${TMPDIR:-/tmp}/ffconv_curlerr_XXXXXX")" || {
+		rm -f "$cfg"
+		echo "[ОШИБКА] Не удалось создать временный файл для вывода curl." >&2
+		REMOTE_HTTP_CODE="000"; return 1
+	}
 	out="$( { tail -c "+$((from + 1))" "$file" 2>/dev/null | head -c "$this"; } | \
-		"$curl_bin" --config <(remote_curl_auth) -sS -X PATCH \
+		"$curl_bin" --config "$cfg" -sS -X PATCH \
 		--connect-timeout "${REMOTE_CONNECT_TIMEOUT:-10}" \
 		--max-time "${REMOTE_CHUNK_MAX_TIME:-1800}" \
 		-H "Content-Range: bytes ${from}-${to}/${total}" \
 		-H "Content-Type: application/octet-stream" \
 		--data-binary "@-" \
 		-w '\n%{http_code} %{size_upload}' \
-		"${remote_endpoint}/uploads/${uid}" 2>/dev/null)" || {
-		echo "[ОШИБКА] Обрыв связи при отправке куска ${from}-${to}." >&2
+		"${remote_endpoint}/uploads/${uid}" 2>"$err")"
+	rc=$?
+	rm -f "$cfg"
+	if [ "$rc" -ne 0 ]; then
+		# Причину печатаем словами curl: «обрыв связи» на неудобочитаемом конфиге
+		# или отказе в правах — диагноз не тот, и искать будут не там.
+		local why=""
+		why="$(tr '\n' ' ' < "$err" 2>/dev/null)"
+		rm -f "$err"
+		echo "[ОШИБКА] Не удалось отправить кусок ${from}-${to}: ${why:-curl завершился с кодом $rc}" >&2
 		REMOTE_HTTP_CODE="000"
 		return 1
-	}
+	fi
+	rm -f "$err"
 	local last="${out##*$'\n'}"
 	REMOTE_HTTP_CODE="${last%% *}"
 	local sent_bytes="${last##* }"
@@ -883,6 +999,17 @@ remote_wait() {
 				# сверить скачанное без полного декода (см. remote_fetch).
 				REMOTE_RESULT_SHA256="$(remote_json_field "$answer" result_sha256)"
 				REMOTE_RESULT_SIZE="$(remote_json_field "$answer" result_size)"
+				# Ни того, ни другого поля в состоянии задачи нет — проверка
+				# скачанного была мёртвой и всегда оставляла «не сверено». Размер
+				# служба сообщает отдельной ручкой перечня выходов. Берём его
+				# ТОЛЬКО когда выход один: у нескольких /result отдаёт tar, и его
+				# длина с суммой длин файлов не совпадает по определению.
+				if [ -z "$REMOTE_RESULT_SHA256" ] && [ -z "$REMOTE_RESULT_SIZE" ]; then
+					remote_http GET "/jobs/$jid/outputs"
+					if [ "$REMOTE_HTTP_CODE" = "200" ] && 					   [ "$(remote_json_field "$REMOTE_HTTP_BODY" count)" = "1" ]; then
+						REMOTE_RESULT_SIZE="$(remote_json_field "$REMOTE_HTTP_BODY" bytes)"
+					fi
+				fi
 				show_progress_bar 100 "$label" "кодирование"; printf "\n"
 				REMOTE_CURRENT_JOB=""; return 0 ;;
 			failed|cancelled)

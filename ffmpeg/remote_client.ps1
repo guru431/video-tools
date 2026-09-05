@@ -10,7 +10,7 @@
 # Версия сборщика аргументов, на которую рассчитан ЭТОТ клиент. Бампить вместе с
 # изменением набора полей в Get-RemoteOpForConfig/Get-RemoteJobBody. Значение обязано
 # совпадать с REMOTE_CLIENT_ARGS_VERSION в .sh — это сверяет test_23_remote_parity.sh.
-$script:RemoteClientArgsVersion = '1'
+$script:RemoteClientArgsVersion = '2'
 
 function Get-RemoteCodec {
 	param([string]$Encoder)
@@ -106,6 +106,23 @@ function Test-RemoteConfigValues {
 # СЕМЕЙСТВО (h264). Поэтому сверка по семейству: наличие h264_nvenc означает,
 # что h264 служба посчитает. Литеральная сверка противоречила бы самому
 # отображению Get-RemoteCodec, ради которого оно и заведено.
+# Служба объявляет энкодеры ЛИБО плоским списком, ЛИБО объектом по месту счёта
+# {"gpu":[…],"cpu":[…]} (args_version 2). У объекта @(...).Count равен единице, а
+# не нулю, поэтому проверка «список пуст» не срабатывала, а сверка кодека
+# приводила объект к строке и не находила ничего — служба «не умела» ни одного
+# кодека. Сводим обе формы к плоскому перечню имён.
+function Get-RemoteCapsEncoders {
+	param($Encoders)
+	if ($null -eq $Encoders) { return @() }
+	$flat = @()
+	if ($Encoders -is [System.Management.Automation.PSCustomObject]) {
+		foreach ($prop in $Encoders.PSObject.Properties) { $flat += @($prop.Value) }
+	} else {
+		$flat += @($Encoders)
+	}
+	return @($flat | ForEach-Object { [string]$_ } | Where-Object { $_ })
+}
+
 function Test-RemoteCodecSupported {
 	param([string]$Family, $Encoders)
 	if (-not $Encoders -or @($Encoders).Count -eq 0) { return $true }
@@ -144,7 +161,16 @@ function Get-RemoteOpForConfig {
 	# как true — один config.ini давал разную геометрию.
 	if ($keep_aspect_ratio_status -eq '+' -and $keep_aspect_ratio_value -eq 'yes') { $p += ",`"keep_aspect`":true" } else { $p += ",`"keep_aspect`":false" }
 	if ($video_number_frames_status -eq '+') { $p += ",`"fps`":$video_number_frames_value" }
-	if ($video_rotation_status -eq '+') { $p += ",`"rotate`":`"$video_rotation_value`"" }
+	# rotate служба принимает числом (1 или 2) либо строкой "off": допустимые
+	# значения — ("off", 1, 2), и "2" в кавычках в этот список не входит. Отказ
+	# приходил 400-м уже ПОСЛЕ полной загрузки файла.
+	if ($video_rotation_status -eq '+') {
+		if ("$video_rotation_value" -eq '1' -or "$video_rotation_value" -eq '2') {
+			$p += ",`"rotate`":$video_rotation_value"
+		} else {
+			Write-Host "[ПРЕДУПРЕЖДЕНИЕ] [video] rotation = «$video_rotation_value»: служба принимает только 1 или 2 — поворот на удалённом пути не применяется."
+		}
+	}
 	if ($playback_speed_status -eq '+' -and $playback_speed_value -ne '1.0') {
 		$p += ",`"speed`":$playback_speed_value"
 	}
@@ -370,12 +396,23 @@ function Invoke-RemotePreflight {
 		Write-Host "[ОШИБКА] Служба вернула неразбираемый ответ на /capabilities."
 		return $false
 	}
-	$script:RemoteChunkSize = if ($caps.chunk_size) { [int]$caps.chunk_size } else { 33554432 }
+	# chunk_size живёт в limits (args_version 2); на верхнем уровне его больше
+	# нет. .sh находил его текстовым поиском по всему телу и потому уцелел, а
+	# здесь значение молча становилось $null и подменялось умолчанием — один
+	# ответ службы давал двум платформам разный размер куска.
+	$chunkRaw = if ($null -ne $caps.limits -and $caps.limits.chunk_size) { $caps.limits.chunk_size } else { $caps.chunk_size }
+	$script:RemoteChunkSize = if ($chunkRaw) { [int]$chunkRaw } else { 33554432 }
 	$script:RemoteArgsVersion = $caps.args_version
-	$script:RemoteEncoders = $caps.encoders
+	$script:RemoteEncoders = Get-RemoteCapsEncoders $caps.encoders
+	# Потолок ожидания карты и список контейнеров объявляет служба. Оба уже
+	# отвергались 400-м, но ПОСЛЕ отправки файла целиком — то есть цена ошибки
+	# равнялась времени загрузки гигабайтов. Спрашиваем здесь.
+	$script:RemoteCapsWaitMax = if ($null -ne $caps.limits) { $caps.limits.wait_timeout_max_s } else { $null }
+	$script:RemoteCapsContainers = @()
+	try { $script:RemoteCapsContainers = @($caps.ops.transcode.values.container) } catch {}
 	# Пустой список и отсутствие ключа — разные вещи: первое означает «служба не
 	# умеет ничего» и обязано быть отказом, второе — «служба ничего не сказала».
-	if (($caps.PSObject.Properties.Name -contains 'encoders') -and @($caps.encoders).Count -eq 0) {
+	if (($caps.PSObject.Properties.Name -contains 'encoders') -and @($script:RemoteEncoders).Count -eq 0) {
 		Write-Host "[ОШИБКА] Служба объявила пустой список энкодеров — считать нечем."
 		return $false
 	}
@@ -386,9 +423,25 @@ function Invoke-RemotePreflight {
 		Write-Host "[ОШИБКА] Кодек «$set_video_codec» удалённой службе неизвестен (ожидаются h264/hevc/av1-энкодеры)."
 		return $false
 	}
-	if (-not (Test-RemoteCodecSupported $family $caps.encoders)) {
-		Write-Host "[ОШИБКА] Служба не умеет кодек «$family» (из [video] codec = $set_video_codec). Служба объявила: $($caps.encoders -join ', ')"
+	if (-not (Test-RemoteCodecSupported $family $script:RemoteEncoders)) {
+		Write-Host "[ОШИБКА] Служба не умеет кодек «$family» (из [video] codec = $set_video_codec). Служба объявила: $($script:RemoteEncoders -join ', ')"
 		return $false
+	}
+	if ($script:RemoteCapsWaitMax -and [int]$script:RemoteCapsWaitMax -gt 0) {
+		$wantWait = if ($remote_wait_timeout) { [int]$remote_wait_timeout } else { 1800 }
+		if ($wantWait -gt [int]$script:RemoteCapsWaitMax) {
+			Write-Host "[ОШИБКА] [remote] wait_timeout = $wantWait больше потолка службы ($($script:RemoteCapsWaitMax) с) — задача была бы отвергнута после загрузки файла."
+			return $false
+		}
+	}
+	# Контейнер выхода — тоже 400 после загрузки. Проверяем только когда список
+	# разобран: молчание службы не повод отказывать.
+	if (@($script:RemoteCapsContainers).Count -gt 0) {
+		$wantContainer = if ($output_container_status -eq '+') { "$output_container_value" } else { 'mp4' }
+		if ($script:RemoteCapsContainers -notcontains $wantContainer) {
+			Write-Host "[ОШИБКА] Служба не умеет контейнер «$wantContainer» (из [video] container). Служба объявила: $($script:RemoteCapsContainers -join ', ')"
+			return $false
+		}
 	}
 	# Версия сборщика аргументов службы. Расхождение не запрещает работу, но молча
 	# получить файл, собранный логикой, которой у нас нет, — хуже, чем шумно.
@@ -480,6 +533,10 @@ function Test-RemoteRetryableCode {
 # Возобновляемость — не удобство, а условие работоспособности: файлы от
 # гигабайта, и одна POST-загрузка на 20 ГБ рвётся и начинается заново.
 $script:RemoteUploadDuration = ''
+# Размер результата из перечня выходов и признак того, что скачанное с ним
+# сошлось. Читает Publish-EncodedResult — как REMOTE_RESULT_* в .sh.
+$script:RemoteResultSize = ''
+$script:RemoteResultVerified = 'no'
 function Send-RemoteUpload {
 	param([string]$Path)
 	$script:RemoteUploadDuration = ''
@@ -579,7 +636,17 @@ function Send-RemoteUpload {
 		Clear-RemoteUploadSidecar
 		return $null
 	}
+	# Ответ на complete содержит только upload_id и status: длительности там нет и
+	# не было, то есть запасной источник для тонкого клиента (без локального
+	# ffprobe) был мёртв и молча давал пустую строку. Разбор входа отдаёт отдельная
+	# ручка; её отказ не фатален — ради длительности ронять загрузку нельзя.
 	try { $script:RemoteUploadDuration = ($r.Body | ConvertFrom-Json).duration } catch {}
+	if (-not $script:RemoteUploadDuration) {
+		$probe = Invoke-RemoteHttp GET "/uploads/$uid/probe"
+		if ($probe.Code -eq 200) {
+			try { $script:RemoteUploadDuration = ($probe.Body | ConvertFrom-Json).duration } catch {}
+		}
+	}
 	Clear-RemoteUploadSidecar
 	return $uid
 }
@@ -702,7 +769,23 @@ function Wait-RemoteJob {
 		$sig = "$($j.state)|$($j.progress)"
 		if ($sig -ne $lastSig) { $lastSig = $sig; $lastChange = Get-Date }
 		switch ($j.state) {
-			'done'      { if ($OnProgress) { & $OnProgress 100 $Label 'кодирование' }; $script:RemoteCurrentJob = ''; return $true }
+			'done'      {
+				# Состояние задачи не содержит ни sha256, ни размера результата —
+				# сверять скачанное было нечем. Размер служба сообщает отдельной
+				# ручкой перечня выходов; берём его ТОЛЬКО когда выход один: у
+				# нескольких /result отдаёт tar, и его длина с суммой длин файлов не
+				# совпадает по определению.
+				$script:RemoteResultSize = ''
+				$o = Invoke-RemoteHttp GET "/jobs/$JobId/outputs"
+				if ($o.Code -eq 200) {
+					try {
+						$oj = $o.Body | ConvertFrom-Json
+						if ([int]$oj.count -eq 1) { $script:RemoteResultSize = "$($oj.outputs[0].bytes)" }
+					} catch {}
+				}
+				if ($OnProgress) { & $OnProgress 100 $Label 'кодирование' }
+				$script:RemoteCurrentJob = ''; return $true
+			}
 			'failed'    { Write-Host "[ОШИБКА] Задача провалена: $($j.error)"; $script:RemoteCurrentJob = ''; return $false }
 			'cancelled' { Write-Host "[ОШИБКА] Задача отменена."; $script:RemoteCurrentJob = ''; return $false }
 			'waiting_gpu' {
@@ -720,11 +803,25 @@ function Wait-RemoteJob {
 function Receive-RemoteResult {
 	param([string]$JobId, [string]$Destination)
 	# Скачивание результата — долгий запрос, 60 с общего таймаута ему мало.
+	$script:RemoteResultVerified = 'no'
 	$r = Invoke-RemoteHttpRetry GET "/jobs/$JobId/result" '' @{} $Destination '' $null 3600000
 	if ($r.Code -ne 200) {
 		Write-Host "[ОШИБКА] Результат недоступен: HTTP $($r.Code)."
 		Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
 		return $false
+	}
+	# Размер, объявленный службой, отвечает на тот же вопрос, что полный декод
+	# `-f null -`, но почти бесплатно: у трёхгигабайтного выхода второй декод стоит
+	# минут НА ФАЙЛ. Паритет с .sh (REMOTE_RESULT_VERIFIED).
+	if ($script:RemoteResultSize) {
+		$got = -1
+		try { $got = (Get-Item -LiteralPath $Destination).Length } catch {}
+		if ("$got" -ne "$($script:RemoteResultSize)") {
+			Write-Host "[ОШИБКА] Размер скачанного результата ($got) не совпал с объявленным службой ($($script:RemoteResultSize))."
+			Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
+			return $false
+		}
+		$script:RemoteResultVerified = 'yes'
 	}
 	return $true
 }

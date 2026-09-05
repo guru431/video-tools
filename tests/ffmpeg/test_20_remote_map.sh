@@ -98,7 +98,9 @@ video_quality_status="-"
 params="$(remote_op_for_config 0 0 | tail -1)"
 assert_contains "битрейт в бит/с"    '"bitrate":3000000'          "$params"
 assert_contains "потолок исходного"  '"bitrate_cap_source":true'  "$params"
-assert_contains "поворот"            '"rotate":"2"'               "$params"
+# Число, а не строка: у службы допустимые значения — ("off", 1, 2), и "2" в
+# кавычках в этот список не входит. Отказ приходил 400-м после полной загрузки.
+assert_contains "поворот"            '"rotate":2'                 "$params"
 assert_contains "скорость"           '"speed":1.75'               "$params"
 assert_contains "нормализация"       '"normalize":"loudnorm"'     "$params"
 assert_contains "пресет"             '"preset":"p5"'              "$params"

@@ -32,6 +32,20 @@ ffmpeg.
 > адрес и ключ в полях, но config.ini НЕ переписывает; дедлайн задачи считается по
 > застреванию (`stall_timeout`), а не как кратное `wait_timeout`; сверка `args_version`
 > реализована и сравнивает с константой клиента `REMOTE_CLIENT_ARGS_VERSION`.
+>
+> **Контракт службы с 2026-09-05 — `args_version = 2`**, и форма ответов здесь
+> описана по версии 1. Что изменилось на самом деле (сверено с живой службой):
+> `capabilities.encoders` — ОБЪЕКТ по месту счёта (`{"gpu":[…],"cpu":[…]}`), а не
+> плоский список; `chunk_size`, `wait_timeout_max_s` и прочие пределы живут в
+> `capabilities.limits`; допустимые контейнеры — в `ops.transcode.values.container`;
+> `rotate` принимается ЧИСЛОМ (`("off", 1, 2)`); ответ на `POST /uploads/{id}/complete`
+> содержит только `upload_id` и `status` (длительность отдаёт `GET /uploads/{id}/probe`);
+> состояние задачи не содержит ни `result_sha256`, ни `result_size` — размер выхода
+> отдаёт `GET /jobs/{id}/outputs`; `dry_run` возвращает ПЛАН из шагов
+> (`split` → `encode`×N → `concat` → `mux`), а `argv` остаётся только там, где команда
+> действительно одна. Клиент приведён к этому контракту; закреплено suite'ами
+> «контракт службы args_version 2» в `tests/ffmpeg/test_21_remote_client.sh` и
+> `tests/ffmpeg/test_22_remote_ps1.sh`.
 
 ## 1. Зачем
 

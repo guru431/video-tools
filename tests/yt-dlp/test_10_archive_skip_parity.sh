@@ -113,8 +113,13 @@ assert_contains "PS1 считает пропуски (паритет с COUNT_SK
 # -Encoding UTF8` в PS 5.1 пишет 3 байта BOM даже в пустой файл, поэтому условие
 # `Length -eq 0` не выполнялось НИКОГДА — пропуск по архиву засчитывался как загрузка,
 # ровно тот баг завышенной сводки, который этот файл и охраняет.
+# Чтение вынесено в Get-ManifestLines: Get-Content без -Encoding в PS 5.1 декодирует
+# файл без BOM как ANSI, и кириллический путь становился mojibake (перевод не находил
+# файл). Проверяем и вызов, и то, что читатель задаёт UTF-8 явно.
 assert_contains "PS1 определяет archive-skip по содержимому манифеста" \
-    'Get-Content -LiteralPath $dlManifest -ErrorAction SilentlyContinue |' "$src_ps1"
+    'Get-ManifestLines $dlManifest |' "$src_ps1"
+assert_contains "манифест читается явно как UTF-8, а не в ANSI-кодировке системы" \
+    '[System.IO.File]::ReadAllLines($Path, [System.Text.UTF8Encoding]::new($false))' "$src_ps1"
 assert_not_contains "пропуск НЕ определяется по длине файла (BOM даёт Length=3)" \
     '(Get-Item -LiteralPath $dlManifest).Length -eq 0' "$src_ps1"
 assert_contains "манифест создаётся без BOM" \

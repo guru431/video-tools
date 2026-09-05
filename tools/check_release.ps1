@@ -19,6 +19,45 @@ $exes = @(
 )
 function Get-Sha256([string]$p) { (Get-FileHash -Algorithm SHA256 -LiteralPath $p).Hash }
 
+# Из каких файлов собирается каждый EXE. Совпадение SHA256 с sidecar'ом говорит
+# лишь «EXE не подменён после сборки» — оно ничего не говорит о том, СОБРАН ли он
+# из текущих исходников. Ровно так в репозиторий уже попадала пара «правка в
+# script.ps1 + старый EXE»: тесты зелёные (они гоняют .ps1), манифест сходится,
+# а пользователь EXE получает поведение прошлой версии. Сверяем провенанс:
+# коммит сборки обязан быть НЕ СТАРШЕ последнего коммита, тронувшего исходник.
+$exeDeps = @{
+    'ffmpeg/_VideoConverter_v18.exe'  = @(
+        'ffmpeg/FFmpeg_Converter_run_win_v18.ps1',
+        'ffmpeg/FFmpeg_Converter_script.ps1',
+        'ffmpeg/remote_client.ps1')
+    'yt-dlp/_VideoDownloader_v18.exe' = @(
+        'yt-dlp/Downloading_from_YouTube_v18.ps1')
+}
+
+function Get-StaleExeSources {
+    param([string]$Commit)
+    $stale = @()
+    if (-not $Commit -or $Commit -eq 'unknown') { return $stale }
+    foreach ($e in $exes) {
+        foreach ($dep in $exeDeps[$e.Path]) {
+            $last = ''
+            # try/catch, а не проверка кода: под $ErrorActionPreference = 'Stop'
+            # любой stderr от git — терминирующая ошибка (см. ниже про dubious ownership).
+            try { $last = (& git -C $root log -1 --format=%H -- $dep 2>$null | Out-String).Trim() } catch { $last = '' }
+            if (-not $last) { continue }
+            $isAncestor = $false
+            try {
+                & git -C $root merge-base --is-ancestor $last $Commit 2>$null
+                $isAncestor = ($LASTEXITCODE -eq 0)
+            } catch { $isAncestor = $false }
+            if (-not $isAncestor) {
+                $stale += "$($e.Path): собран на $($Commit.Substring(0, [Math]::Min(8, $Commit.Length))), а $dep изменён позже (в $($last.Substring(0,8)))"
+            }
+        }
+    }
+    return $stale
+}
+
 # Явно находит bash из Git for Windows. Голый `& bash` на Windows с установленным WSL
 # резолвится в System32\bash.exe (WSL) — другое окружение: пути не транслируются, а
 # STRICT_SKIP не отрабатывает как в CI, и release-проверка молча зеленеет с пропущенными
@@ -45,7 +84,31 @@ try {
     # (незакоммиченные правки исходников) делает провенанс недостоверным → отказ.
     $commit = ''
     try { $commit = (& git -C $root rev-parse HEAD 2>$null).Trim() } catch { $commit = 'unknown' }
-    $dirty  = [bool](& git -C $root status --porcelain 2>$null)
+    # try/catch обязателен: под $ErrorActionPreference = 'Stop' ЛЮБОЙ stderr от git
+    # (например «detected dubious ownership in repository») превращается в
+    # терминирующую ошибку и роняет скрипт целиком — даже при -ManifestOnly, где
+    # значение $dirty вообще не используется.
+    $dirty = $false
+    try { $dirty = [bool](& git -C $root status --porcelain 2>$null) } catch { $dirty = $true }
+
+    # В -ManifestOnly EXE не пересобираются, и провенанс берётся у тех файлов, что
+    # уже лежат на диске: именно здесь устаревший EXE обязан остановить релиз.
+    # В обычном режиме проверка идёт ПОСЛЕ сборки (ниже) и там тривиально проходит.
+    if ($ManifestOnly) {
+        $manifestOld = Join-Path $root 'release-manifest.json'
+        $builtAt = ''
+        if (Test-Path -LiteralPath $manifestOld) {
+            try { $builtAt = (Get-Content -LiteralPath $manifestOld -Raw | ConvertFrom-Json).source_commit } catch { $builtAt = '' }
+        }
+        if ($builtAt) {
+            $stale = Get-StaleExeSources $builtAt
+            if ($stale.Count -gt 0) {
+                throw ("EXE устарел — пересоберите (без -ManifestOnly):`n  " + ($stale -join "`n  "))
+            }
+        } else {
+            Write-Host "WARN: в release-manifest.json нет source_commit — свежесть EXE не проверена."
+        }
+    }
 
     if (-not $ManifestOnly) {
         if ($dirty) { throw "рабочее дерево не чистое ДО сборки — зафиксируйте/уберите правки, иначе провенанс манифеста недостоверен" }
@@ -95,6 +158,13 @@ try {
         ps2exe = [ordered]@{ commit = $script:Ps2ExeCommit; sha256 = $script:Ps2ExeSha }
         artifacts = $artifacts
     }
+    # Последний барьер: даже после сборки провенанс должен сходиться. Не сойдётся он
+    # ровно в одном случае — сборка шла не из HEAD (например, EXE собран в другой ветке).
+    $stale = Get-StaleExeSources $commit
+    if ($stale.Count -gt 0) {
+        throw ("провенанс не сходится — EXE не соответствует исходникам:`n  " + ($stale -join "`n  "))
+    }
+
     $manifestPath = Join-Path $root 'release-manifest.json'
     ($manifest | ConvertTo-Json -Depth 6) | Set-Content -Path $manifestPath -Encoding UTF8
 

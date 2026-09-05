@@ -449,7 +449,9 @@ rm -f "$CFG"
 
 # PS1: формат из конфига (был захардкожен vtt → ключ [subtitles] format не работал).
 PS1_SRC_F31="$(cat "$PS1_SCRIPT")"
-assert_contains "PS1: format читается из конфига"    'Read-Config "format"              "subtitles" "vtt"' "$PS1_SRC_F31"
+# Ключ читается через Read-ConfigEnum — тот же Read-Config плюс валидация списка:
+# неизвестный формат субтитров теперь не уезжает в argv молча, а даёт предупреждение.
+assert_contains "PS1: format читается из конфига"    'Read-ConfigEnum "format"          "subtitles" "vtt"' "$PS1_SRC_F31"
 assert_contains "PS1: --write-subs в режиме субтитров" '"--write-subs", "--write-auto-subs", "--sub-langs", "ru"' "$PS1_SRC_F31"
 assert_not_contains "PS1: vtt больше не захардкожен"  '"--sub-format", "vtt"' "$PS1_SRC_F31"
 
@@ -506,7 +508,9 @@ assert_contains "PS1 F4: map 0:s?"                           '"0:s?"'           
 assert_contains "PS1 F4: -c:s copy"                          '"-c:s", "copy"'    "$PS1_SRC"
 # F14: запрошенный перевод без результата → failCount++ (не молчаливый успех).
 assert_contains "PS1 F14: флаг успешного перевода"           '$translateOk = $true'   "$PS1_SRC"
-assert_contains "PS1 F14: провал перевода инкрементит failCount" 'if (-not $translateOk) {' "$PS1_SRC"
+# Остановка пользователем не считается провалом перевода: раньше Stop во время vot
+# печатал «AI-перевод не выполнен — засчитано как ошибка» и портил сводку.
+assert_contains "PS1 F14: провал перевода инкрементит failCount" 'if (-not $translateOk -and $global:processRunning) {' "$PS1_SRC"
 # #14: Stop отменяет перевод (убивает vot) + окно не висит бессрочно (DoEvents + таймаут).
 assert_contains "PS1 #14: vot-процесс отслеживается для Stop"   '$global:translateProcess = $votProc' "$PS1_SRC"
 # Голый Kill() снимал только родителя (yt-dlp.exe — PyInstaller onefile, качает

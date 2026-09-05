@@ -136,8 +136,14 @@ assert_not_contains "нет несуществующего transpose_cuda"  "tra
 assert_contains "-nostdin в main ffmpeg"  '"$ffmpeg" -nostdin -hide_banner'  "$src_sh"
 # Цикл чтения файлов: read -r -d '' (без -r теряются backslash в путях)
 assert_not_contains "нет read без -r (буквальный \$'\\\\0')"  "while read -d \$'\\0' full_path"  "$src_sh"
-# Экранирование субтитров: backslash → forward slash перед остальным
-assert_contains "субтитры: backslash → slash"  's#\\#/#g'  "$src_sh"
+# Экранирование субтитров: backslash → forward slash перед остальным.
+# Сделано подстановкой параметра, а не sed: правило для апострофа (' → \'\'')
+# внутри sed-скрипта в кавычках нечитаемо и ломается при малейшей правке.
+assert_contains "субтитры: backslash → slash"  'sub_escaped="${sub_file//\\//}"'  "$src_sh"
+# Апостроф требует ДВУХ уровней экранирования (граф фильтров → опции фильтра).
+# Проверено на настоящем ffmpeg 8.1.2: и \' , и '\'' по отдельности дают
+# «Unable to open …/its video» — файл в папке вроде «John's videos» падал всегда.
+assert_contains "субтитры: апостроф экранирован двухуровнево" '_sq_esc="\\'"'"'\\'"'"''"'"'"'  "$src_sh"
 
 suite "script.sh: фиксы Task 6 (copy_codecs ext, Duration N/A)"
 # copy_codecs: current_format_out из источника ДО existence-check

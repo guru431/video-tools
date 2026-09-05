@@ -17,6 +17,20 @@ $ffmpeg = if (Test-Path -LiteralPath "$PSScriptRoot\ffmpeg.exe") { "$PSScriptRoo
 # выигрывает: прежняя версия возвращалась на первом совпадении.
 $script:_cfgCache     = @{}
 $script:_cfgCacheFile = $null
+# Кавычки вокруг значения — обычный результат «Копировать как путь» в проводнике
+# Windows. Без снятия путь «"C:/video/in"» не находился ни на одной платформе,
+# а PS1 вдобавок падал исключением IsPathRooted.
+function Remove-ConfigQuotes {
+	param([string]$Value)
+	$v = $Value.Trim()
+	if ($v.Length -ge 2) {
+		if (($v[0] -eq '"' -and $v[-1] -eq '"') -or ($v[0] -eq "'" -and $v[-1] -eq "'")) {
+			return $v.Substring(1, $v.Length - 2)
+		}
+	}
+	return $v
+}
+
 function Read-Config {
 	param([string]$Key, [string]$Section, [string]$Default = "")
 	if ($script:_cfgCacheFile -ne $configFile) {
@@ -49,7 +63,8 @@ function Read-Config {
 						} else { $ev }
 					})
 					$_k = "${curSection}::$($Matches[1].Trim())"
-					if (-not $script:_cfgCache.ContainsKey($_k)) { $script:_cfgCache[$_k] = $val.Trim() }
+					# ContainsKey-guard = ПЕРВОЕ вхождение ключа (контракт всех платформ).
+					if (-not $script:_cfgCache.ContainsKey($_k)) { $script:_cfgCache[$_k] = (Remove-ConfigQuotes $val) }
 				}
 			}
 		}
@@ -134,6 +149,7 @@ $remote_api_key         = Read-Config "api_key" "remote" ""
 $remote_api_key_command = Read-Config "api_key_command" "remote" ""
 $remote_prefer          = Read-Config "prefer" "remote" "auto"
 $remote_wait_timeout    = Read-Config "wait_timeout" "remote" "1800"
+$remote_stall_timeout   = Read-Config "stall_timeout" "remote" "900"
 $remote_on_failure      = Read-Config "on_failure" "remote" "abort"
 
 $save_old_extension = Read-Config "save_old_extension" "other" "no"

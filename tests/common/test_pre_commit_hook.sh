@@ -129,4 +129,80 @@ assert_contains     "rename notes.txt → .env → BLOCKED" "BLOCKED" "$OUT"
 assert_not_contains "rename → .env → коммит НЕ создан" "RC=0" "$OUT"
 rm -rf "$R"
 
+# ══════════════════════════════════════════════════════════════
+suite "pre-commit: блок 3 (локальный denylist .sanitize-patterns)"
+# ══════════════════════════════════════════════════════════════
+# Блок denylist'а не был покрыт вовсе, хотя именно он ловит КОНКРЕТНЫЕ значения
+# (имена, внутренние хосты), которых generic-форматы не знают по построению.
+R=$(new_repo)
+# Сам denylist коммитить нельзя НИКОГДА (это список конкретных приватных
+# значений), и filename-guard хука блокирует его по имени. В рабочем
+# репозитории он gitignored — повторяем это в фикстуре, иначе тест
+# проверял бы filename-guard, а не блок 3.
+printf '.sanitize-patterns
+' > "$R/.gitignore"
+printf 'ОченьВнутреннийХост-42\n' > "$R/.sanitize-patterns"
+printf 'server = ОченьВнутреннийХост-42\n' > "$R/notes.txt"
+OUT=$(try_commit "$R" "denylist value")
+assert_contains     "значение из denylist → BLOCKED" "BLOCKED" "$OUT"
+assert_not_contains "значение из denylist → коммит НЕ создан" "RC=0" "$OUT"
+rm -rf "$R"
+
+# Тот же denylist, но значения в диффе нет — коммит обязан пройти.
+R=$(new_repo)
+printf '.sanitize-patterns
+' > "$R/.gitignore"
+printf 'ОченьВнутреннийХост-42\n' > "$R/.sanitize-patterns"
+printf 'server = public.example.com\n' > "$R/notes.txt"
+OUT=$(try_commit "$R" "no denylist value")
+assert_contains "чистый файл при непустом denylist → коммит создан" "RC=0" "$OUT"
+rm -rf "$R"
+
+# ══════════════════════════════════════════════════════════════
+suite "pre-commit: блок 4 (секрет внутри бинарного файла)"
+# ══════════════════════════════════════════════════════════════
+# Текстовый дифф внутрь бинарника не заглядывает, поэтому блок 4 извлекает из
+# staged-блоба печатные строки. Проверяем и ASCII-имя, и кириллическое: последнее
+# `git diff --numstat` без core.quotePath=false отдаёт экранированным, `git show`
+# такой путь не находит, и файл молча пропускался.
+R=$(new_repo)
+printf 'binary\000data %s trailer\000' "$FAKE_TOKEN" > "$R/data.bin"
+OUT=$(try_commit "$R" "binary secret")
+assert_contains     "токен в data.bin → BLOCKED" "BLOCKED" "$OUT"
+assert_not_contains "токен в data.bin → коммит НЕ создан" "RC=0" "$OUT"
+rm -rf "$R"
+
+R=$(new_repo)
+printf 'binary\000data %s trailer\000' "$FAKE_TOKEN" > "$R/данные.bin"
+OUT=$(try_commit "$R" "binary secret cyrillic name")
+assert_contains     "токен в «данные.bin» → BLOCKED" "BLOCKED" "$OUT"
+assert_not_contains "токен в «данные.bin» → коммит НЕ создан" "RC=0" "$OUT"
+rm -rf "$R"
+
+# ══════════════════════════════════════════════════════════════
+suite "pre-commit: контентная строка, начинающаяся с '+'"
+# ══════════════════════════════════════════════════════════════
+# `grep -v '^+++'` отбрасывал не только заголовок файла, но и добавленную строку
+# вида `++ ghp_…` — например при коммите текста самого патча. Дифф-заголовок
+# теперь отбрасывается точным шаблоном.
+R=$(new_repo)
+printf '++ token %s\n' "$FAKE_TOKEN" > "$R/patch.txt"
+OUT=$(try_commit "$R" "plus-plus line")
+assert_contains     "строка '++ токен' → BLOCKED" "BLOCKED" "$OUT"
+assert_not_contains "строка '++ токен' → коммит НЕ создан" "RC=0" "$OUT"
+rm -rf "$R"
+
+# ══════════════════════════════════════════════════════════════
+suite "pre-commit: обычные слова с 'sk-' не блокируются"
+# ══════════════════════════════════════════════════════════════
+# `sk-[A-Za-z0-9_-]{16,}` без левой границы блокировал task-management-system-2026
+# и risk-assessment-checklist. Ложные срабатывания приучают к --no-verify, а он
+# отключает и все остальные проверки разом — то есть делают барьер вредным.
+R=$(new_repo)
+printf 'см. task-management-system-2026 и risk-assessment-checklist-2026\n' > "$R/notes.txt"
+OUT=$(try_commit "$R" "ordinary words with sk-")
+assert_contains     "обычные слова с sk- → коммит создан" "RC=0" "$OUT"
+assert_not_contains "обычные слова с sk- → нет BLOCKED" "BLOCKED" "$OUT"
+rm -rf "$R"
+
 summary

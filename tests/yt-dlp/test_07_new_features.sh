@@ -147,7 +147,13 @@ sponsorblock = off
 lang = ru
 download_with_video = off"
 OUT=$(run_dry "$CFG" --quality audio)
-assert_not_contains "дефолт: нет --extract-audio"  "--extract-audio"  "$OUT"
+# --extract-audio ставится при --quality audio ВСЕГДА, а --audio-format — только
+# когда формат задан явно. Прежний контракт («best → не ставим ничего») означал,
+# что на площадках без чисто аудиопотока (VK, RuTube) селектор bestaudio/best
+# брал полноценное ВИДЕО и отдавал его как «только аудио»: гигабайты вместо
+# мегабайт, молча и с кодом возврата 0.
+assert_contains     "дефолт: --extract-audio всё равно есть" "--extract-audio"  "$OUT"
+assert_not_contains "дефолт: --audio-format не навязан"      "--audio-format"   "$OUT"
 assert_not_contains "дефолт: нет --sponsorblock"   "--sponsorblock"   "$OUT"
 assert_not_contains "дефолт: нет --embed-subs"     "--embed-subs"     "$OUT"
 assert_not_contains "дефолт: нет --write-subs"     "--write-subs"     "$OUT"

@@ -70,13 +70,13 @@ r=$(fmt_call 360 avc1_https)
 assert_eq "360"    "-f 140+134"          "$r"
 
 r=$(fmt_call 480 avc1_https)
-assert_eq "480"    "-f 140+135/134"      "$r"
+assert_eq "480"    "-f 140+135/140+134"      "$r"
 
 r=$(fmt_call 720 avc1_https)
-assert_eq "720"    "-f 140+136/135/134"  "$r"
+assert_eq "720"    "-f 140+136/140+135/140+134"  "$r"
 
 r=$(fmt_call 1080 avc1_https)
-assert_eq "1080"   "-f 140+137/136/135/134"  "$r"
+assert_eq "1080"   "-f 140+137/140+136/140+135/140+134"  "$r"
 
 r=$(fmt_call 1440 avc1_https)
 assert_contains "1440 → 140+264 (не битый 140+138)"  "140+264"  "$r"
@@ -94,7 +94,7 @@ r=$(fmt_call audio avc1_m3u8)
 assert_eq "audio"  "-f 234"              "$r"
 
 r=$(fmt_call 720 avc1_m3u8)
-assert_eq "720"    "-f 234+232/231/230"  "$r"
+assert_eq "720"    "-f 234+232/234+231/234+230"  "$r"
 
 r=$(fmt_call 1080 avc1_m3u8)
 assert_contains "1080 → 270+234 (не битый 234+233)"  "270+234"  "$r"
@@ -110,7 +110,7 @@ assert_eq "720"   "-f 140+298/best[height<=720]"        "$r"
 assert_not_contains "720 → нет фантомных 297/296"  "297"  "$r"
 
 r=$(fmt_call 1080 avc1_https_60fps)
-assert_eq "1080"  "-f 140+299/298/best[height<=1080]"    "$r"
+assert_eq "1080"  "-f 140+299/140+298/best[height<=1080]"    "$r"
 
 # 1440/2160: селектор по разрешению идёт ПЕРВЫМ (иначе 140+299 отдаёт 1080p).
 r=$(fmt_call 1440 avc1_https_60fps)
@@ -128,20 +128,20 @@ suite "avc1_m3u8_60fps: M3U8 60fps"
 # стороне YouTube itag не должен ронять загрузку. Прежние ожидания застыли на версии
 # ДО появления fallback: их проверяла inline-копия, которая за production не поспевала.
 r=$(fmt_call 720 avc1_m3u8_60fps)
-assert_eq "720"   "-f 234+311/310/309/bestvideo[height<=720][fps>=50]+bestaudio/best[height<=720]"    "$r"
+assert_eq "720"   "-f 234+311/234+310/234+309/bestvideo[height<=720][fps>=50]+bestaudio/best[height<=720]"    "$r"
 
 r=$(fmt_call 1080 avc1_m3u8_60fps)
-assert_eq "1080"  "-f 234+312/311/310/309/bestvideo[height<=1080][fps>=50]+bestaudio/best[height<=1080]" "$r"
+assert_eq "1080"  "-f 234+312/234+311/234+310/234+309/bestvideo[height<=1080][fps>=50]+bestaudio/best[height<=1080]" "$r"
 
 # ══════════════════════════════════════════════════════════════
 suite "avc1_https_60fps_hdr: HDR форматы"
 # ══════════════════════════════════════════════════════════════
 
 r=$(fmt_call 720 avc1_https_60fps_hdr)
-assert_eq "720"   "-f 234+698/697/696/bestvideo[height<=720][fps>=50]+bestaudio/best[height<=720]"    "$r"
+assert_eq "720"   "-f 234+698/234+697/234+696/bestvideo[height<=720][fps>=50]+bestaudio/best[height<=720]"    "$r"
 
 r=$(fmt_call 1080 avc1_https_60fps_hdr)
-assert_eq "1080"  "-f 234+699/698/697/696/bestvideo[height<=1080][fps>=50]+bestaudio/best[height<=1080]" "$r"
+assert_eq "1080"  "-f 234+699/234+698/234+697/234+696/bestvideo[height<=1080][fps>=50]+bestaudio/best[height<=1080]" "$r"
 
 # ══════════════════════════════════════════════════════════════
 suite "old_combo: legacy форматы"
@@ -210,7 +210,7 @@ suite "ПРОДАКШН build_format_args (dot-source SH) — таблицы н�
 prod_fmt() { ( YTDLP_BIN=":"; source "$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v18.sh" >/dev/null 2>&1; build_format_args "$1" "$2" youtube; printf '%s' "${FMT_ARGS_ARR[1]}" ); }
 
 assert_eq       "prod 60fps 720"   "140+298/best[height<=720]"       "$(prod_fmt 720 avc1_https_60fps)"
-assert_eq       "prod 60fps 1080"  "140+299/298/best[height<=1080]"  "$(prod_fmt 1080 avc1_https_60fps)"
+assert_eq       "prod 60fps 1080"  "140+299/140+298/best[height<=1080]"  "$(prod_fmt 1080 avc1_https_60fps)"
 assert_contains "prod 60fps 1440 resolution-first"  "bestvideo[height<=1440][fps>=50]+bestaudio[ext=m4a]/140+299"  "$(prod_fmt 1440 avc1_https_60fps)"
 assert_contains "prod 60fps 2160 resolution-first"  "bestvideo[height<=2160][fps>=50]"  "$(prod_fmt 2160 avc1_https_60fps)"
 assert_eq       "prod avc1_best audio"  "bestaudio[ext!=webm]/bestaudio"  "$(prod_fmt audio avc1_best)"

@@ -402,19 +402,57 @@ out="$( (REMOTE_WAIT_MAX_POLLS=1 remote_wait job-7 "файл" 2>&1) )" || true
 assert_contains "ожидание объяснено" "42" "$out"
 assert_contains "нехватка памяти названа" "512" "$out"
 
-# Клиентский предел ожидания. Без него застрявшая в running задача держала бы
-# прогон вечно: remote_wait_timeout уезжает в тело задачи и трактуется СЛУЖБОЙ.
+# Клиентский предел ожидания по ЗАСТРЕВАНИЮ. Прежний «3 × wait_timeout на всю
+# задачу» выводил предел из параметра с другим смыслом (wait_timeout — сколько
+# СЛУЖБА ждёт окна на карте): часовой 4K-файл отменялся при живом прогрессе, а
+# prefer = cpu на длинном файле — через 90 минут серверной работы. Теперь таймер
+# сбрасывается на каждое изменение state/progress.
 : > "$MOCK_CURL_LOG"
 MOCK_CURL_ROUTES="$(routes \
   'GET /v1/jobs/job-9|200|{"state":"running","progress":10}' \
   'DELETE /v1/jobs/job-9|200|{"ok":true}')"
-remote_wait_timeout=1
-out="$( (REMOTE_WAIT_FACTOR=1 REMOTE_POLL_SECONDS=1 remote_wait job-9 "файл" 2>&1) )"; rc=$?
+remote_stall_timeout=1
+out="$( (REMOTE_POLL_SECONDS=1 remote_wait job-9 "файл" 2>&1) )"; rc=$?
 assert_eq "застрявшая задача не ждётся вечно" "1" "$rc"
-assert_contains "названа причина" "не завершилась за" "$out"
+assert_contains "названа причина" "не подаёт признаков движения" "$out"
 assert_contains "задача отменена на сервере" "DELETE" "$(cat "$MOCK_CURL_LOG")"
-remote_wait_timeout=1800
-assert_eq "предел считается от wait_timeout" "5400" "$(remote_wait_deadline_seconds)"
+remote_stall_timeout=900
+assert_eq "предел берётся из stall_timeout" "900" "$(remote_stall_seconds)"
+remote_stall_timeout=""
+assert_eq "пустой stall_timeout → умолчание 900" "900" "$(remote_stall_seconds)"
+remote_stall_timeout=900
+
+# Живой прогресс НЕ считается застреванием: задача, идущая с 10 % до 11 %, обязана
+# продолжаться. Ограничиваем число опросов, иначе цикл был бы бесконечным.
+: > "$MOCK_CURL_LOG"
+MOCK_CURL_ROUTES="$(routes \
+  'GET /v1/jobs/job-10|200|{"state":"running","progress":10}' \
+  'DELETE /v1/jobs/job-10|200|{"ok":true}')"
+remote_stall_timeout=1
+out="$( (REMOTE_WAIT_MAX_POLLS=1 REMOTE_POLL_SECONDS=1 remote_wait job-10 "файл" 2>&1) )" || true
+assert_not_contains "первый опрос не объявляет застревание" "не подаёт признаков движения" "$out"
+remote_stall_timeout=900
+
+# Один сбойный опрос не стоит файла: 502 при рестарте службы (или 429, или обрыв)
+# считался фатальным — файл падал, а служба продолжала считать результат, который
+# никто не заберёт. Повторяем, и только после N подряд отменяем задачу.
+: > "$MOCK_CURL_LOG"
+MOCK_CURL_ROUTES="$(routes \
+  'GET /v1/jobs/job-11|502|{"error":"bad gateway"}' \
+  'DELETE /v1/jobs/job-11|200|{"ok":true}')"
+out="$( (REMOTE_POLL_MAX_FAILS=2 REMOTE_POLL_SECONDS=1 remote_wait job-11 "файл" 2>&1) )"; rc=$?
+assert_eq "серия сбойных опросов заканчивается отказом" "1" "$rc"
+assert_contains "сбой опроса не молчит" "Опрос задачи не удался" "$out"
+assert_contains "после серии сбоев задача отменена" "DELETE" "$(cat "$MOCK_CURL_LOG")"
+
+# Неповторяемый код (400) отменяет задачу сразу, без серии попыток.
+: > "$MOCK_CURL_LOG"
+MOCK_CURL_ROUTES="$(routes \
+  'GET /v1/jobs/job-12|400|{"error":"нет такой задачи"}' \
+  'DELETE /v1/jobs/job-12|200|{"ok":true}')"
+out="$( (REMOTE_POLL_SECONDS=1 remote_wait job-12 "файл" 2>&1) )"; rc=$?
+assert_eq "неповторяемый код — сразу отказ" "1" "$rc"
+assert_not_contains "400 не повторяется" "Опрос задачи не удался" "$out"
 
 suite "remote: скачивание результата"
 _dst="$(mktemp "${TMPDIR:-/tmp}/remote_dl_XXXXXX")"; rm -f "$_dst"

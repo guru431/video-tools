@@ -37,11 +37,11 @@ fi
 diff_content=$(
   { git diff --cached --unified=0 -- . ':(exclude).githooks/pre-commit' 2>/dev/null \
     || git diff --cached --unified=0 -- . ':(exclude).githooks/pre-commit'; } \
-  | grep '^+' | grep -v '^+++' || true
+  | grep '^+' | grep -vE '^\+\+\+ (b/|/dev/null)' || true
 )
 
 # 2) High-confidence secret/token formats (generic, very low false-positive)
-generic='-----BEGIN [A-Z ]*PRIVATE KEY-----|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|gho_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{16,}|ccr-[A-Za-z0-9]{8,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+|[0-9]{8,10}:[A-Za-z0-9_-]{35}|[A-Za-z][A-Za-z0-9+.-]*://[^/@:[:space:]]+:[^/@[:space:]]+@'
+generic='-----BEGIN [A-Z ]*PRIVATE KEY-----|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|gho_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|(^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}|ccr-[A-Za-z0-9]{8,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+|[0-9]{8,10}:[A-Za-z0-9_-]{35}|[A-Za-z][A-Za-z0-9+.-]*://[^/@:[:space:]]+:[^/@[:space:]]+@'
 # Exempt the documented proxy template placeholders (user:pass@, username:password@)
 hits=$(printf '%s\n' "$diff_content" | grep -nE -e "$generic" | grep -vE '(^|[^A-Za-z0-9])(username:password|user:pass)@' || true)
 if [ -n "$hits" ]; then
@@ -79,7 +79,10 @@ fi
 # 4) Binary blobs (tracked EXE etc.): text diff (blocks 2-3) can't see inside them.
 #    Extract printable strings from the STAGED blob and re-run the secret-format +
 #    personal-denylist checks. Best-effort: unreadable blobs are skipped, not blocked.
-bins=$(git diff --cached --numstat --diff-filter=AM | awk -F'\t' '$1=="-" && $2=="-" { print $3 }')
+# -c core.quotePath=false: без него путь с кириллицей приходит экранированным
+# («"\320\264...bin"»), `git show ":$bf"` его не находит, и файл молча пропускается —
+# то есть блок 4 не проверял ничего. Репозиторий русскоязычный.
+bins=$(git -c core.quotePath=false diff --cached --numstat --diff-filter=AM | awk -F'\t' '$1=="-" && $2=="-" { print $3 }')
 if [ -n "$bins" ]; then
   bin_report=$(mktemp 2>/dev/null || echo "$repo_root/.pc_binscan.tmp")
   printf '%s\n' "$bins" | while IFS= read -r bf; do

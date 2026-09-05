@@ -86,7 +86,8 @@ cat > "$_harness" <<PSEOF
 # Подмена: сети нет, ответы консервированные, вызовы записываются.
 function Invoke-RemoteHttp {
 	param([string]\$Method, [string]\$Path, [string]\$Body = '',
-	      [hashtable]\$Headers = @{}, [string]\$OutFile = '', [string]\$InFile = '')
+	      [hashtable]\$Headers = @{}, [string]\$OutFile = '', [string]\$InFile = '',
+	      [byte[]]\$InBytes = \$null, [int]\$TimeoutMs = 60000)
 	\$range = if (\$Headers.ContainsKey('Content-Range')) { \$Headers['Content-Range'] } else { '' }
 	[void]\$script:calls.Add("\$Method \$Path \$range \$Body")
 	if (\$Method -eq 'POST' -and \$Path -eq '/uploads') {
@@ -161,13 +162,16 @@ cat > "$_harness" <<PSEOF
 \$script:patchCount = 0
 function Invoke-RemoteHttp {
 	param([string]\$Method, [string]\$Path, [string]\$Body = '',
-	      [hashtable]\$Headers = @{}, [string]\$OutFile = '', [string]\$InFile = '')
+	      [hashtable]\$Headers = @{}, [string]\$OutFile = '', [string]\$InFile = '',
+	      [byte[]]\$InBytes = \$null, [int]\$TimeoutMs = 60000)
 	if (\$Method -eq 'POST' -and \$Path -eq '/uploads') {
 		return [pscustomobject]@{ Code = 200; Body = '{"upload_id":"up-77","chunk_size":1024}' }
 	}
 	if (\$Method -eq 'PATCH') {
 		\$script:patchCount++
-		\$head = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes(\$InFile), 0, 6)
+		# Кусок приходит БАЙТАМИ, а не temp-файлом: WriteAllBytes/ReadAllBytes на
+		# каждый кусок стоили лишней записи на диск в размер всего исходника.
+		\$head = [System.Text.Encoding]::ASCII.GetString(\$InBytes, 0, 6)
 		[void]\$script:calls.Add("PATCH \$(\$Headers['Content-Range']) HEAD=\$head")
 		# Первый кусок отвергаем с 503: повтор обязан пройти.
 		if (\$script:patchCount -eq 1) { return [pscustomobject]@{ Code = 503; Body = '{}' } }
@@ -197,7 +201,9 @@ rm -f "$_harness" "$_payload"
 suite "remote PS1: клиентский предел ожидания задачи"
 # ══════════════════════════════════════════════════════════════
 # `while ($true)` без предела означал, что застрявшая в running задача держит
-# прогон вечно. У .sh был хотя бы тестовый предохранитель, здесь не было и его.
+# прогон вечно. Предел считается по ЗАСТРЕВАНИЮ (state/progress не меняются), а не
+# по общему времени: «3 × wait_timeout» выводил дедлайн из параметра с другим
+# смыслом и отменял часовой 4K-файл при живом прогрессе.
 _harness="$(mktemp_suffix "${TMPDIR:-/tmp}/remote_wait_" .ps1)"
 cat > "$_harness" <<PSEOF
 # Консоль PowerShell по умолчанию отдаёт вывод в OEM-кодировке (866), и
@@ -208,12 +214,12 @@ cat > "$_harness" <<PSEOF
 \$script:calls = New-Object System.Collections.ArrayList
 function Invoke-RemoteHttp {
 	param([string]\$Method, [string]\$Path, [string]\$Body = '',
-	      [hashtable]\$Headers = @{}, [string]\$OutFile = '', [string]\$InFile = '')
+	      [hashtable]\$Headers = @{}, [string]\$OutFile = '', [string]\$InFile = '',
+	      [int]\$TimeoutMs = 60000)
 	[void]\$script:calls.Add("\$Method \$Path")
 	return [pscustomobject]@{ Code = 200; Body = '{"state":"running","progress":10}' }
 }
-\$remote_wait_timeout = 1
-\$env:REMOTE_WAIT_FACTOR = '1'
+\$remote_stall_timeout = 1
 \$env:REMOTE_POLL_SECONDS = '1'
 \$ok = Wait-RemoteJob 'job-5' 'файл'
 Write-Output "OK=\$ok"
@@ -222,9 +228,39 @@ PSEOF
 _out="$("$PS_BIN" -NoProfile -NonInteractive -File "$_harness" 2>&1 | tr -d '\r')"
 assert_contains "застрявшая задача не ждётся вечно" "OK=False" "$_out"
 assert_contains "задача отменена на сервере"        "DELETE /jobs/job-5" "$_out"
-assert_contains "предел назван словами"             "не завершилась за"  "$_out"
-assert_eq "предел считается от wait_timeout" "5400" \
-  "$(run_ps '$remote_wait_timeout = 1800; Get-RemoteWaitDeadline')"
+assert_contains "предел назван словами"             "не подаёт признаков движения"  "$_out"
+assert_eq "предел берётся из stall_timeout" "900" \
+  "$(run_ps '$remote_stall_timeout = 900; Get-RemoteStallSeconds')"
+assert_eq "пустой stall_timeout → умолчание 900" "900" \
+  "$(run_ps '$remote_stall_timeout = ""; Get-RemoteStallSeconds')"
+rm -f "$_harness"
+
+# Серия сбойных опросов: 502 при рестарте службы не должен стоить файла с первой
+# же попытки, но и вечно повторяться не должен.
+_harness="$(mktemp_suffix "${TMPDIR:-/tmp}/remote_poll_" .ps1)"
+cat > "$_harness" <<PSEOF
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+. '$MODULE'
+\$script:calls = New-Object System.Collections.ArrayList
+function Invoke-RemoteHttp {
+	param([string]\$Method, [string]\$Path, [string]\$Body = '',
+	      [hashtable]\$Headers = @{}, [string]\$OutFile = '', [string]\$InFile = '',
+	      [int]\$TimeoutMs = 60000)
+	[void]\$script:calls.Add("\$Method \$Path")
+	if (\$Method -eq 'DELETE') { return [pscustomobject]@{ Code = 200; Body = '{}' } }
+	return [pscustomobject]@{ Code = 502; Body = 'bad gateway' }
+}
+\$env:REMOTE_POLL_SECONDS = '1'
+\$env:REMOTE_POLL_MAX_FAILS = '2'
+\$ok = Wait-RemoteJob 'job-6' 'файл'
+Write-Output "OK=\$ok"
+Write-Output ("POLLS=" + (@(\$script:calls | Where-Object { \$_ -like 'GET *' }).Count))
+\$script:calls | ForEach-Object { Write-Output \$_ }
+PSEOF
+_out="$("$PS_BIN" -NoProfile -NonInteractive -File "$_harness" 2>&1 | tr -d '\r')"
+assert_contains "серия сбойных опросов заканчивается отказом" "OK=False" "$_out"
+assert_contains "сбойный опрос повторяется, а не валит сразу" "POLLS=2" "$_out"
+assert_contains "после серии сбоев задача отменена" "DELETE /jobs/job-6" "$_out"
 rm -f "$_harness"
 
 summary

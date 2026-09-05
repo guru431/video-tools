@@ -57,6 +57,69 @@ is_abs_path() {
     esac
 }
 
+# '~' в значении config.ini НЕ раскрывается оболочкой: значение приходит из файла,
+# а не из командной строки. Без явного раскрытия `base_dir = ~/Видео` уезжал в
+# `$SCRIPT_DIR/~/Видео` — каталог с буквальной тильдой в имени.
+expand_tilde() {
+    local p="$1"
+    case "$p" in
+        "~")   printf '%s' "${HOME:-$p}" ;;
+        "~/"*) printf '%s' "${HOME:-~}/${p#\~/}" ;;
+        *)     printf '%s' "$p" ;;
+    esac
+}
+
+# ── JS-рантайм для yt-dlp (deno рядом со скриптом) ─────────────────────────
+# С yt-dlp ≥ 2025.11 полная поддержка YouTube требует внешнего JS-рантайма.
+#
+# Две ловушки Git Bash, и раньше скрипт попадал в обе:
+#   1. `[ -x "$dir/deno" ]` истинно и тогда, когда рядом лежит ТОЛЬКО deno.exe —
+#      уезжал путь без расширения, который понимает лишь сам Git Bash. Поэтому
+#      .exe проверяется ПЕРВЫМ (то же правило, что в resolve_bin выше);
+#   2. MSYS переписывает POSIX-пути в Windows-вид только у аргументов, начинающихся
+#      с '/' или '--x=/…'. Аргумент `deno:/d/…/deno.exe` уходит нативному процессу
+#      КАК ЕСТЬ, и yt-dlp такого пути не находит. Конвертируем сами, как уже
+#      сделано для каталога vot ниже.
+# Итог обеих ошибок одинаков и тих: рантайм лежит рядом, а загрузки деградируют.
+# Одна функция на оба места вызова (download_url и download_batch) — раньше это были
+# две копии, и правка одной оставляла вторую сломанной.
+build_js_runtime_args() {
+    JS_RUNTIME_ARGS_ARR=()
+    local dir deno=""
+    dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [ -f "$dir/deno.exe" ]; then
+        deno="$dir/deno.exe"
+    elif [ -x "$dir/deno" ] && [ ! -d "$dir/deno" ]; then
+        deno="$dir/deno"
+    fi
+    [ -n "$deno" ] || return 0
+    if command -v cygpath &>/dev/null; then
+        deno="$(cygpath -w "$deno" 2>/dev/null || printf '%s' "$deno")"
+    fi
+    JS_RUNTIME_ARGS_ARR=(--js-runtimes "deno:$deno")
+}
+
+# ── Языковой тег для контейнера ────────────────────────────────────────────
+# mp4-мультиплексор упаковывает РОВНО три символа (ISO 639-2) и на двухбуквенный
+# код возвращает ошибку — поле языка остаётся пустым. Проверено на ffmpeg 8.1.2:
+# language=ru/en/kk тега не дают вовсе, language=rus/eng/kaz дают (rus)/(eng)/(kaz).
+# В MKV двухбуквенный код сохраняется, но общий трёхбуквенный корректен и там.
+# Все avc1-пресеты выводят mp4, то есть по умолчанию обе дорожки dual_track
+# оставались и без языка, и без имени.
+iso639_2() {
+    case "$1" in
+        ru) printf 'rus' ;; en) printf 'eng' ;; kk) printf 'kaz' ;;
+        de) printf 'deu' ;; fr) printf 'fra' ;; es) printf 'spa' ;;
+        it) printf 'ita' ;; pt) printf 'por' ;; pl) printf 'pol' ;;
+        uk) printf 'ukr' ;; tr) printf 'tur' ;; ja) printf 'jpn' ;;
+        ko) printf 'kor' ;; zh) printf 'zho' ;; ar) printf 'ara' ;;
+        be) printf 'bel' ;; uz) printf 'uzb' ;; az) printf 'aze' ;;
+        # Уже трёхбуквенный (или незнакомый) код отдаём как есть: своё правило
+        # лучше чужого молчания, но выдумывать за пользователя нечего.
+        *)  printf '%s' "$1" ;;
+    esac
+}
+
 # ── Цвета ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -65,6 +128,22 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
+# ── Уборка при Ctrl+C / SIGTERM ────────────────────────────────────────────
+# Прерывание оставляло за собой три вида мусора: временный каталог перевода
+# (/tmp/tmp.X с mp3), файл-манифест yt-dlp в %TEMP% и наполовину смерженный
+# <video>_translated.mp4 рядом с оригиналом. Регистрируем всё это по мере
+# создания — trap чистит и выходит с 130, как принято в ffmpeg-части репозитория.
+YTDLP_TMP_PATHS=()
+_register_tmp_path() { [ -n "${1:-}" ] && YTDLP_TMP_PATHS+=("$1"); }
+_cleanup_on_int() {
+    local p
+    for p in "${YTDLP_TMP_PATHS[@]}"; do
+        [ -n "$p" ] && rm -rf "$p" 2>/dev/null
+    done
+    exit 130
+}
+trap _cleanup_on_int INT TERM
+
 # ── Счётчики для итоговой сводки ───────────────────────────────────────────
 COUNT_OK=0
 COUNT_SKIP=0
@@ -72,11 +151,50 @@ COUNT_FAIL=0
 START_TIME=$(date +%s)
 
 # ── Функции вывода ─────────────────────────────────────────────────────────
-log_info()  { echo -e "${CYAN}[INFO]${NC} $*"; }
-log_ok()    { echo -e "${GREEN}[OK]${NC} $*"; }
-log_warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $*"; }
-log_header(){ echo -e "\n${BOLD}═══ $* ═══${NC}\n"; }
+# printf '%b…%s', а не `echo -e`: последний интерпретирует escape-последовательности
+# и в САМИХ ДАННЫХ. Windows-путь `C:\video\temp` печатался как `C:` + вертикальная
+# табуляция + `ideo` + табуляция + `emp` — сообщение об ошибке врало о пути, по
+# которому эту ошибку и надо искать. Цвета остаются в формате (%b), данные — в %s.
+log_info()  { printf '%b[INFO]%b %s\n'  "$CYAN"   "$NC" "$*"; }
+log_ok()    { printf '%b[OK]%b %s\n'    "$GREEN"  "$NC" "$*"; }
+log_warn()  { printf '%b[WARN]%b %s\n'  "$YELLOW" "$NC" "$*"; }
+log_error() { printf '%b[ERROR]%b %s\n' "$RED"    "$NC" "$*"; }
+log_header(){ printf '\n%b═══ %s ═══%b\n\n' "$BOLD" "$*" "$NC"; }
+
+# ── Нормализация булевых и перечислимых значений config.ini ────────────────
+# Булевы ключи сравнивались буквально с "true"/"false", а ffmpeg-сторона того же
+# репозитория пишет yes/no — путаница неизбежна и была молчаливой:
+# `use_archive = yes` выключал архив, `continue_on_error = no` всё равно давал -i.
+# Принимаем весь обычный набор написаний; всё непонятное — WARN и умолчание.
+to_bool() {
+    local raw="$1" def="$2" name="${3:-}"
+    case "$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')" in
+        true|yes|on|1)   printf 'true'  ;;
+        false|no|off|0)  printf 'false' ;;
+        "")              printf '%s' "$def" ;;
+        *)
+            [ -n "$name" ] && log_warn "$name: непонятное значение '$raw' (ожидается yes/no) — использую '$def'." >&2
+            printf '%s' "$def" ;;
+    esac
+}
+
+# Перечислимые ключи из config.ini не проверялись вовсе, тогда как те же значения из
+# CLI валидируются: `format_preset = AVC1_BEST` или `default_quality = 4k` молча
+# давали другое поведение (720p без ограничения кодека) без единого слова.
+# Имя намеренно НЕ validate_enum: так называется валидатор аргументов CLI ниже по
+# файлу, и он ПЕРЕКРЫВАЛ эту функцию — для валидного значения возвращал код 0 и
+# ничего не печатал, поэтому `X=$(validate_enum …)` присваивал пустую строку, и
+# format_preset/audio_format/sponsorblock молча обнулялись. Для config.ini поведение
+# другое и по существу: предупредить и взять умолчание, а не завершить прогон.
+config_enum() {
+    local name="$1" value="$2" def="$3"; shift 3
+    local allowed=("$@") a
+    for a in "${allowed[@]}"; do
+        [ "$value" = "$a" ] && { printf '%s' "$value"; return; }
+    done
+    log_warn "$name: недопустимое значение '$value' (допустимо: ${allowed[*]}) — использую '$def'." >&2
+    printf '%s' "$def"
+}
 
 # ── Чтение config.ini ─────────────────────────────────────────────────────
 read_config() {
@@ -129,8 +247,22 @@ read_config() {
             fi
             # Подстановка ${ENV_VAR} из окружения. Не задана → пустая строка + WARN.
             # Несколько вхождений поддерживаются (цикл по первому ${...} за итерацию).
-            while [[ "$value" == *'${'*'}'* ]]; do
+            #
+            # Два ограничителя, и оба обязательны:
+            #   • имя обязано быть валидным идентификатором. `${}` давало пустое имя,
+            #     а `${A-B}` — имя с дефисом: `${!_vn}` бросал «invalid variable name»,
+            #     значение терялось целиком, и WARN об этом не говорил ни слова;
+            #   • счётчик итераций. Значение переменной, содержащее ссылку на саму себя
+            #     (SELF='${SELF}' в окружении), давало бесконечный цикл — скрипт висел
+            #     молча, не дойдя до первой загрузки.
+            local _sub_guard=0
+            while [[ "$value" == *'${'*'}'* ]] && [ "$_sub_guard" -lt 32 ]; do
+                _sub_guard=$((_sub_guard + 1))
                 local _vn="${value#*\$\{}"; _vn="${_vn%%\}*}"
+                if [[ ! "$_vn" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+                    echo "WARN: '\${$_vn}' — недопустимое имя переменной окружения, оставлено как есть" >&2
+                    break
+                fi
                 [ -n "${!_vn:-}" ] || echo "WARN: переменная $_vn не задана" >&2
                 value="${value//\$\{$_vn\}/${!_vn:-}}"
             done
@@ -153,12 +285,100 @@ check_dependency() {
     return 0
 }
 
+# ── Диагностика окружения (--doctor) ───────────────────────────────────────
+# Одна команда вместо пяти разных отказов на разных стадиях. До неё пользователь
+# узнавал об отсутствии deno на первом же ролике с челленджем, об отсутствии
+# ffprobe — на первом переводе в режиме dual_track, а о том, что npm-шим vot не
+# запускается, — только из сырого исключения. Отчёт печатает, ЧТО именно
+# перестаёт работать без каждого инструмента: это и есть недостающая половина.
+doctor_row() {
+    printf '  %-14s %-9s %s\n' "$1" "$2" "$3"
+}
+
+doctor_tool() {
+    local name="$1" path="$2" why="$3" version=""
+    if [ -z "$path" ]; then
+        doctor_row "$name" "НЕТ" "$why"
+        return 1
+    fi
+    # Версию спрашиваем best-effort: инструмент может её не поддерживать.
+    version="$("$path" --version 2>/dev/null | head -1)"
+    [ -n "$version" ] || version="$path"
+    doctor_row "$name" "есть" "$version"
+    return 0
+}
+
+# Возвращает путь к бинарю или пустую строку. Тот же порядок, что у resolve_bin:
+# рядом со скриптом (сначала .exe), затем PATH.
+doctor_which() {
+    local name="$1" p
+    p="$(resolve_bin "" "$name")"
+    case "$p" in
+        */*) [ -f "$p" ] && { printf '%s' "$p"; return 0; } ;;
+    esac
+    command -v "$p" >/dev/null 2>&1 && { command -v "$p"; return 0; }
+    printf ''
+    return 1
+}
+
+run_doctor() {
+    log_header "Проверка окружения"
+    echo "Каталог скрипта: $SCRIPT_DIR"
+    echo "Конфиг:          $CONFIG_FILE$([ -f "$CONFIG_FILE" ] || printf ' (нет — используются умолчания)')"
+    echo ""
+    echo "  инструмент     статус   путь / версия · что без него не работает"
+    echo "  -------------- -------- -------------------------------------------"
+
+    local rc=0
+    doctor_tool "yt-dlp"   "$(doctor_which yt-dlp)"        "ЗАГРУЗКА НЕВОЗМОЖНА — это основной инструмент" || rc=1
+    doctor_tool "ffmpeg"   "$(doctor_which ffmpeg)"        "не будет мержа дорожек (AI-перевод) и склейки форматов +" || rc=1
+    doctor_tool "ffprobe"  "$(doctor_which ffprobe)"       "не работает режим перевода dual_track (подсчёт дорожек)" || true
+    doctor_tool "deno"     "$(doctor_which deno)"          "YouTube требует JS-рантайм: загрузки деградируют или падают" || true
+    if [ -n "${VOT_BIN:-}" ]; then
+        doctor_tool "vot-cli-live" "$VOT_BIN" "нет AI-перевода" || true
+    else
+        doctor_tool "vot-cli-live" "$(doctor_which vot-cli-live)" "нет AI-перевода" || true
+    fi
+
+    echo ""
+    echo "Настройки, влияющие на сеть и раскладку файлов:"
+    # Здесь без выравнивания по колонкам: printf считает БАЙТЫ, а кириллическая
+    # подпись занимает по два на символ — колонки разъезжались бы тем сильнее,
+    # чем длиннее слово.
+    echo "  Прокси:   $(mask_proxy "$PROXY_URL")"
+    echo "  База:     $BASE_DIR"
+    echo "  Архив:    $([ "$USE_ARCHIVE" = "true" ] && printf '%s' "$ARCHIVE_FILE" || printf 'выключен')"
+    echo "  Cookies:  $COOKIE_METHOD$([ "$COOKIE_METHOD" = "file" ] && printf ' → %s' "$COOKIE_FILE_PATH")"
+    echo "  Плейлист: ${PLAYLIST_MODE:-auto}"
+    echo ""
+    if [ "$rc" -eq 0 ]; then
+        log_ok "Обязательные инструменты на месте."
+    else
+        log_error "Не хватает обязательных инструментов — см. таблицу выше."
+    fi
+    return $rc
+}
+
 check_base_deps() {
     check_dependency "$YTDLP" "Установите: https://github.com/yt-dlp/yt-dlp" || exit 1
 }
 
 check_translate_deps() {
     local missing=0
+    # Режим проверяем ЗДЕСЬ, до сети: невалидный mode доходил до case в
+    # translate_audio, не совпадал ни с одной веткой, и перевод «не выполнялся»
+    # уже ПОСЛЕ скачивания перевода — минуты и трафик впустую.
+    case "$TRANSLATE_MODE" in
+        dual_track|mix|replace) ;;
+        *)
+            log_error "[translation] mode = '$TRANSLATE_MODE' — допустимо dual_track, mix или replace."
+            missing=1 ;;
+    esac
+    # dual_track считает число оригинальных дорожек через ffprobe. Без него индекс
+    # молча стал бы 1, и на файле с 2+ дорожками перевод сел бы на чужой индекс.
+    if [ "$TRANSLATE_MODE" = "dual_track" ]; then
+        check_dependency "$FFPROBE" "ffprobe нужен режиму dual_track (подсчёт аудиодорожек); ставится вместе с ffmpeg" || missing=1
+    fi
     check_dependency "$FFMPEG" "Установите: https://ffmpeg.org/download.html" || missing=1
     # Бинарь vot: env-override (для тестов) → рядом со скриптом → из PATH.
     # Паритет с резолвером YTDLP_BIN; без override тесты уходили в реальную сеть.
@@ -218,7 +438,11 @@ detect_platform() {
     host="$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')"
     # Домен якорим по границе (начало строки, '.', '@'), иначе notyoutube.com
     # ошибочно распознаётся как youtube (подстрочный матч).
-    if   [[ "$host" =~ (^|[.@])youtube\.com(:|$) ]] || [[ "$host" =~ (^|[.@])youtu\.be(:|$) ]]; then echo "youtube"
+    # youtube-nocookie.com — домен embed-плеера YouTube. Раньше он попадал в "other"
+    # и получал пресет `best[height<=N]/best`: один комбинированный поток ≤720p вместо
+    # раздельных дорожек, то есть заметно худшее качество без единого слова об этом.
+    if   [[ "$host" =~ (^|[.@])youtube\.com(:|$) ]] || [[ "$host" =~ (^|[.@])youtu\.be(:|$) ]] \
+      || [[ "$host" =~ (^|[.@])youtube-nocookie\.com(:|$) ]]; then echo "youtube"
     elif [[ "$host" =~ (^|[.@])vk\.com(:|$) ]];         then echo "vk"
     elif [[ "$host" =~ (^|[.@])rutube\.ru(:|$) ]];      then echo "rutube"
     elif [[ "$host" =~ (^|[.@])twitch\.tv(:|$) ]];      then echo "twitch"
@@ -274,23 +498,23 @@ build_format_args() {
             case "$quality" in
                 audio) fmt="140" ;;
                 360)   fmt="140+134" ;;
-                480)   fmt="140+135/134" ;;
-                720)   fmt="140+136/135/134" ;;
-                1080)  fmt="140+137/136/135/134" ;;
+                480)   fmt="140+135/140+134" ;;
+                720)   fmt="140+136/140+135/140+134" ;;
+                1080)  fmt="140+137/140+136/140+135/140+134" ;;
                 1440)  fmt="140+264/bestvideo[height<=1440][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=1440]" ;;
                 2160)  fmt="140+266/bestvideo[height<=2160][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=2160]" ;;
-                *)     fmt="140+136/135/134" ;;
+                *)     fmt="140+136/140+135/140+134" ;;
             esac ;;
         avc1_m3u8)
             case "$quality" in
                 audio) fmt="234" ;;
                 360)   fmt="234+230" ;;
-                480)   fmt="234+231/230" ;;
-                720)   fmt="234+232/231/230" ;;
+                480)   fmt="234+231/234+230" ;;
+                720)   fmt="234+232/234+231/234+230" ;;
                 1080)  fmt="270+234/bestvideo[protocol*=m3u8][height<=1080]+bestaudio[protocol*=m3u8]/best[height<=1080]" ;;
                 1440)  fmt="bestvideo[protocol*=m3u8][height<=1440]+bestaudio[protocol*=m3u8]/best[height<=1440]" ;;
                 2160)  fmt="bestvideo[protocol*=m3u8][height<=2160]+bestaudio[protocol*=m3u8]/best[height<=2160]" ;;
-                *)     fmt="234+232/231/230" ;;
+                *)     fmt="234+232/234+231/234+230" ;;
             esac ;;
         avc1_https_60fps)
             case "$quality" in
@@ -298,7 +522,7 @@ build_format_args() {
                 360)   fmt="140+134/best[height<=360]" ;;
                 480)   fmt="140+135/best[height<=480]" ;;
                 720)   fmt="140+298/best[height<=720]" ;;
-                1080)  fmt="140+299/298/best[height<=1080]" ;;
+                1080)  fmt="140+299/140+298/best[height<=1080]" ;;
                 1440)  fmt="bestvideo[height<=1440][fps>=50]+bestaudio[ext=m4a]/140+299/best[height<=1440]" ;;
                 2160)  fmt="bestvideo[height<=2160][fps>=50]+bestaudio[ext=m4a]/140+299/best[height<=2160]" ;;
                 *)     fmt="140+298/best[height<=720]" ;;
@@ -307,23 +531,23 @@ build_format_args() {
             case "$quality" in
                 audio) fmt="234" ;;
                 360)   fmt="234+309/bestvideo[height<=360][fps>=50]+bestaudio/best[height<=360]" ;;
-                480)   fmt="234+310/309/bestvideo[height<=480][fps>=50]+bestaudio/best[height<=480]" ;;
-                720)   fmt="234+311/310/309/bestvideo[height<=720][fps>=50]+bestaudio/best[height<=720]" ;;
-                1080)  fmt="234+312/311/310/309/bestvideo[height<=1080][fps>=50]+bestaudio/best[height<=1080]" ;;
-                1440)  fmt="234+313/312/311/310/309/bestvideo[height<=1440][fps>=50]+bestaudio/best[height<=1440]" ;;
-                2160)  fmt="234+314/313/312/311/310/309/bestvideo[height<=2160][fps>=50]+bestaudio/best[height<=2160]" ;;
-                *)     fmt="234+311/310/309/bestvideo[height<=720][fps>=50]+bestaudio/best[height<=720]" ;;
+                480)   fmt="234+310/234+309/bestvideo[height<=480][fps>=50]+bestaudio/best[height<=480]" ;;
+                720)   fmt="234+311/234+310/234+309/bestvideo[height<=720][fps>=50]+bestaudio/best[height<=720]" ;;
+                1080)  fmt="234+312/234+311/234+310/234+309/bestvideo[height<=1080][fps>=50]+bestaudio/best[height<=1080]" ;;
+                1440)  fmt="234+313/234+312/234+311/234+310/234+309/bestvideo[height<=1440][fps>=50]+bestaudio/best[height<=1440]" ;;
+                2160)  fmt="234+314/234+313/234+312/234+311/234+310/234+309/bestvideo[height<=2160][fps>=50]+bestaudio/best[height<=2160]" ;;
+                *)     fmt="234+311/234+310/234+309/bestvideo[height<=720][fps>=50]+bestaudio/best[height<=720]" ;;
             esac ;;
         avc1_https_60fps_hdr)
             case "$quality" in
                 audio) fmt="234" ;;
                 360)   fmt="234+696/bestvideo[height<=360][fps>=50]+bestaudio/best[height<=360]" ;;
-                480)   fmt="234+697/696/bestvideo[height<=480][fps>=50]+bestaudio/best[height<=480]" ;;
-                720)   fmt="234+698/697/696/bestvideo[height<=720][fps>=50]+bestaudio/best[height<=720]" ;;
-                1080)  fmt="234+699/698/697/696/bestvideo[height<=1080][fps>=50]+bestaudio/best[height<=1080]" ;;
-                1440)  fmt="234+700/699/698/697/696/bestvideo[height<=1440][fps>=50]+bestaudio/best[height<=1440]" ;;
-                2160)  fmt="234+701/700/699/698/697/696/bestvideo[height<=2160][fps>=50]+bestaudio/best[height<=2160]" ;;
-                *)     fmt="234+698/697/696/bestvideo[height<=720][fps>=50]+bestaudio/best[height<=720]" ;;
+                480)   fmt="234+697/234+696/bestvideo[height<=480][fps>=50]+bestaudio/best[height<=480]" ;;
+                720)   fmt="234+698/234+697/234+696/bestvideo[height<=720][fps>=50]+bestaudio/best[height<=720]" ;;
+                1080)  fmt="234+699/234+698/234+697/234+696/bestvideo[height<=1080][fps>=50]+bestaudio/best[height<=1080]" ;;
+                1440)  fmt="234+700/234+699/234+698/234+697/234+696/bestvideo[height<=1440][fps>=50]+bestaudio/best[height<=1440]" ;;
+                2160)  fmt="234+701/234+700/234+699/234+698/234+697/234+696/bestvideo[height<=2160][fps>=50]+bestaudio/best[height<=2160]" ;;
+                *)     fmt="234+698/234+697/234+696/bestvideo[height<=720][fps>=50]+bestaudio/best[height<=720]" ;;
             esac ;;
         old_combo)
             case "$quality" in
@@ -364,15 +588,29 @@ limit_output_template() {
     local def_title=100 def_playlist=45 def_uploader=30
     local min_title=25   min_playlist=15 min_uploader=10
 
+    # posix_component=yes означает «ограничение на ОДИН компонент, а не на весь путь».
+    # Прежняя формула max_path = len(base)+1+127 давала на POSIX тот же общий бюджет,
+    # что и на Windows: шаблон из нескольких компонентов
+    # («%(uploader)s/%(playlist)s/%(title)s.%(ext)s») делил 127 символов на всех, и
+    # название ролика резалось до ~47 символов там, где каждый компонент может быть
+    # 255 БАЙТ. Считаем бюджет по САМОМУ ДЛИННОМУ компоненту шаблона.
+    local posix_component="no"
     if [ -z "$max_path" ]; then
         case "$(uname -s 2>/dev/null)" in
             MINGW*|MSYS*|CYGWIN*) max_path=$LIMIT_MAX_PATH ;;
-            # Вне Windows длина всего пути практически не ограничена, упирается лимит
-            # ОДНОГО компонента — 255 БАЙТ, а кириллица в UTF-8 занимает по два байта.
-            *) max_path=$(( ${#base} + 1 + 127 )) ;;
+            *) posix_component="yes" ;;
         esac
     fi
-    local budget=$(( max_path - ${#base} - 1 - LIMIT_RESERVE ))
+    local budget
+    if [ "$posix_component" = "yes" ]; then
+        # 255 байт на компонент; кириллица в UTF-8 — два байта на символ, поэтому
+        # считаем консервативно в «символах по два байта»: 127.
+        budget=$(( 127 - LIMIT_RESERVE ))
+        # Литералы и прочие поля считаются ниже по ВСЕМУ шаблону, что для
+        # покомпонентного бюджета — верхняя оценка (то есть в безопасную сторону).
+    else
+        budget=$(( max_path - ${#base} - 1 - LIMIT_RESERVE ))
+    fi
 
     # Литеральная часть шаблона: разделители, дефисы, точки — всё, кроме полей.
     local literals
@@ -400,20 +638,33 @@ limit_output_template() {
 
     # Присутствие длинных полей и уже заданные пользователем лимиты. Пользовательский
     # лимит уважаем, но только в сторону уменьшения — иначе ini снова вернёт нас в MAX_PATH.
-    local t=0 p=0 u=0 user
-    if printf '%s' "$tpl" | grep -q '%(title)'; then
+    # Поле распознаётся и в форме альтернатив: yt-dlp допускает %(title|Без имени)s
+    # и %(uploader,channel)s. Прежний точный поиск '%(title)' их не видел вовсе —
+    # лимит не ставился, и как раз на таких шаблонах путь и переполнялся.
+    # Граница после имени: ')' (обычная форма), '|' (значение по умолчанию),
+    # ',' (список альтернатив), '.' (уже заданный лимит).
+    local t=0 p=0 u=0 user user_ch
+    if printf '%s' "$tpl" | grep -qE '%\(title[|,).]'; then
         t=$def_title
         user=$(printf '%s' "$tpl" | sed -n 's/.*%(title)\.\([0-9][0-9]*\).*/\1/p')
         [ -n "$user" ] && [ "$user" -lt "$t" ] && t=$user
     fi
-    if printf '%s' "$tpl" | grep -q '%(playlist)'; then
+    if printf '%s' "$tpl" | grep -qE '%\(playlist[|,).]'; then
         p=$def_playlist
         user=$(printf '%s' "$tpl" | sed -n 's/.*%(playlist)\.\([0-9][0-9]*\).*/\1/p')
         [ -n "$user" ] && [ "$user" -lt "$p" ] && p=$user
     fi
-    if printf '%s' "$tpl" | grep -qE '%\((uploader|channel)\)'; then
+    if printf '%s' "$tpl" | grep -qE '%\((uploader|channel)[|,).]'; then
         u=$def_uploader
+        # Пользовательский лимит читаем у ОБОИХ полей и берём меньший: раньше
+        # смотрели только на uploader, поэтому «%(channel).10s» переписывался
+        # в «.30s» — лимит УВЕЛИЧИВАЛСЯ вопреки правилу «только в сторону
+        # уменьшения», прямо противоположно тому, что обещает комментарий выше.
         user=$(printf '%s' "$tpl" | sed -n 's/.*%(uploader)\.\([0-9][0-9]*\).*/\1/p')
+        user_ch=$(printf '%s' "$tpl" | sed -n 's/.*%(channel)\.\([0-9][0-9]*\).*/\1/p')
+        if [ -n "$user_ch" ]; then
+            if [ -z "$user" ] || [ "$user_ch" -lt "$user" ]; then user="$user_ch"; fi
+        fi
         [ -n "$user" ] && [ "$user" -lt "$u" ] && u=$user
     fi
 
@@ -469,14 +720,9 @@ download_url() {
     local -a cmd=("$YTDLP" -c "$_err_flag" -w --windows-filenames --compat-options filename-sanitization
                   "${NET_ARGS_ARR[@]}")
 
-    # Deno рядом со скриптом (deno или deno.exe на Windows)
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    if [ -x "$script_dir/deno" ]; then
-        cmd+=(--js-runtimes "deno:$script_dir/deno")
-    elif [ -f "$script_dir/deno.exe" ]; then
-        cmd+=(--js-runtimes "deno:$script_dir/deno.exe")
-    fi
+    # Deno рядом со скриптом (см. build_js_runtime_args — там же обе ловушки Git Bash).
+    build_js_runtime_args
+    [ ${#JS_RUNTIME_ARGS_ARR[@]} -gt 0 ] && cmd+=("${JS_RUNTIME_ARGS_ARR[@]}")
 
     # F13. Точный handshake вместо поиска по mtime: yt-dlp сам сообщает финальный путь
     # каждого готового файла (after_move — уже после всех post-processor'ов и move).
@@ -512,13 +758,26 @@ download_url() {
         build_format_args "$quality" "$FORMAT_PRESET" "$(detect_platform "$url")"
         cmd+=("${FMT_ARGS_ARR[@]}")
 
+        # Плейлист: single → только указанное видео, full → весь плейлист,
+        # auto → решает yt-dlp (прежнее поведение).
+        case "${PLAYLIST_MODE:-auto}" in
+            single) cmd+=(--no-playlist) ;;
+            full)   cmd+=(--yes-playlist) ;;
+        esac
+
         # Метаданные и главы источника (архивная ценность; для видео без глав — no-op).
         cmd+=(--embed-metadata --embed-chapters)
 
         # Перекодирование в аудиоформат (только при quality=audio и заданном формате)
         if [ "$quality" = "audio" ]; then
+            # --extract-audio ставится ВСЕГДА, а формат — только когда он задан явно.
+            # Раньше при audio_format = best (умолчание!) не ставилось ничего: на
+            # площадках без чисто аудиопотока (VK, RuTube) селектор bestaudio/best
+            # брал полноценное ВИДЕО и отдавал его как «только аудио» — гигабайты
+            # вместо мегабайт, молча.
+            cmd+=(--extract-audio --audio-quality 0)
             case "$AUDIO_FORMAT" in
-                mp3|m4a|opus) cmd+=(--extract-audio --audio-format "$AUDIO_FORMAT" --audio-quality 0) ;;
+                mp3|m4a|opus|flac|wav) cmd+=(--audio-format "$AUDIO_FORMAT") ;;
             esac
         fi
 
@@ -595,10 +854,22 @@ translate_audio() {
     local trans_vol="$8"
     local proxy_url="$9"
 
+    # Громкости уезжают прямо в filter_complex. `0,3` (запятая вместо точки) —
+    # обычная опечатка, и она рвала граф: пользователь видел «Ошибка мержа
+    # аудиодорожек» и ничего больше, потому что stderr ffmpeg уходил в /dev/null.
+    local v
+    for v in "$orig_vol" "$trans_vol"; do
+        if [[ ! "$v" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+            log_error "[translation] громкость '$v' — ожидается неотрицательное число с ТОЧКОЙ (например 0.3)."
+            return 1
+        fi
+    done
+
     log_info "Получение AI-перевода ($target_lang, $voice_style)..."
 
     local temp_dir
     temp_dir=$(mktemp -d)
+    _register_tmp_path "$temp_dir"
     # vot-cli-live на Windows — native-бинарь: POSIX-путь `/tmp/tmp.X` он понимает как
     # свой и пишет в C:\Users\...\Temp\tmp.X, после чего find в $temp_dir не находит
     # ничего и перевод в Git Bash не работает вовсе. Отдаём ему windows-представление
@@ -620,7 +891,35 @@ translate_audio() {
         vot_env+=("HTTP_PROXY=$proxy_url" "HTTPS_PROXY=$proxy_url" "ALL_PROXY=$proxy_url")
     fi
 
-    if ! env "${vot_env[@]}" "${vot_cmd[@]}"; then
+    # Потолок времени. Без него зависший vot держал прогон БЕССРОЧНО: у PS1-GUI такой
+    # предел есть (_votTimeoutMs), а .sh не имел ничего — batch-прогон на сотне URL
+    # вставал намертво, и отличить это от медленного перевода было нечем.
+    # `timeout(1)` не используем: на macOS его нет в базовой системе. Запускаем в фоне
+    # и убиваем по своему таймеру — работает и на bash 3.2.
+    local vot_timeout="${TRANSLATE_TIMEOUT_SEC:-900}"
+    case "$vot_timeout" in ''|*[!0-9]*) vot_timeout=900 ;; esac
+    local vot_rc=0
+    if [ "$vot_timeout" -gt 0 ]; then
+        env "${vot_env[@]}" "${vot_cmd[@]}" &
+        local vot_pid=$!
+        local waited=0
+        while kill -0 "$vot_pid" 2>/dev/null; do
+            if [ "$waited" -ge "$vot_timeout" ]; then
+                log_error "AI-перевод: превышен таймаут ${vot_timeout} с — процесс остановлен."
+                kill -TERM "$vot_pid" 2>/dev/null
+                sleep 2
+                kill -KILL "$vot_pid" 2>/dev/null
+                vot_rc=124
+                break
+            fi
+            sleep 1
+            waited=$((waited + 1))
+        done
+        if [ "$vot_rc" -eq 0 ]; then wait "$vot_pid"; vot_rc=$?; fi
+    else
+        env "${vot_env[@]}" "${vot_cmd[@]}"; vot_rc=$?
+    fi
+    if [ "$vot_rc" -ne 0 ]; then
         log_error "Не удалось получить перевод для: $url"
         rm -rf "$temp_dir"
         return 1
@@ -673,30 +972,42 @@ translate_audio() {
     # это сам список медиафайлов. ffmpeg без -nostdin входит в transcode-режим и
     # вычитывает stdin: остаток манифеста съедался, и второй/третий файл молча
     # оставался без перевода (при обещании «перевод на КАЖДЫЙ созданный файл»).
+    # stderr мержа сохраняем в файл: /dev/null оставлял пользователя без причины отказа.
+    local merge_err; merge_err="$(mktemp "${TMPDIR:-/tmp}/ytdlp_merge_err_XXXXXX")"
+    _register_tmp_path "$merge_err"
+    # Трёхбуквенные коды и handler_name: в mp4 per-stream `title` не пишется вовсе,
+    # а имя дорожки плееры (VLC, mpv) берут из handler_name. Без него обе дорожки
+    # dual_track оставались безымянными в контейнере по умолчанию.
+    local orig_lang3 target_lang3
+    orig_lang3="$(iso639_2 "$orig_lang")"
+    target_lang3="$(iso639_2 "$target_lang")"
     case "$mode" in
         dual_track)
             "$FFMPEG" -nostdin -y -i "$video_file" -i "$translation_file" \
                 -map 0:v -map 0:a -map 1:a -map 0:s? -map 0:t? \
                 -c:v copy -c:a copy -c:a:$orig_a_count "$a_codec" -b:a:$orig_a_count 192k -c:s copy \
-                -metadata:s:a:0 language="$orig_lang" -metadata:s:a:0 title="Original" \
-                -metadata:s:a:$orig_a_count language="$target_lang" \
+                -metadata:s:a:0 language="$orig_lang3" -metadata:s:a:0 title="Original" \
+                -metadata:s:a:0 handler_name="Original" \
+                -metadata:s:a:$orig_a_count language="$target_lang3" \
                 -metadata:s:a:$orig_a_count title="AI Translation" \
+                -metadata:s:a:$orig_a_count handler_name="AI Translation" \
                 -disposition:a:0 default \
-                "$output_file" 2>/dev/null
+                "$output_file" 2>"$merge_err"
             ;;
         replace)
             "$FFMPEG" -nostdin -y -i "$video_file" -i "$translation_file" \
                 -map 0:v -map 1:a -map 0:s? -map 0:t? \
                 -c:v copy -c:a "$a_codec" -b:a 192k -c:s copy \
-                -metadata:s:a:0 language="$target_lang" -metadata:s:a:0 title="AI Translation" \
-                "$output_file" 2>/dev/null
+                -metadata:s:a:0 language="$target_lang3" -metadata:s:a:0 title="AI Translation" \
+                -metadata:s:a:0 handler_name="AI Translation" \
+                "$output_file" 2>"$merge_err"
             ;;
         mix)
             "$FFMPEG" -nostdin -y -i "$video_file" -i "$translation_file" \
                 -filter_complex "[0:a]volume=${orig_vol}[a0];[1:a]volume=${trans_vol}[a1];[a0][a1]amix=inputs=2:duration=longest:normalize=0[aout]" \
                 -map 0:v -map "[aout]" -map 0:s? -map 0:t? \
                 -c:v copy -c:a "$a_codec" -b:a 192k -c:s copy \
-                "$output_file" 2>/dev/null
+                "$output_file" 2>"$merge_err"
             ;;
     esac
     local ff_rc=$?
@@ -714,9 +1025,15 @@ translate_audio() {
             [ -f "$output_file" ] && rm -f "$output_file"
         fi
     else
-        log_error "Ошибка мержа аудиодорожек"
+        log_error "Ошибка мержа аудиодорожек (ffmpeg код $ff_rc)"
+        # Последние строки stderr ffmpeg: без них сообщение не даёт НИ ОДНОЙ зацепки,
+        # а причина почти всегда конкретна (несовместимый кодек, битый filter_complex).
+        if [ -s "$merge_err" ]; then
+            log_error "ffmpeg: $(tail -3 "$merge_err" | tr '\n' ' ')"
+        fi
         [ -f "$output_file" ] && rm -f "$output_file"
     fi
+    rm -f "$merge_err"
 
     rm -rf "$temp_dir"
     return $ret
@@ -732,12 +1049,36 @@ download_batch() {
     fi
 
     local total=0
-    while IFS='|' read -r category handle mode || [ -n "$category" ]; do
-        [[ -z "$category" || "$category" == \#* ]] && continue
-        category=$(echo "$category" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
-        handle=$(echo "$handle" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
-        mode=$(echo "$mode" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+    # Разбор строки channels.txt. Четыре прежние ловушки, все молчаливые:
+    #   • комментарий с отступом («  # tech|x|videos») не отбрасывался — «# tech»
+    #     становилось категорией, а yt-dlp получал несуществующий канал;
+    #   • хвостовой комментарий («tech|x|videos  # заметка») уезжал в mode;
+    #   • лишнее поле («a|b|c|d») попадало в mode вместе с разделителем;
+    #   • handle с ведущим '@' давал '@@handle' в URL — канал не находился.
+    # Trim делаем parameter expansion'ом: sed-fork на строку в Git Bash дорог.
+    local raw_line
+    while IFS= read -r raw_line || [ -n "$raw_line" ]; do
+        raw_line="${raw_line%$'\r'}"
+        raw_line="${raw_line#"${raw_line%%[![:space:]]*}"}"
+        raw_line="${raw_line%"${raw_line##*[![:space:]]}"}"
+        [[ -z "$raw_line" || "$raw_line" == \#* ]] && continue
+        # Хвостовой комментарий — только после пробела, как в config.ini.
+        if [[ "$raw_line" == *' #'* ]]; then
+            raw_line="${raw_line%% #*}"
+            raw_line="${raw_line%"${raw_line##*[![:space:]]}"}"
+        fi
+        local category handle mode _extra
+        IFS='|' read -r category handle mode _extra <<< "$raw_line"
+        category="${category#"${category%%[![:space:]]*}"}"; category="${category%"${category##*[![:space:]]}"}"
+        handle="${handle#"${handle%%[![:space:]]*}"}";       handle="${handle%"${handle##*[![:space:]]}"}"
+        mode="${mode#"${mode%%[![:space:]]*}"}";             mode="${mode%"${mode##*[![:space:]]}"}"
+        if [ -n "${_extra:-}" ]; then
+            log_warn "channels.txt: в строке «${raw_line}» больше трёх полей — лишнее проигнорировано."
+        fi
         [[ -z "$handle" ]] && continue
+        # '@' добавляем сами ниже — ведущий в значении дал бы '@@handle'.
+        handle="${handle#@}"
+        [ -z "$mode" ] && mode="videos"
 
         total=$((total + 1))
         log_header "[$total] ${category}/${handle} (${mode})"
@@ -753,13 +1094,8 @@ download_batch() {
         build_net_args
         local -a cmd=("$YTDLP" -c "$_err_flag" -w --windows-filenames --compat-options filename-sanitization
                   "${NET_ARGS_ARR[@]}")
-        local sdir
-        sdir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-        if [ -x "$sdir/deno" ]; then
-            cmd+=(--js-runtimes "deno:$sdir/deno")
-        elif [ -f "$sdir/deno.exe" ]; then
-            cmd+=(--js-runtimes "deno:$sdir/deno.exe")
-        fi
+        build_js_runtime_args
+        [ ${#JS_RUNTIME_ARGS_ARR[@]} -gt 0 ] && cmd+=("${JS_RUNTIME_ARGS_ARR[@]}")
 
         local -a env_prefix=()
         if [ -n "${PROXY_URL:-}" ]; then
@@ -768,7 +1104,7 @@ download_batch() {
 
         [ "${#COOKIE_ARGS_ARR[@]}" -gt 0 ] && cmd+=("${COOKIE_ARGS_ARR[@]}")
         # F3: архив не для «только субтитры» (хранит ID видео, а не наличие субтитров).
-        [ "$USE_ARCHIVE" = "true" ] && [ "$subs_only" != "true" ] && cmd+=(--download-archive "${BASE_DIR}/${ARCHIVE_FILE}")
+        [ "$USE_ARCHIVE" = "true" ] && [ "$subs_only" != "true" ] && cmd+=(--download-archive "$ARCHIVE_FILE")
         cmd+=(-o "$template")
 
         # Паритет с download_url: batch-ветка тоже получает манифест. Без него
@@ -780,6 +1116,7 @@ download_batch() {
         local ch_manifest=""
         if [ "$USE_ARCHIVE" = "true" ] && [ "$subs_only" != "true" ]; then
             ch_manifest=$(mktemp 2>/dev/null) || ch_manifest="/tmp/ytdlp_batch_manifest_$$"
+            _register_tmp_path "$ch_manifest"
             : > "$ch_manifest"
             cmd+=(--print-to-file "after_move:filepath" "$ch_manifest")
         fi
@@ -816,8 +1153,9 @@ download_batch() {
 
             # Перекодирование в аудиоформат (только при quality=audio и заданном формате)
             if [ "$QUALITY" = "audio" ]; then
+                cmd+=(--extract-audio --audio-quality 0)
                 case "$AUDIO_FORMAT" in
-                    mp3|m4a|opus) cmd+=(--extract-audio --audio-format "$AUDIO_FORMAT" --audio-quality 0) ;;
+                    mp3|m4a|opus|flac|wav) cmd+=(--audio-format "$AUDIO_FORMAT") ;;
                 esac
             fi
 
@@ -837,7 +1175,19 @@ download_batch() {
         if [ "$mode" = "playlists" ]; then
             cmd+=(--yes-playlist)
         else
-            cmd+=(--playlist-reverse)
+            # --lazy-playlist + --break-on-reject вместо --playlist-reverse.
+            #
+            # Прежняя пара «идти с конца + --dateafter» заставляла yt-dlp получить
+            # метаданные КАЖДОГО ролика канала (× --sleep-requests 1.8 с) и только
+            # потом отбросить старые: на канале в тысячу видео это часы на каждый
+            # прогон, причём почти целиком впустую. Ленивый режим отдаёт элементы по
+            # мере получения, а --break-on-reject останавливает обход на ПЕРВОМ
+            # ролике старше date_range — новые идут первыми, и дальше границы
+            # yt-dlp просто не идёт.
+            #
+            # Цена — порядок загрузки «новые первыми» вместо «старые первыми».
+            # Для инкрементального добора канала это и есть желаемый порядок.
+            cmd+=(--lazy-playlist --break-on-reject)
         fi
 
         local url="https://www.youtube.com/@${handle}/${mode}"
@@ -939,6 +1289,10 @@ COOKIES:
   --force-keyframes            Точная обрезка по границам (требует перекодирования концов).
 
 ПРОЧЕЕ:
+  --no-playlist                Скачать только указанное видео (игнорировать &list=)
+  --yes-playlist               Всегда скачивать весь плейлист
+  --doctor                     Отчёт об окружении: какие инструменты найдены,
+                               где и что без каждого из них не работает
   --dry-run                    Показать итоговую команду yt-dlp без запуска
   --config PATH                Путь к config.ini
   --help                       Показать эту справку
@@ -961,18 +1315,41 @@ load_config() {
     ARCHIVE_FILE=$(read_config "archive_file" "download" "download_archive.txt")
     AUDIO_FORMAT=$(read_config "audio_format" "download" "best")
     SPONSORBLOCK=$(read_config "sponsorblock" "download" "off")
+    # Что делать со ссылкой, у которой есть &list=…:
+    #   auto   — как раньше: ссылка с list= считается плейлистом (yt-dlp по умолчанию);
+    #   single — скачать ТОЛЬКО указанное видео (--no-playlist);
+    #   full   — всегда весь плейлист (--yes-playlist).
+    # Практический повод для single: у ссылок вида watch?v=X&list=RD… (авто-микс
+    # YouTube) плейлист бесконечный, и «скачать это видео» превращалось в закачку
+    # микса целиком — по playlist-шаблону, то есть ещё и не туда, куда ожидалось.
+    PLAYLIST_MODE=$(read_config "playlist" "download" "auto")
+
+    # Нормализация: булевы ключи принимают yes/no/on/off/1/0, перечислимые —
+    # проверяются теми же списками, что и одноимённые флаги CLI.
+    CONTINUE_ON_ERROR=$(to_bool "$CONTINUE_ON_ERROR" "true"  "[download] continue_on_error")
+    USE_ARCHIVE=$(to_bool      "$USE_ARCHIVE"        "true"  "[download] use_archive")
+    QUALITY=$(config_enum "[download] default_quality" "$QUALITY" "720" \
+        audio 360 480 720 1080 1440 2160)
+    FORMAT_PRESET=$(config_enum "[download] format_preset" "$FORMAT_PRESET" "auto" \
+        auto avc1_best avc1_https avc1_m3u8 avc1_https_60fps avc1_m3u8_60fps avc1_https_60fps_hdr old_combo)
+    AUDIO_FORMAT=$(config_enum "[download] audio_format" "$AUDIO_FORMAT" "best" \
+        best mp3 m4a opus flac wav)
+    SPONSORBLOCK=$(config_enum "[download] sponsorblock" "$SPONSORBLOCK" "off" \
+        off mark remove)
 
     # Trim: парсим +/-VALUE из [trim]
     local raw
     raw=$(read_config "start" "trim" "-00:00:00")
+    TRIM_START_RAW="$raw"
     if [[ "$raw" == +* ]]; then TRIM_START_ON="true"; TRIM_START_VAL="${raw:1}"
     elif [[ "$raw" == -* ]]; then TRIM_START_ON="false"; TRIM_START_VAL="${raw:1}"
     else TRIM_START_ON="false"; TRIM_START_VAL="$raw"; fi
     raw=$(read_config "end" "trim" "-00:01:00")
+    TRIM_END_RAW="$raw"
     if [[ "$raw" == +* ]]; then TRIM_END_ON="true"; TRIM_END_VAL="${raw:1}"
     elif [[ "$raw" == -* ]]; then TRIM_END_ON="false"; TRIM_END_VAL="${raw:1}"
     else TRIM_END_ON="false"; TRIM_END_VAL="$raw"; fi
-    FORCE_KEYFRAMES=$(read_config "force_keyframes" "trim" "false")
+    FORCE_KEYFRAMES=$(to_bool "$(read_config "force_keyframes" "trim" "false")" "false" "[trim] force_keyframes")
     # Сеть: профиль устойчивости + необязательный потолок скорости.
     # Дефолт normal воспроизводит прежние зашитые значения дословно.
     SPEED_PROFILE=$(read_config "speed_profile" "network" "normal")
@@ -981,19 +1358,50 @@ load_config() {
     SUB_LANG=$(read_config "lang" "subtitles" "ru")
     SUB_FORMAT=$(read_config "format" "subtitles" "vtt")
     SUBS_WITH_VIDEO=$(read_config "download_with_video" "subtitles" "off")
+    SUBS_WITH_VIDEO=$(config_enum "[subtitles] download_with_video" "$SUBS_WITH_VIDEO" "off" \
+        off sidecar embed)
+    PLAYLIST_MODE=$(config_enum "[download] playlist" "$PLAYLIST_MODE" "auto" auto single full)
+    # CLI перекрывает config.ini — как и все прочие флаги.
+    [ -n "${PLAYLIST_MODE_CLI:-}" ] && PLAYLIST_MODE="$PLAYLIST_MODE_CLI"
 
     # Перевод
-    TRANSLATE_ENABLED=$(read_config "enabled" "translation" "false")
+    TRANSLATE_ENABLED=$(to_bool "$(read_config "enabled" "translation" "false")" "false" "[translation] enabled")
     TRANSLATE_LANG=$(read_config "target_lang" "translation" "ru")
     TRANSLATE_VOICE=$(read_config "voice_style" "translation" "live")
-    TRANSLATE_MODE=$(read_config "mode" "translation" "mix")
+    TRANSLATE_MODE=$(config_enum "[translation] mode" "$(read_config "mode" "translation" "mix")" "mix" \
+        dual_track mix replace)
     TRANSLATE_ORIG_VOL=$(read_config "original_volume" "translation" "0.3")
     TRANSLATE_TRANS_VOL=$(read_config "translation_volume" "translation" "1.0")
     TRANSLATE_ORIG_LANG=$(read_config "original_lang" "translation" "en")
+    # Потолок времени на один вызов vot-cli-live. 0 = без ограничения.
+    TRANSLATE_TIMEOUT_SEC=$(read_config "timeout_sec" "translation" "900")
+    case "$TRANSLATE_TIMEOUT_SEC" in
+        ''|*[!0-9]*)
+            log_warn "[translation] timeout_sec = '$TRANSLATE_TIMEOUT_SEC' — ожидается целое число секунд, использую 900."
+            TRANSLATE_TIMEOUT_SEC=900 ;;
+    esac
 
     # Относительные пути резолвятся от каталога скрипта; drive/UNC — уже абсолютные.
+    COOKIE_FILE_PATH="$(expand_tilde "$COOKIE_FILE_PATH")"
+    BASE_DIR="$(expand_tilde "$BASE_DIR")"
+    ARCHIVE_FILE="$(expand_tilde "$ARCHIVE_FILE")"
     is_abs_path "$COOKIE_FILE_PATH" || COOKIE_FILE_PATH="${SCRIPT_DIR}/${COOKIE_FILE_PATH}"
     is_abs_path "$BASE_DIR"         || BASE_DIR="${SCRIPT_DIR}/${BASE_DIR}"
+    # archive_file тоже путь, и абсолютный он или нет — решает та же функция.
+    # Раньше он безусловно склеивался с BASE_DIR ниже, и `archive_file = D:\arch.txt`
+    # превращался в `<BASE_DIR>/D:\arch.txt` — архив писался не туда, где его ищут.
+    is_abs_path "$ARCHIVE_FILE" || ARCHIVE_FILE="${BASE_DIR}/${ARCHIVE_FILE}"
+
+    # `[trim] start = 00:10` без знака — обычная ошибка: формат «+значение / -значение»
+    # неочевиден, а молчаливое «выключено» неотличимо от «обрезка не сработала».
+    if [ -n "${TRIM_START_RAW:-}" ] && [ "$TRIM_START_ON" = "false" ] \
+       && [ "${TRIM_START_RAW:0:1}" != "-" ] && [ "${TRIM_START_RAW:0:1}" != "+" ]; then
+        log_warn "[trim] start = '$TRIM_START_RAW' без знака — обрезка ВЫКЛЮЧЕНА. Включает только '+' в начале значения."
+    fi
+    if [ -n "${TRIM_END_RAW:-}" ] && [ "$TRIM_END_ON" = "false" ] \
+       && [ "${TRIM_END_RAW:0:1}" != "-" ] && [ "${TRIM_END_RAW:0:1}" != "+" ]; then
+        log_warn "[trim] end = '$TRIM_END_RAW' без знака — обрезка ВЫКЛЮЧЕНА. Включает только '+' в начале значения."
+    fi
 
     # Значения [trim] из config.ini проходят ту же проверку, что и --trim-start/--trim-end.
     # Без неё битое значение уходило прямо в --download-sections, и пользователь видел
@@ -1131,6 +1539,15 @@ parse_args() {
             --force-keyframes)
                 FORCE_KEYFRAMES="true"; shift
                 ;;
+            --no-playlist)
+                PLAYLIST_MODE_CLI="single"; shift
+                ;;
+            --yes-playlist)
+                PLAYLIST_MODE_CLI="full"; shift
+                ;;
+            --doctor)
+                DOCTOR_MODE=true; shift
+                ;;
             --dry-run)
                 DRY_RUN=true; shift
                 ;;
@@ -1140,6 +1557,13 @@ parse_args() {
                 exit 1
                 ;;
             *)
+                # Второй позиционный аргумент раньше просто ЗАТИРАЛ первый: команда
+                # `script URL1 URL2` качала только URL2 и отчитывалась «Успешно: 1»
+                # с кодом 0 — пользователь узнавал о потере, только не найдя файл.
+                if [ -n "${URL:-}" ]; then
+                    log_error "Указано несколько URL ('$URL' и '$1'). За один запуск обрабатывается один URL; для списка используйте --batch."
+                    exit 1
+                fi
                 URL="$1"; shift
                 ;;
         esac
@@ -1197,10 +1621,21 @@ build_net_args() {
 
 # Маскирует credentials в proxy URL для вывода в лог:
 # scheme://user:pass@host:port -> scheme://***@host:port
+# Маскирует пароль в URL прокси. Две дыры прежнего шаблона, обе печатали пароль
+# открытым текстом в заголовок прогона и в строку [DRY-RUN]:
+#   1) схема была ОБЯЗАТЕЛЬНОЙ, а config.ini.example объявляет её необязательной —
+#      адрес без схемы не совпадал вовсе и уходил в лог как есть;
+#   2) класс `[^@/]+` не пропускает '@', поэтому пароль, в котором сам есть '@',
+#      обрезался по ПЕРВОМУ '@': маска накрывала только начало, а хвост пароля
+#      вместе с хостом оставался в выводе открытым текстом.
+# Примеров с '@' здесь намеренно нет: барьер приватности видит в такой строке
+# форму «логин:пароль@хост» и блокирует коммит — см. .githooks/pre-commit.
+# Теперь схема необязательна, а user:pass берётся жадно до ПОСЛЕДНЕГО '@' перед
+# путём — ровно так же, как это делает разбор authority в RFC 3986.
 mask_proxy() {
     local p="$1"
     [ -z "$p" ] && { echo "нет"; return; }
-    echo "$p" | sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)[^@/]+@#\1***@#'
+    echo "$p" | sed -E 's#^(([A-Za-z][A-Za-z0-9+.-]*://)?)[^/]*@#\1***@#'
 }
 
 # ── MAIN ───────────────────────────────────────────────────────────────────
@@ -1217,6 +1652,12 @@ main() {
 
     load_config
     parse_args "$@"
+
+    # --doctor печатает отчёт и выходит: он про окружение, а не про загрузку.
+    if [ "${DOCTOR_MODE:-false}" = "true" ]; then
+        run_doctor
+        return $?
+    fi
 
     check_base_deps
 
@@ -1255,8 +1696,11 @@ main() {
         download_batch "$SUBS_ONLY"
     elif [ -n "$URL" ]; then
         # Определить шаблон
+        # Шаблон обязан соответствовать РЕЖИМУ, а не только виду ссылки: при
+        # playlist = single качается одно видео, и playlist-шаблон разложил бы его
+        # по несуществующей структуре плейлиста.
         local template
-        if echo "$URL" | grep -qi '[?&]list='; then
+        if [ "${PLAYLIST_MODE:-auto}" != "single" ] && echo "$URL" | grep -qi '[?&]list='; then
             template="${BASE_DIR}/$(limit_output_template "$BASE_DIR" "$PLAYLIST_TEMPLATE")"
         else
             template="${BASE_DIR}/$(limit_output_template "$BASE_DIR" "$OUTPUT_TEMPLATE")"
@@ -1264,7 +1708,7 @@ main() {
 
         local archive_path=""
         if [ "$USE_ARCHIVE" = "true" ]; then
-            archive_path="${BASE_DIR}/${ARCHIVE_FILE}"
+            archive_path="$ARCHIVE_FILE"
         fi
 
         # F13. Манифест точных путей от самого yt-dlp (--print-to-file after_move:filepath).
@@ -1274,6 +1718,7 @@ main() {
         local dl_manifest=""
         if [ "$SUBS_ONLY" != "true" ] && { [ "$TRANSLATE_ENABLED" = "true" ] || [ "$USE_ARCHIVE" = "true" ]; }; then
             dl_manifest=$(mktemp 2>/dev/null) || dl_manifest="/tmp/ytdlp_manifest_$$"
+            _register_tmp_path "$dl_manifest"
             : > "$dl_manifest"
         fi
 

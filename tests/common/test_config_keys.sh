@@ -30,6 +30,21 @@ assert_nonempty_keys() {
     else fail "$label: шаблон читается" "ключи найдены" "нет файла или ключей: $file"; fi
 }
 
+# «Ключ читается» — это ВЫЗОВ ридера с этим ключом, а не слово где-нибудь в файле.
+# Прежний `grep -qw` совпадал и с комментарием, и с чужим идентификатором: ключи
+# start, enabled, file, format, prefer встречаются в тексте на каждой странице, и
+# для них проверка была вечнозелёной. Ищем формы, которыми ридеры реально
+# обращаются к ключу на каждой платформе.
+key_is_read() {
+    local file="$1" key="$2"
+    case "$file" in
+        *.sh)  grep -qE "read_config[[:space:]]+\"$key\"" "$file" ;;
+        *.ps1) grep -qE "Read-Config[[:space:]]+\"$key\"" "$file" ;;
+        *.cmd) grep -qE "_key!\"==\"$key\"" "$file" ;;
+        *)     grep -qw -- "$key" "$file" ;;
+    esac
+}
+
 # ── ffmpeg: строгий трёхплатформенный паритет ─────────────────────────────
 suite "ffmpeg: каждый ключ config.ini читается в run.sh/run.cmd/run.ps1"
 FF="$PROJECT_DIR/ffmpeg"
@@ -37,7 +52,7 @@ assert_nonempty_keys "ffmpeg" "$FF/config.ini.example"
 while IFS= read -r key; do
     [ -z "$key" ] && continue
     for plat in FFmpeg_Converter_run_v18.sh FFmpeg_Converter_run_v18.cmd FFmpeg_Converter_run_v18.ps1; do
-        if grep -qw -- "$key" "$FF/$plat"; then pass "ffmpeg '$key' в $plat"
+        if key_is_read "$FF/$plat" "$key"; then pass "ffmpeg '$key' в $plat"
         else fail "ffmpeg '$key' в $plat" "читается" "отсутствует"; fi
     done
 done < <(keys_of "$FF/config.ini.example")
@@ -48,7 +63,7 @@ YT="$PROJECT_DIR/yt-dlp"
 assert_nonempty_keys "yt-dlp" "$YT/config.ini.example"
 while IFS= read -r key; do
     [ -z "$key" ] && continue
-    if grep -qw -- "$key" "$YT/Downloading_from_YouTube_v18.sh" || grep -qw -- "$key" "$YT/Downloading_from_YouTube_v18.ps1"; then
+    if key_is_read "$YT/Downloading_from_YouTube_v18.sh" "$key" || key_is_read "$YT/Downloading_from_YouTube_v18.ps1" "$key"; then
         pass "yt-dlp '$key' (есть читатель)"
     else
         fail "yt-dlp '$key' (есть читатель)" "читается в .sh или .ps1" "нигде не читается (мёртвый ключ)"

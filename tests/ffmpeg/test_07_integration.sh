@@ -231,7 +231,9 @@ if [ "$HAS_TEST_VIDEO" = "1" ]; then
                'video_resolution=":+:1280x720"' 'keep_aspect_ratio=":+:yes"'
     if [ -f "$FFMPEG_LOG" ]; then
         call_args=$(cat "$FFMPEG_LOG")
-        assert_contains     "keep_aspect+GPU: CPU scale+pad"          "scale=1280:720:force_original_aspect_ratio=decrease,pad=" "$call_args"
+        # force_divisible_by=2: без него decrease на нестандартных пропорциях даёт
+        # нечётную сторону (1366×768 → 1280×719), и yuv420p-энкодер падает.
+        assert_contains     "keep_aspect+GPU: CPU scale+pad"          "scale=1280:720:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=" "$call_args"
         assert_contains     "keep_aspect+GPU: hwdownload перед scale"  "hwdownload,format=nv12,scale=" "$call_args"
         assert_not_contains "keep_aspect+GPU: не scale_cuda"           "scale_cuda" "$call_args"
     else

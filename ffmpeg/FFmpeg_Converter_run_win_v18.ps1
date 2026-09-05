@@ -24,7 +24,15 @@ function Test-GpuEncoder {
         $psi.RedirectStandardError = $true
         $psi.RedirectStandardOutput = $true
         $p = [System.Diagnostics.Process]::Start($psi)
+        # Оба перенаправленных потока обязательно ДРЕНИРУЕМ. Буфер пайпа — 4 КБ; probe
+        # с непривычной сборкой ffmpeg легко переполняет его диагностикой, дочерний
+        # процесс блокируется на записи, WaitForExit истекает — и доступный энкодер
+        # объявлялся недоступным («переключено на CPU») без единого объяснения.
+        # ReadToEndAsync стартуем ДО ожидания, иначе дедлок просто переезжает.
+        $tErr = $p.StandardError.ReadToEndAsync()
+        $tOut = $p.StandardOutput.ReadToEndAsync()
         if (-not $p.WaitForExit(5000)) { try { $p.Kill() } catch {}; return $false }
+        try { $tErr.Wait(1000) | Out-Null; $tOut.Wait(1000) | Out-Null } catch {}
         return ($p.ExitCode -eq 0)
     } catch {
         return $false
@@ -35,6 +43,20 @@ function Test-GpuEncoder {
 $script:_appDir = $PSScriptRoot
 if ([string]::IsNullOrEmpty($script:_appDir)) {
     $script:_appDir = Split-Path -Parent ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
+}
+
+# Кавычки вокруг значения — обычный результат «Копировать как путь» в проводнике
+# Windows. Без снятия путь «"C:/video/in"» не находился ни на одной платформе, а
+# PS1 вдобавок падал исключением IsPathRooted. Паритет с Remove-ConfigQuotes в CLI.
+function Remove-ConfigQuotes {
+    param([string]$Value)
+    $v = $Value.Trim()
+    if ($v.Length -ge 2) {
+        if (($v[0] -eq '"' -and $v[-1] -eq '"') -or ($v[0] -eq "'" -and $v[-1] -eq "'")) {
+            return $v.Substring(1, $v.Length - 2)
+        }
+    }
+    return $v
 }
 
 # --- Чтение config.ini (один раз в хеш-таблицу) ---
@@ -63,7 +85,13 @@ if (Test-Path -LiteralPath $configFile) {
                     ""
                 } else { $ev }
             })
-            $script:_configCache["${curSection}::$($Matches[1].Trim())"] = $val.Trim()
+            # ContainsKey-guard = ПЕРВОЕ вхождение ключа. Раньше здесь побеждало
+            # ПОСЛЕДНЕЕ, а CLI-PS1 и .sh брали первое: один config.ini с дублем
+            # `codec` давал libx264 из CLI и libx265 из GUI — молча.
+            $_ck = "${curSection}::$($Matches[1].Trim())"
+            if (-not $script:_configCache.ContainsKey($_ck)) {
+                $script:_configCache[$_ck] = (Remove-ConfigQuotes $val)
+            }
         }
     }
 }
@@ -116,6 +144,10 @@ $_cfg_keep_aspect      = Parse-Flag (Read-Config "keep_aspect_ratio" "video" "+y
 $_cfg_container        = Parse-Flag (Read-Config "container"        "video" "+mp4")
 
 $_cfg_threads  = Parse-Flag (Read-Config "threads"        "performance" "+4")
+# parallel_files — SH-only. GUI обязан прочитать ключ и предупредить: один и тот же
+# config.ini не имеет права молча значить разное на разных платформах (то же делают
+# CLI-PS1 и CMD). Контрола в форме нет намеренно — включать нечего.
+$_cfg_parallel = Parse-Flag (Read-Config "parallel_files" "performance" "-1")
 $_cfg_hw_accel  = Parse-Flag (Read-Config "hw_accel"       "gpu"         "-intel")
 $_cfg_gpu_preset = Parse-Flag (Read-Config "preset"        "gpu"         "-p5")
 $_cfg_gpu_tune   = Parse-Flag (Read-Config "tune"          "gpu"         "-hq")
@@ -136,6 +168,7 @@ $_cfg_remote_ep    = Read-Config "endpoint" "remote" ""
 $_cfg_remote_key   = Read-Config "api_key" "remote" ""
 $_cfg_remote_pref  = Read-Config "prefer" "remote" "auto"
 $_cfg_remote_wait  = Read-Config "wait_timeout" "remote" "1800"
+$_cfg_remote_stall = Read-Config "stall_timeout" "remote" "900"
 # Своих полей у этих двух в форме нет: api_key_command может спрашивать пароль,
 # а on_failure меняет политику отказов — обоим место в config.ini, а не в
 # галочке, которую поставили один раз и забыли. Читаем и передаём как есть.
@@ -209,31 +242,27 @@ $btnCheckFfmpeg.Add_Click({
     $btnCheckFfmpeg.Enabled = $false
     $btnCheckFfmpeg.Text    = "Запрос..."
     $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
-    $wc = $null
+    $resp = $null; $rdr = $null
     try {
         Ensure-SslBypass
-        # WebClient без таймаута висит ~100с на UI-потоке при сетевых проблемах —
-        # подкласс с Timeout (компилируется один раз за процесс).
-        if (-not ('TimeoutWebClient' -as [type])) {
-            Add-Type @"
-using System;
-using System.Net;
-public class TimeoutWebClient : WebClient {
-    public int TimeoutMs = 8000;
-    protected override WebRequest GetWebRequest(Uri address) {
-        WebRequest r = base.GetWebRequest(address);
-        if (r != null) { r.Timeout = TimeoutMs; }
-        return r;
-    }
-}
-"@
-        }
-        $wc = New-Object TimeoutWebClient
-        $wc.Headers.Add("User-Agent", "ffmpeg-gui/1.0")
-        $wc.Proxy = [System.Net.WebRequest]::GetSystemWebProxy()
-        $wc.Proxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials
-        $wc.UseDefaultCredentials = $true
-        $latestVer = $wc.DownloadString("https://www.gyan.dev/ffmpeg/builds/release-version").Trim()
+        # WebClient без таймаута висит ~100 с на UI-потоке при сетевых проблемах.
+        # Подкласса с Timeout здесь нет и не будет: компиляция C# на лету
+        # (`Add-Type -TypeDefinition` / позиционная `Add-Type @"…"@`) запрещена
+        # в этом репозитории наравне с рефлексией к непубличным членам — она
+        # поднимает тот же heuristic score, из-за которого Касперский блокировал
+        # v17 целиком (docs/knowledge-base.md, «kaspersky-workaround»).
+        # HttpWebRequest даёт Timeout штатным свойством, без единой строки C#.
+        $req = [System.Net.HttpWebRequest]::Create("https://www.gyan.dev/ffmpeg/builds/release-version")
+        $req.Method    = "GET"
+        $req.Timeout   = 8000
+        $req.ReadWriteTimeout = 8000
+        $req.UserAgent = "ffmpeg-gui/1.0"
+        $req.Proxy     = [System.Net.WebRequest]::GetSystemWebProxy()
+        $req.Proxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials
+        $req.UseDefaultCredentials = $true
+        $resp = $req.GetResponse()
+        $rdr  = New-Object System.IO.StreamReader($resp.GetResponseStream())
+        $latestVer = $rdr.ReadToEnd().Trim()
         $dlUrl     = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
         $script:ffmpegUpdateUrl = $dlUrl
 
@@ -260,7 +289,8 @@ public class TimeoutWebClient : WebClient {
         [System.Windows.Forms.MessageBox]::Show($errMsg, "Ошибка проверки обновлений", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
     }
     finally {
-        if ($wc) { $wc.Dispose(); $wc = $null }
+        if ($rdr)  { try { $rdr.Dispose() }  catch {}; $rdr  = $null }
+        if ($resp) { try { $resp.Dispose() } catch {}; $resp = $null }
         $btnCheckFfmpeg.Enabled = $true
         $btnCheckFfmpeg.Text    = "Проверить обновления"
         $form.Cursor = [System.Windows.Forms.Cursors]::Default
@@ -591,6 +621,10 @@ $_ge.Add($checkAudioChannels)
 $comboAudioChannels = [System.Windows.Forms.ComboBox]::new()
 $comboAudioChannels.Location = [System.Drawing.Point]::new($_ainp, 40)
 $comboAudioChannels.Size = [System.Drawing.Size]::new($_aw, 21)
+# Значение берётся ПО ИНДЕКСУ выбранного пункта, поэтому список обязан быть
+# нередактируемым: набранный руками текст оставлял SelectedIndex = -1, и в
+# конфиг уезжало `-ac 0` / `transpose=` — ffmpeg падал на каждом файле.
+$comboAudioChannels.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
 $comboAudioChannels.Items.AddRange(@("1 - Mono", "2 - Stereo"))
 $comboAudioChannels.SelectedIndex = if ($_cfg_audio_channels.value -eq "1") { 0 } else { 1 }
 $_ge.Add($comboAudioChannels)
@@ -775,6 +809,10 @@ $_ge.Add($checkVideoRotation)
 $comboVideoRotation = [System.Windows.Forms.ComboBox]::new()
 $comboVideoRotation.Location = [System.Drawing.Point]::new($_v2inp, 18)
 $comboVideoRotation.Size = [System.Drawing.Size]::new($_v2w, 21)
+# Значение берётся ПО ИНДЕКСУ выбранного пункта, поэтому список обязан быть
+# нередактируемым: набранный руками текст оставлял SelectedIndex = -1, и в
+# конфиг уезжало `-ac 0` / `transpose=` — ffmpeg падал на каждом файле.
+$comboVideoRotation.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
 $comboVideoRotation.Items.AddRange(@("1 - По часовой", "2 - Против часовой"))
 $comboVideoRotation.SelectedIndex = if ($_cfg_video_rotation.value -eq "1") { 0 } else { 1 }
 $_ge.Add($comboVideoRotation)
@@ -795,6 +833,10 @@ $_ge.Add($checkVideoSubtitles)
 $comboSubtitlesMode = [System.Windows.Forms.ComboBox]::new()
 $comboSubtitlesMode.Location = [System.Drawing.Point]::new($_v2inp, 40)
 $comboSubtitlesMode.Size = [System.Drawing.Size]::new($_v2w, 21)
+# Значение берётся ПО ИНДЕКСУ выбранного пункта, поэтому список обязан быть
+# нередактируемым: набранный руками текст оставлял SelectedIndex = -1, и в
+# конфиг уезжало `-ac 0` / `transpose=` — ffmpeg падал на каждом файле.
+$comboSubtitlesMode.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
 $comboSubtitlesMode.Items.AddRange(@("burn - На видео", "meta - Дорожкой"))
 $comboSubtitlesMode.SelectedIndex = if ($_cfg_video_subtitles.value -eq "meta") { 1 } else { 0 }
 $_ge.Add($comboSubtitlesMode)
@@ -1223,10 +1265,65 @@ $buttonStop.Font = [System.Drawing.Font]::new($buttonStop.Font.FontFamily, 11, [
 $buttonStop.ForeColor = [System.Drawing.Color]::DarkRed
 $buttonStop.Enabled = $false
 $buttonStop.Add_Click({
-    # Записываем файл-флаг отмены
-    try { "cancel" | Set-Content $global:_guiCancel -Encoding UTF8 } catch {}
+    # Записываем файл-флаг отмены. -LiteralPath обязателен: '[' в пути TEMP иначе
+    # трактуется как маска, файл не создаётся и Stop молча не работает.
+    if ($global:_guiCancel) {
+        try { Set-Content -LiteralPath $global:_guiCancel -Value "cancel" -Encoding UTF8 } catch {}
+    }
 })
 $_mc.Add($buttonStop)
+
+# Тот же отчёт, что у `--doctor` в CLI: какой инструмент найден, где, и что без
+# него не работает. До него пользователь GUI узнавал об отсутствии ffmpeg или
+# curl только по невнятному отказу воркера на первом же файле.
+$buttonDoctor = [System.Windows.Forms.Button]::new()
+$buttonDoctor.Location = [System.Drawing.Point]::new(628, $yPos)
+$buttonDoctor.Size = [System.Drawing.Size]::new(150, 30)
+$buttonDoctor.Text = "Проверить окружение"
+$buttonDoctor.Font = [System.Drawing.Font]::new($buttonDoctor.Font.FontFamily, 8)
+$buttonDoctor.Add_Click({
+    $lines = @()
+    $lines += "Каталог приложения: $script:_appDir"
+    $lines += ""
+
+    $ffPath = $textFFmpegPath.Text
+    if (-not $ffPath) { $ffPath = "ffmpeg" }
+    $ffFound = $null
+    try { $ffFound = (Get-Command $ffPath -ErrorAction SilentlyContinue).Source } catch {}
+    if (-not $ffFound -and (Test-Path -LiteralPath $ffPath)) { $ffFound = $ffPath }
+    if ($ffFound) {
+        $lines += "ffmpeg:  есть — $ffFound"
+    } elseif ($chkRemote.Checked) {
+        $lines += "ffmpeg:  НЕТ — тонкий клиент: считает служба. Локально недоступны проверка результата и определение длительности."
+    } else {
+        $lines += "ffmpeg:  НЕТ — конвертация невозможна. Положите ffmpeg.exe рядом с приложением или добавьте в PATH."
+    }
+
+    if ($chkRemote.Checked) {
+        $curl = $null
+        try { $curl = (Get-Command curl -ErrorAction SilentlyContinue).Source } catch {}
+        if ($curl) { $lines += "curl:    есть — $curl" }
+        else       { $lines += "curl:    НЕТ — удалённый бэкенд не работает вовсе." }
+        $ep = $txtRemoteEndpoint.Text.Trim()
+        if (-not $ep) {
+            $lines += "Адрес:   НЕ ЗАДАН — заполните поле адреса службы."
+        } elseif ($ep -notmatch '/v\d+$') {
+            $lines += "Адрес:   $ep — БЕЗ версии API (/v1). Вероятен HTTP 404 на /capabilities."
+        } else {
+            $lines += "Адрес:   $ep"
+        }
+        if ($txtRemoteApiKey.Text.Trim() -or $_cfg_remote_keycmd) { $lines += "Ключ:    задан (значение не показываем)" }
+        else { $lines += "Ключ:    НЕ ЗАДАН — служба откажет на первом запросе." }
+    }
+
+    $lines += ""
+    $src = $textInputFolder.Text
+    $lines += "Источник:   $src$(if (-not (Test-Path -LiteralPath $src)) { '   ← каталога НЕТ' })"
+    $lines += "Назначение: $($textOutputFolder.Text)"
+    [System.Windows.Forms.MessageBox]::Show(($lines -join "`n"), "Проверка окружения",
+        [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+})
+$_mc.Add($buttonDoctor)
 
 # ========== Progress Section ==========
 $yPos = 586
@@ -1313,7 +1410,10 @@ $buttonRun.Add_Click({
     $script:copy_codecs         = if ($checkCopyCodecs.Checked)  { "yes" } else { "no" }
     $_threadsVal = if ($textThreads.Text -match '^[0-9]+$') { $textThreads.Text } else { '4' }
     $script:multithreads        = if ($checkMultithreads.Checked) { ":+:$_threadsVal" } else { ":-:1" }
-    $script:parallel_files      = ":-:1"
+    # parallel_files=$($_cfg_parallel.value) игнорируется — параллельная обработка есть
+    # только в .sh. Значение из config.ini передаём как есть, чтобы воркер напечатал
+    # то же предупреждение, что и CLI-PS1.
+    $script:parallel_files      = if ($_cfg_parallel.enabled) { ":+:$($_cfg_parallel.value)" } else { ":-:$($_cfg_parallel.value)" }
     $script:dry_run             = if ($checkDryRun.Checked)      { "yes" } else { "no" }
     $script:enable_log          = if ($checkLog.Checked)         { "yes" } else { "no" }
     $script:log_file            = $_cfg_log_file
@@ -1394,6 +1494,14 @@ $buttonRun.Add_Click({
     # каста — весь батч обрывался невнятной ошибкой на первом же файле.
     elseif ($checkStartTime.Checked       -and $textStartTime.Text       -notmatch '^\d{1,2}-\d{1,2}-\d{1,2}$') { $numErr = "Начало должно быть в формате чч-мм-сс (например 00-01-30)" }
     elseif ($checkDuration.Checked        -and $textDuration.Text        -notmatch '^\d{1,2}-\d{1,2}-\d{1,2}$') { $numErr = "Длительность должна быть в формате чч-мм-сс (например 00-05-00)" }
+    # Три поля жили вне каскада и обнаруживались уже воркером — каждое по-своему
+    # неприятно. «Разрешение» комбо редактируемое: «1280 x 720» давало
+    # `scale=1280 :720` и FAIL каждого файла. «Потоки» с текстом молча становились
+    # 4. «Ждать карту, сек» уезжает в JSON БЕЗ кавычек: «30 мин» давало невалидное
+    # тело `{"wait_timeout":30 мин}`, и выяснялось это ПОСЛЕ загрузки гигабайт.
+    elseif ($checkVideoResolution.Checked -and $comboVideoResolution.Text -notmatch '^\d+x\d+$') { $numErr = "Разрешение задаётся как ШИРИНАxВЫСОТА без пробелов (например 1280x720)" }
+    elseif ($checkMultithreads.Checked    -and $textThreads.Text          -notmatch '^\d+$')     { $numErr = "Потоки ffmpeg должны быть целым числом" }
+    elseif ($chkRemote.Checked            -and $txtRemoteWait.Text        -notmatch '^\d+$')     { $numErr = "«Ждать карту, сек» должно быть целым числом секунд" }
     if ($numErr) {
         [System.Windows.Forms.MessageBox]::Show($numErr, "Проверка настроек", "OK", "Warning") | Out-Null
         return
@@ -1507,6 +1615,7 @@ $buttonRun.Add_Click({
     $script:remote_api_key_command = $_cfg_remote_keycmd
     $script:remote_prefer          = [string]$cmbRemotePrefer.SelectedItem
     $script:remote_wait_timeout    = $txtRemoteWait.Text
+    $script:remote_stall_timeout   = $_cfg_remote_stall
     $script:remote_on_failure      = $_cfg_remote_onfail
 
     # Собираем все переменные для передачи в runspace
@@ -1523,7 +1632,7 @@ $buttonRun.Add_Click({
         'ffmpeg','save_old_extension','format_files_in','subtitles_style',
         'dry_run','enable_log','log_file',
         'remote_enabled','remote_endpoint','remote_api_key','remote_api_key_command',
-        'remote_prefer','remote_wait_timeout','remote_on_failure'
+        'remote_prefer','remote_wait_timeout','remote_stall_timeout','remote_on_failure'
     )) {
         $v = Get-Variable -Name $varName -Scope Script -ErrorAction SilentlyContinue
         $varsToPass[$varName] = if ($v) { $v.Value } else { $null }
@@ -1534,7 +1643,11 @@ $buttonRun.Add_Click({
     foreach ($kv in $varsToPass.GetEnumerator()) {
         $rs.SessionStateProxy.SetVariable($kv.Key, $kv.Value)
     }
+    # PSScriptRoot задаём для совместимости, но полагаться на него нельзя: у скрипта,
+    # поданного строкой в AddScript(), автоматическая $PSScriptRoot пуста и перекрывает
+    # это значение. Каталог приложения воркер берёт из $guiAppDir.
     $rs.SessionStateProxy.SetVariable("PSScriptRoot", $script:_appDir)
+    $rs.SessionStateProxy.SetVariable("guiAppDir", $script:_appDir)
     $rs.SessionStateProxy.SetVariable("guiProgressFile", $progressFile)
     $rs.SessionStateProxy.SetVariable("guiCancelFile", $cancelFile)
 
@@ -1570,10 +1683,26 @@ $buttonRun.Add_Click({
                 $errParts += ($rsErrors | ForEach-Object { $_.ToString() })
             }
 
+            # Причины отказа воркер печатает через Write-Host — это Information-stream,
+            # и GUI его не читал вовсе: preflight-отказ (`exit 1` до первой записи
+            # прогресса) давал бессодержательное «завершился без отчёта о результате».
+            # Собираем ОТДЕЛЬНО от $errParts: наличие [ПРЕДУПРЕЖДЕНИЕ] само по себе не
+            # делает прогон неудачным, эти строки нужны только в ветке ошибки.
+            $infoLines = @()
+            try {
+                $infoLines = @($global:_guiPS.Streams.Information |
+                    ForEach-Object { [string]$_ } |
+                    Where-Object { $_ -match '\[ОШИБКА\]|\[FAIL\]|\[ПРЕДУПРЕЖДЕНИЕ\]' } |
+                    Select-Object -Last 10)
+            } catch {}
+
             # Читаем финальное состояние
             $state = $null
             try {
-                $json = Get-Content $global:_guiProgress -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
+                # ReadAllText, а не Get-Content -Raw: воркер пишет File.WriteAllText в
+                # UTF-8 без BOM, и Get-Content без -Encoding на русской локали читает его
+                # как ANSI — «Файлов с ошибками: 2» приходило в MessageBox мохибейком.
+                $json = [System.IO.File]::ReadAllText($global:_guiProgress) | ConvertFrom-Json
                 if ($json) {
                     $state = $json.state
                     $progressBarFile.Value  = 100
@@ -1594,13 +1723,19 @@ $buttonRun.Add_Click({
             } else {
                 $labelProgressFile.Text = "Ошибка"
                 if ($errParts.Count -eq 0) { $errParts += "Скрипт завершился без отчёта о результате (state='$state')" }
+                if ($infoLines.Count -gt 0) { $errParts += $infoLines }
                 [System.Windows.Forms.MessageBox]::Show(($errParts -join "`n"), "Ошибка скрипта", "OK", "Error") | Out-Null
             }
 
             # Очистка
-            try { Remove-Item $global:_guiProgress -Force -ErrorAction SilentlyContinue } catch {}
-            try { Remove-Item "$($global:_guiProgress).tmp" -Force -ErrorAction SilentlyContinue } catch {}
-            try { Remove-Item $global:_guiCancel   -Force -ErrorAction SilentlyContinue } catch {}
+            # -LiteralPath: TEMP с '[' или ']' в пути иначе трактуется как маска и файлы
+            # остаются (а Stop через cancel-файл перестаёт работать).
+            if ($global:_guiProgress) {
+                try { Remove-Item -LiteralPath $global:_guiProgress -Force -ErrorAction SilentlyContinue } catch {}
+                try { Remove-Item -LiteralPath "$($global:_guiProgress).tmp" -Force -ErrorAction SilentlyContinue } catch {}
+                try { Remove-Item -LiteralPath "$($global:_guiProgress).bak" -Force -ErrorAction SilentlyContinue } catch {}
+            }
+            if ($global:_guiCancel) { try { Remove-Item -LiteralPath $global:_guiCancel -Force -ErrorAction SilentlyContinue } catch {} }
             $env:FFMPEG_GUI_PROGRESS_FILE = $null
             $env:FFMPEG_GUI_CANCEL_FILE   = $null
             try { $global:_guiPS.Dispose() } catch {}
@@ -1728,7 +1863,7 @@ $form.Add_FormClosing({
     # уже освобождённый runspace или удалённые файлы прогресса после закрытия формы.
     if ($global:_guiTimer) { try { $global:_guiTimer.Stop(); $global:_guiTimer.Dispose() } catch {} }
     if ($global:_guiPS -and $global:_guiHandle -and -not $global:_guiHandle.IsCompleted) {
-        try { "cancel" | Set-Content $global:_guiCancel -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
+        try { Set-Content -LiteralPath $global:_guiCancel -Value "cancel" -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
         # Даём воркеру до ~3с увидеть cancel-файл и сам убить свой ffmpeg.exe; иначе Stop()
         # обрывает pipeline, а внешний ffmpeg.exe остаётся осиротевшим процессом.
         # Ждём с прокачкой очереди сообщений. Голый Start-Sleep в UI-потоке замораживает
@@ -1745,8 +1880,15 @@ $form.Add_FormClosing({
     }
     # ".tmp"/".bak" — служебные файлы атомарной записи прогресса (воркер пишет в tmp и
     # подменяет цель); остаются, только если воркер убит между записью и подменой.
-    foreach ($f in @($global:_guiProgress, "$($global:_guiProgress).tmp", "$($global:_guiProgress).bak", $global:_guiCancel)) {
-        if ($f) { try { Remove-Item $f -Force -ErrorAction SilentlyContinue } catch {} }
+    #
+    # Список строим ТОЛЬКО от заданных путей: при закрытии окна без единого запуска
+    # $global:_guiProgress не определена, и "$($global:_guiProgress).tmp" давало голое
+    # ".tmp" — Remove-Item сносил файлы «.tmp»/«.bak» из текущего каталога.
+    $_toClean = @()
+    if ($global:_guiProgress) { $_toClean += @($global:_guiProgress, "$($global:_guiProgress).tmp", "$($global:_guiProgress).bak") }
+    if ($global:_guiCancel)   { $_toClean += $global:_guiCancel }
+    foreach ($f in $_toClean) {
+        try { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue } catch {}
     }
     if ($global:_guiPS)       { try { $global:_guiPS.Dispose() } catch {} }
     if ($global:_guiRunspace) { try { $global:_guiRunspace.Dispose() } catch {} }

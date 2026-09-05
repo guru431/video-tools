@@ -58,6 +58,19 @@ assert_contains "translate исключает audio (qi>=1)"  '$qi -ge 1 -and $q
 assert_not_contains "нет --no-check-certificate"  "--no-check-certificate"  "$src"
 assert_contains "--download-archive из config"  "--download-archive"  "$src"
 assert_contains "mix громкости из config"  'volume=$cfg_transOrigVol'  "$src"
+# Потолок времени на vot берётся из [translation] timeout_sec (паритет с .sh), а не
+# зашит числом: 900 000 мс были константой, и ключ конфига в GUI не работал вовсе.
+assert_contains "таймаут vot из config"    '$_votTimeoutMs = [long]$cfg_transTimeout * 1000'  "$src"
+# 0 = «без ограничения» — тот же контракт, что в .sh. Без этой проверки нулевой
+# таймаут означал бы «прервать немедленно», то есть перевод не работал бы вовсе.
+assert_contains "таймаут 0 = без ограничения" '$_votTimeoutMs -gt 0 -and'  "$src"
+# Дочерний yt-dlp пишет UTF-8; без явной кодировки .NET читает его в ANSI-кодировке
+# консоли, и кириллица в именах файлов приходит крякозябрами.
+assert_contains "stdout дочернего yt-dlp — UTF-8"  '$psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8'  "$src"
+assert_contains "PYTHONIOENCODING дочернему yt-dlp" '$psi.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8"'  "$src"
+# Валидаторы значений config.ini — один вход, а не проверка на каждом месте чтения.
+assert_contains "Read-ConfigEnum определён"  "function Read-ConfigEnum"  "$src"
+assert_contains "Read-ConfigBool определён"  "function Read-ConfigBool"  "$src"
 assert_contains "Unregister-Event (утечка событий)"  "Unregister-Event"  "$src"
 assert_contains "btnRemoveUrl дизейблится при загрузке"  '$btnRemoveUrl.Enabled = $false'  "$src"
 assert_contains "base_dir от scriptDir"  'Combine($scriptDir, $cfg_baseDir)'  "$src"
@@ -106,6 +119,9 @@ default_quality = 360
 [translation]
 enabled = true
 target_lang = ru
+timeout_sec = abc
+[subtitles]
+format = badfmt
 INIEOF
 win_cfg=$(cygpath -w "$tmpcfg" 2>/dev/null || echo "$tmpcfg")
 
@@ -131,6 +147,19 @@ Write-Output ("rc_transen=" + (Read-Config 'enabled' 'translation' 'false'))
 # ffmpeg-парсера и у обоих .sh (там `break` на первом совпадении). Раньше здесь
 # побеждало последнее, и один config.ini читался компонентами по-разному.
 Write-Output ("rc_dup=" + (Read-Config 'default_quality' 'download' '720'))
+
+# Валидация значений config.ini: неизвестный enum и нечисловой таймаут обязаны
+# скатываться к умолчанию И порождать предупреждение. Раньше они молча
+# превращались в умолчание (комбобокс просто вставал на индекс 0), и опечатка в
+# config.ini была неотличима от «так и задумано».
+Write-Output ("cfg_subfmt=" + $cfg_subFormat)
+Write-Output ("cfg_timeout=" + $cfg_transTimeout)
+Write-Output ("cfg_transen=" + $cfg_transEnabled)
+Write-Output ("warn_count=" + $script:startupWarnings.Count)
+Write-Output ("warn_subfmt=" + [bool]($script:startupWarnings -match 'format'))
+Write-Output ("warn_timeout=" + [bool]($script:startupWarnings -match 'timeout_sec'))
+Write-Output ("enum_ok=" + (Read-ConfigEnum 'method' 'cookies' 'none' @('none','browser','file')))
+Write-Output ("bool_ok=" + (Read-ConfigBool 'enabled' 'translation' 'false'))
 
 # Get-Platform (production: якорь по границе домена)
 Write-Output ("plat_yt=" + (Get-Platform 'https://www.youtube.com/watch?v=abc123'))
@@ -202,6 +231,19 @@ assert_eq "translation enabled"                        "true"                   
 assert_eq "дубль ключа: выигрывает первое вхождение"   "1080"                         "$(get_field "$out" rc_dup)"
 
 # ── Get-Platform ──────────────────────────────────────────────
+suite "PS1 yt-dlp: валидация значений config.ini (enum/bool/таймаут)"
+# Неизвестный формат субтитров уехал бы в argv yt-dlp и уронил бы КАЖДУЮ загрузку.
+assert_eq "неизвестный [subtitles] format → vtt"     "vtt"   "$(get_field "$out" cfg_subfmt)"
+# 0 = без ограничения, поэтому нечисловое значение нельзя молча трактовать как 0:
+# перевод обрывался бы мгновенно на каждом ролике.
+assert_eq "нечисловой timeout_sec → 900"             "900"   "$(get_field "$out" cfg_timeout)"
+assert_eq "enabled = true распознан как true"        "true"  "$(get_field "$out" cfg_transen)"
+assert_eq "оба промаха дали предупреждения"          "2"     "$(get_field "$out" warn_count)"
+assert_eq "предупреждение про формат субтитров"      "True"  "$(get_field "$out" warn_subfmt)"
+assert_eq "предупреждение про timeout_sec"           "True"  "$(get_field "$out" warn_timeout)"
+assert_eq "корректный enum проходит без подмены"     "browser" "$(get_field "$out" enum_ok)"
+assert_eq "корректный bool проходит без подмены"     "true"  "$(get_field "$out" bool_ok)"
+
 suite "PS1 yt-dlp: Get-Platform (production, якорь границы)"
 assert_eq "youtube.com → YouTube"   "YouTube"     "$(get_field "$out" plat_yt)"
 assert_eq "youtu.be → YouTube"      "YouTube"     "$(get_field "$out" plat_short)"
@@ -231,12 +273,14 @@ suite "PS1 yt-dlp: formatPresets/simpleBest (production, не inline-копия)
 assert_contains "avc1_best[0] → bestaudio"        "bestaudio[ext!=webm]"  "$(get_field "$out" fp_best_0)"
 assert_eq "avc1_best[3] (720p)"   "bestaudio[ext!=webm]+bestvideo[height<=720][vcodec^=avc1]/bestaudio+bestvideo[height<=720]"  "$(get_field "$out" fp_best_3)"
 assert_eq "avc1_https[0]"         "140"                "$(get_field "$out" fp_https_0)"
-assert_eq "avc1_https[3]"         "140+136/135/134"    "$(get_field "$out" fp_https_3)"
+# Аудио повторяется в каждой альтернативе: «+» связывает сильнее «/», и
+# 140+136/135/134 = (140+136)/135/134 — без 136 качалось только видео 135.
+assert_eq "avc1_https[3]"         "140+136/140+135/140+134"    "$(get_field "$out" fp_https_3)"
 assert_contains "avc1_https[6] (не битый 139)"  "140+266"  "$(get_field "$out" fp_https_6)"
-assert_eq "avc1_m3u8[3]"          "234+232/231/230"    "$(get_field "$out" fp_m3u8_3)"
+assert_eq "avc1_m3u8[3]"          "234+232/234+231/234+230"    "$(get_field "$out" fp_m3u8_3)"
 assert_eq "avc1_https_60fps[3] (production=140+298)"  "140+298/best[height<=720]"  "$(get_field "$out" fp_60fps_3)"
-assert_contains "avc1_m3u8_60fps[4]"  "234+312/311/310/309"  "$(get_field "$out" fp_m3u860_4)"
-assert_contains "avc1_https_60fps_hdr[3]"  "234+698/697/696"  "$(get_field "$out" fp_hdr_3)"
+assert_contains "avc1_m3u8_60fps[4]"  "234+312/234+311/234+310/234+309"  "$(get_field "$out" fp_m3u860_4)"
+assert_contains "avc1_https_60fps_hdr[3]"  "234+698/234+697/234+696"  "$(get_field "$out" fp_hdr_3)"
 assert_eq "old_combo[0]"          "140"                "$(get_field "$out" fp_old_0)"
 assert_eq "old_combo[3]"          "22/18"              "$(get_field "$out" fp_old_3)"
 assert_eq "old_combo[6]"          "38/37/22/18"        "$(get_field "$out" fp_old_6)"

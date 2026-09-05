@@ -13,15 +13,25 @@ Write-Host "Embedding FFmpeg_Converter_script.ps1..."
 $scriptContent = [System.IO.File]::ReadAllText($scriptPs1, [System.Text.Encoding]::UTF8)
 
 # Модуль удалённого бэкенда встраиваем в ту же строку: EXE обязан быть
-# самодостаточным, а script.ps1 подключает модуль из $PSScriptRoot — рядом с EXE
-# файла нет, и удалённый счёт молча остался бы недоступным (точнее, упал бы с
-# «рядом со скриптом нет remote_client.ps1»). Условный дот-сорсинг в script.ps1
-# после этого просто не находит файла и ничего не делает — функции уже объявлены.
+# самодостаточным, а рядом с EXE файла remote_client.ps1 нет, и удалённый счёт молча
+# остался бы недоступным. script.ps1 подключает модуль только тогда, когда функции ещё
+# не объявлены (Get-Command Set-RemoteActive) — здесь они уже вклеены, и дот-сорсинг
+# не выполняется вовсе.
 $remotePs1 = Join-Path $PSScriptRoot 'remote_client.ps1'
 if (Test-Path -LiteralPath $remotePs1) {
     Write-Host 'Embedding remote_client.ps1...'
     $remoteContent = [System.IO.File]::ReadAllText($remotePs1, [System.Text.Encoding]::UTF8)
     $scriptContent = $remoteContent + "`n" + $scriptContent
+}
+
+# Встраиваемый текст живёт внутри here-string @'…'@. Строка, начинающаяся с '@ (после
+# необязательных пробелов), закрыла бы её досрочно: EXE собрался бы, CI smoke-build
+# остался бы зелёным, а при запуске пользователь получил бы parse error. Проверяем до
+# сборки — здесь это три строки, а в готовом EXE это уже не диагностируется.
+$_badTerm = ($scriptContent -split "`r?`n") | Where-Object { $_ -match "^\s*'@" }
+if ($_badTerm) {
+    Write-Host "FAIL: встраиваемый текст содержит строку, закрывающую here-string: $($_badTerm[0])"
+    exit 1
 }
 
 $embedBlock = @"

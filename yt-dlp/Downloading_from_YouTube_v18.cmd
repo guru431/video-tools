@@ -1,5 +1,18 @@
 @echo off
+rem Кодовую страницу консоли ЗАПОМИНАЕМ и восстанавливаем при выходе: скрипт
+rem запускают и из уже открытого окна cmd, где 65001 ломает вывод последующих
+rem команд (кириллица в dir/type). Тот же принцип — для color.
+rem `<nul` обязателен: дочерний процесс `for /f` наследует stdin скрипта, и без
+rem него `chcp` съедал перенаправленный ввод — все последующие `set /p` читали
+rem пустоту, то есть скрипт нельзя было прогнать не-интерактивно вовсе
+rem (tests/yt-dlp/test_15_cmd_smoke.sh). То же правило — у остальных `for /f` ниже.
+for /f "tokens=2 delims=:." %%c in ('chcp ^<nul') do set "_orig_cp=%%c"
 chcp 65001 >nul 2>&1
+rem %~dp0 снимаем ДО setlocal: под EnableDelayedExpansion путь скрипта с "!"
+rem (C:\...\bang!dir\) терял эти символы — folder уезжал в несуществующий
+rem каталог, а `if exist "%~dp0yt-dlp.exe"` становилось ложным, и бинарники
+rem рядом со скриптом игнорировались молча.
+set "SCRIPT_DIR=%~dp0"
 setlocal EnableDelayedExpansion
 
 :: ============================================================================
@@ -7,10 +20,10 @@ setlocal EnableDelayedExpansion
 :: Поддержка: выбор качества, cookies, прокси, AI-перевод аудиодорожки
 :: ============================================================================
 
-set "folder=%~dp0_video_"
+set "folder=!SCRIPT_DIR!_video_"
 :: Бинарь yt-dlp: сначала рядом со скриптом (yt-dlp.exe), потом из PATH
 set "dlp=yt-dlp"
-if exist "%~dp0yt-dlp.exe" set "dlp=%~dp0yt-dlp.exe"
+if exist "!SCRIPT_DIR!yt-dlp.exe" set "dlp=!SCRIPT_DIR!yt-dlp.exe"
 set "proxy="
 set "cookie_arg="
 set "translate_arg="
@@ -22,15 +35,17 @@ echo =========================================
 echo.
 
 :: ── URL ──────────────────────────────────────────────────────────────────
+set "url="
 set /p "url=URL видео/плейлиста: "
 rem if defined (а не "%url%"=="") — immediate-раскрытие %url% в кавычках условия
 rem допускало инъекцию: кавычка в URL закрывала кавычки сравнения и открывала & команду.
 if not defined url (
     color 04
     echo.
-    echo ОШИБКА: URL обязателен!
+    echo ОШИБКА: URL обязателен^^!
     echo.
     pause
+    call :restore_console
     exit /b 1
 )
 rem Валидация URL: только схемы http(s):// и без кавычек. Всё делается средствами
@@ -48,9 +63,10 @@ if not "!url!"=="!_nq!" set "_urlok="
 if not defined _urlok (
     color 04
     echo.
-    echo ОШИБКА: URL должен начинаться с http:// или https:// и не содержать кавычек!
+    echo ОШИБКА: URL должен начинаться с http:// или https:// и не содержать кавычек^^!
     echo.
     pause
+    call :restore_console
     exit /b 1
 )
 
@@ -67,8 +83,9 @@ echo   6  - 4K (2160p)
 echo   91 - Только субтитры (RU)
 echo   92 - Только субтитры (EN)
 echo.
+set "quality="
 set /p "quality=Выберите номер: "
-if "%quality%"=="" set quality=3
+if not defined quality set "quality=3"
 :: Whitelist допустимых номеров качества (защита от инъекции в if %quality%==N)
 set "_ok="
 for %%v in (0 1 2 3 4 5 6 91 92) do if "%quality%"=="%%v" set "_ok=1"
@@ -83,8 +100,9 @@ echo   2 - Из браузера (Firefox)
 echo   3 - Из браузера (Edge)
 echo   4 - Из файла
 echo.
+set "cookie_choice="
 set /p "cookie_choice=Выберите номер: "
-if "%cookie_choice%"=="" set cookie_choice=0
+if not defined cookie_choice set "cookie_choice=0"
 :: Whitelist: отбрасываем всё, кроме допустимых номеров (защита от &|) в вводе)
 set "_ok="
 for %%v in (0 1 2 3 4) do if "%cookie_choice%"=="%%v" set "_ok=1"
@@ -94,7 +112,13 @@ if "%cookie_choice%"=="1" set "cookie_arg=--cookies-from-browser chrome"
 if "%cookie_choice%"=="2" set "cookie_arg=--cookies-from-browser firefox"
 if "%cookie_choice%"=="3" set "cookie_arg=--cookies-from-browser edge"
 if "%cookie_choice%"=="4" (
+    set "cookie_path="
     set /p "cookie_path=Путь к файлу cookies: "
+    rem «Копировать как путь» в проводнике даёт путь В КАВЫЧКАХ. Без снятия
+    rem `if exist ""C:\dir with space\cookies.txt""` истинно, а argv yt-dlp получал
+    rem `--cookies` + три отдельных токена: cookies не находились, а лишние «URL»
+    rem ломали загрузку. Тот же приём, что и для url выше.
+    if defined cookie_path set "cookie_path=!cookie_path:"=!"
     if not "!cookie_path!"=="" (
         if exist "!cookie_path!" (
             set "cookie_arg=--cookies "!cookie_path!""
@@ -107,6 +131,7 @@ if "%cookie_choice%"=="4" (
 
 :: ── Прокси ───────────────────────────────────────────────────────────────
 echo.
+set "proxy="
 set /p "proxy=Прокси (Enter для пропуска): "
 
 :: ── Фрагмент (начало + конец, каждое опционально) ────────────────────────
@@ -119,7 +144,9 @@ echo   оба                 = вырезать фрагмент TIME1..TIME2
 echo.
 set "trim_start="
 set "trim_end="
+set "trim_start="
 set /p "trim_start=Начало (Enter = с 0): "
+set "trim_end="
 set /p "trim_end=Конец  (Enter = до конца): "
 rem Валидация формата времени: разрешены только цифры, ':' и '.'. Иначе значение
 rem могло бы содержать '"' и сломать кавычки в --download-sections. Значение пишем
@@ -136,6 +163,7 @@ if not "!trim_end!"=="" (
 del "!_trimchk!" 2>nul
 set "sections_arg="
 if not "%trim_start%%trim_end%"=="" (
+    set "kf="
     set "kf="
     set /p "kf=Точная обрезка (потребуется перекодирование)? [y/N]: "
     set "_from=0"
@@ -155,8 +183,9 @@ echo   2 - Перевод RU (смешанный)
 echo   3 - Перевод RU (заменить оригинал)
 echo   4 - Перевод EN (2 дорожки)
 echo.
+set "translate_choice="
 set /p "translate_choice=Выберите номер: "
-if "%translate_choice%"=="" set translate_choice=0
+if not defined translate_choice set "translate_choice=0"
 :: Whitelist допустимых номеров перевода
 set "_ok="
 for %%v in (0 1 2 3 4) do if "%translate_choice%"=="%%v" set "_ok=1"
@@ -178,8 +207,10 @@ rem кавычкой/^&^| ломал бы разбор всей команды.
 set "translate_orig_vol=0.3"
 set "translate_trans_vol=1.0"
 if "%translate_mode%"=="mix" (
+    set "_ov="
     set /p "_ov=Громкость оригинала [0.3]: "
     if defined _ov call :read_vol translate_orig_vol _ov
+    set "_tv="
     set /p "_tv=Громкость перевода [1.0]: "
     if defined _tv call :read_vol translate_trans_vol _tv
     echo Баланс mix: оригинал=!translate_orig_vol!, перевод=!translate_trans_vol!
@@ -194,7 +225,20 @@ rem пути). URL уже прошёл валидацию схемы http(s):// 
 rem /-токен (scheme:// схлопывается). Затем отрезаем порт/креды (:, @) и query (?).
 set "_host="
 for /f "tokens=2 delims=/" %%h in ("!url!") do set "_host=%%h"
-for /f "tokens=1 delims=:?@ " %%h in ("!_host!") do set "_host=%%h"
+rem Сначала отбрасываем query/fragment, затем — user:pass ДО ПОСЛЕДНЕГО "@".
+rem Прежний «первый токен по :?@ » ломался в обе стороны: у адреса с кредами
+rem (схема, затем user:pass, затем собака и настоящий хост) хостом становился
+rem "user" — платформа определялась как "other"; а адрес, где имя площадки стоит
+rem В КРЕДАХ, а настоящий хост чужой, распознавался как YouTube. Ровно наоборот
+rem тому, что обещает комментарий выше. Примеров с собакой здесь нет намеренно:
+rem барьер приватности видит в них форму e-mail.
+for /f "tokens=1 delims=?# " %%h in ("!_host!") do set "_host=%%h"
+:_host_creds
+if defined _host if not "!_host!"=="!_host:@=!" (
+    set "_host=!_host:*@=!"
+    goto :_host_creds
+)
+for /f "tokens=1 delims=: " %%h in ("!_host!") do set "_host=%%h"
 rem Точное совпадение apex (youtube.com / youtu.be) либо суффикс поддомена
 rem (.youtube.com / .youtu.be). Строковое сравнение, а не findstr: многопаттерновый
 rem /R-regexp findstr здесь ненадёжен (ложно матчил notyoutube.com), а substring
@@ -216,8 +260,9 @@ echo   5  - avc1_https_60fps_hdr (HTTPS, 60fps, HDR)
 echo   6  - old_combo (классические ID)
 echo   7  - auto (YouTube=avc1_best, прочие=простой best)
 echo.
+set "fmt="
 set /p "fmt=Выберите номер: "
-if "%fmt%"=="" set fmt=7
+if not defined fmt set "fmt=7"
 :: Whitelist допустимых пресетов формата (далее значение идёт в if %fmt%==N)
 set "_ok="
 for %%v in (0 1 2 3 4 5 6 7) do if "%fmt%"=="%%v" set "_ok=1"
@@ -262,9 +307,9 @@ if %fmt%==0 (
 if %fmt%==1 (
     if %quality%==0 set "save_settings=-f 140"
     if %quality%==1 set "save_settings=-f 140+134"
-    if %quality%==2 set "save_settings=-f 140+135/134"
-    if %quality%==3 set "save_settings=-f 140+136/135/134"
-    if %quality%==4 set "save_settings=-f 140+137/136/135/134"
+    if %quality%==2 set "save_settings=-f 140+135/140+134"
+    if %quality%==3 set "save_settings=-f 140+136/140+135/140+134"
+    if %quality%==4 set "save_settings=-f 140+137/140+136/140+135/140+134"
     if %quality%==5 set "save_settings=-f Q140+264/bestvideo[heightLE1440][vcodec^=avc1]+bestaudio[ext=m4a]/best[heightLE1440]Q"
     if %quality%==6 set "save_settings=-f Q140+266/bestvideo[heightLE2160][vcodec^=avc1]+bestaudio[ext=m4a]/best[heightLE2160]Q"
 )
@@ -272,8 +317,8 @@ if %fmt%==1 (
 if %fmt%==2 (
     if %quality%==0 set "save_settings=-f 234"
     if %quality%==1 set "save_settings=-f 234+230"
-    if %quality%==2 set "save_settings=-f 234+231/230"
-    if %quality%==3 set "save_settings=-f 234+232/231/230"
+    if %quality%==2 set "save_settings=-f 234+231/234+230"
+    if %quality%==3 set "save_settings=-f 234+232/234+231/234+230"
     if %quality%==4 set "save_settings=-f Q270+234/bestvideo[protocol*=m3u8][heightLE1080]+bestaudio[protocol*=m3u8]/best[heightLE1080]Q"
     if %quality%==5 set "save_settings=-f Qbestvideo[protocol*=m3u8][heightLE1440]+bestaudio[protocol*=m3u8]/best[heightLE1440]Q"
     if %quality%==6 set "save_settings=-f Qbestvideo[protocol*=m3u8][heightLE2160]+bestaudio[protocol*=m3u8]/best[heightLE2160]Q"
@@ -284,7 +329,7 @@ if %fmt%==3 (
     if %quality%==1 set "save_settings=-f Q140+134/best[heightLE360]Q"
     if %quality%==2 set "save_settings=-f Q140+135/best[heightLE480]Q"
     if %quality%==3 set "save_settings=-f Q140+298/best[heightLE720]Q"
-    if %quality%==4 set "save_settings=-f Q140+299/298/best[heightLE1080]Q"
+    if %quality%==4 set "save_settings=-f Q140+299/140+298/best[heightLE1080]Q"
     if %quality%==5 set "save_settings=-f Qbestvideo[heightLE1440][fpsGE50]+bestaudio[ext=m4a]/140+299/best[heightLE1440]Q"
     if %quality%==6 set "save_settings=-f Qbestvideo[heightLE2160][fpsGE50]+bestaudio[ext=m4a]/140+299/best[heightLE2160]Q"
 )
@@ -292,21 +337,21 @@ if %fmt%==3 (
 if %fmt%==4 (
     if %quality%==0 set "save_settings=-f 234"
     if %quality%==1 set "save_settings=-f Q234+309/bestvideo[heightLE360][fpsGE50]+bestaudio/best[heightLE360]Q"
-    if %quality%==2 set "save_settings=-f Q234+310/309/bestvideo[heightLE480][fpsGE50]+bestaudio/best[heightLE480]Q"
-    if %quality%==3 set "save_settings=-f Q234+311/310/309/bestvideo[heightLE720][fpsGE50]+bestaudio/best[heightLE720]Q"
-    if %quality%==4 set "save_settings=-f Q234+312/311/310/309/bestvideo[heightLE1080][fpsGE50]+bestaudio/best[heightLE1080]Q"
-    if %quality%==5 set "save_settings=-f Q234+313/312/311/310/309/bestvideo[heightLE1440][fpsGE50]+bestaudio/best[heightLE1440]Q"
-    if %quality%==6 set "save_settings=-f Q234+314/313/312/311/310/309/bestvideo[heightLE2160][fpsGE50]+bestaudio/best[heightLE2160]Q"
+    if %quality%==2 set "save_settings=-f Q234+310/234+309/bestvideo[heightLE480][fpsGE50]+bestaudio/best[heightLE480]Q"
+    if %quality%==3 set "save_settings=-f Q234+311/234+310/234+309/bestvideo[heightLE720][fpsGE50]+bestaudio/best[heightLE720]Q"
+    if %quality%==4 set "save_settings=-f Q234+312/234+311/234+310/234+309/bestvideo[heightLE1080][fpsGE50]+bestaudio/best[heightLE1080]Q"
+    if %quality%==5 set "save_settings=-f Q234+313/234+312/234+311/234+310/234+309/bestvideo[heightLE1440][fpsGE50]+bestaudio/best[heightLE1440]Q"
+    if %quality%==6 set "save_settings=-f Q234+314/234+313/234+312/234+311/234+310/234+309/bestvideo[heightLE2160][fpsGE50]+bestaudio/best[heightLE2160]Q"
 )
 :: avc1_https_60fps_hdr
 if %fmt%==5 (
     if %quality%==0 set "save_settings=-f 234"
     if %quality%==1 set "save_settings=-f Q234+696/bestvideo[heightLE360][fpsGE50]+bestaudio/best[heightLE360]Q"
-    if %quality%==2 set "save_settings=-f Q234+697/696/bestvideo[heightLE480][fpsGE50]+bestaudio/best[heightLE480]Q"
-    if %quality%==3 set "save_settings=-f Q234+698/697/696/bestvideo[heightLE720][fpsGE50]+bestaudio/best[heightLE720]Q"
-    if %quality%==4 set "save_settings=-f Q234+699/698/697/696/bestvideo[heightLE1080][fpsGE50]+bestaudio/best[heightLE1080]Q"
-    if %quality%==5 set "save_settings=-f Q234+700/699/698/697/696/bestvideo[heightLE1440][fpsGE50]+bestaudio/best[heightLE1440]Q"
-    if %quality%==6 set "save_settings=-f Q234+701/700/699/698/697/696/bestvideo[heightLE2160][fpsGE50]+bestaudio/best[heightLE2160]Q"
+    if %quality%==2 set "save_settings=-f Q234+697/234+696/bestvideo[heightLE480][fpsGE50]+bestaudio/best[heightLE480]Q"
+    if %quality%==3 set "save_settings=-f Q234+698/234+697/234+696/bestvideo[heightLE720][fpsGE50]+bestaudio/best[heightLE720]Q"
+    if %quality%==4 set "save_settings=-f Q234+699/234+698/234+697/234+696/bestvideo[heightLE1080][fpsGE50]+bestaudio/best[heightLE1080]Q"
+    if %quality%==5 set "save_settings=-f Q234+700/234+699/234+698/234+697/234+696/bestvideo[heightLE1440][fpsGE50]+bestaudio/best[heightLE1440]Q"
+    if %quality%==6 set "save_settings=-f Q234+701/234+700/234+699/234+698/234+697/234+696/bestvideo[heightLE2160][fpsGE50]+bestaudio/best[heightLE2160]Q"
 )
 :: old_combo
 if %fmt%==6 (
@@ -357,8 +402,9 @@ echo   1 - mp3
 echo   2 - m4a
 echo   3 - opus
 echo.
+set "audiofmt_choice="
 set /p "audiofmt_choice=Выберите номер: "
-if "%audiofmt_choice%"=="" set audiofmt_choice=0
+if not defined audiofmt_choice set "audiofmt_choice=0"
 :: Whitelist допустимых номеров аудио-формата
 set "_ok="
 for %%v in (0 1 2 3) do if "%audiofmt_choice%"=="%%v" set "_ok=1"
@@ -377,8 +423,9 @@ echo   0 - off (не трогать)
 echo   1 - mark (только метки глав)
 echo   2 - remove (вырезать сегменты)
 echo.
+set "sb_choice="
 set /p "sb_choice=Выберите номер: "
-if "%sb_choice%"=="" set sb_choice=0
+if not defined sb_choice set "sb_choice=0"
 :: Whitelist допустимых номеров SponsorBlock
 set "_ok="
 for %%v in (0 1 2) do if "%sb_choice%"=="%%v" set "_ok=1"
@@ -394,8 +441,9 @@ echo   0 - off (без субтитров)
 echo   1 - sidecar (отдельным файлом)
 echo   2 - embed (вшить в контейнер)
 echo.
+set "subsvid_choice="
 set /p "subsvid_choice=Выберите номер: "
-if "%subsvid_choice%"=="" set subsvid_choice=0
+if not defined subsvid_choice set "subsvid_choice=0"
 :: Whitelist допустимых номеров субтитров с видео
 set "_ok="
 for %%v in (0 1 2) do if "%subsvid_choice%"=="%%v" set "_ok=1"
@@ -453,7 +501,14 @@ if not "%translate_lang%"=="" (
 echo.
 echo ─────────────────────────────────────────
 echo Получение информации о видео...
-"!dlp!" !cookie_arg! --get-title "!url!" 2>nul
+rem deno_arg определяется ниже, у самой загрузки, — здесь его ещё нет, поэтому
+rem считаем его прямо тут: без JS-рантайма запрос названия у YouTube деградирует
+rem так же, как сама загрузка. --socket-timeout не даёт шагу висеть бессрочно,
+rem а --flat-playlist убирает полную экстракцию КАЖДОГО элемента плейлиста
+rem (без него шаг «получить название» стоил дороже самой загрузки).
+set "deno_title_arg="
+if exist "!SCRIPT_DIR!deno.exe" set "deno_title_arg=--js-runtimes "deno:!SCRIPT_DIR!deno.exe""
+"!dlp!" !cookie_arg! !deno_title_arg! --flat-playlist --socket-timeout 30 --get-title "!url!" 2>nul
 echo ─────────────────────────────────────────
 echo.
 
@@ -462,7 +517,7 @@ echo Начало загрузки...
 echo.
 
 set "deno_arg="
-if exist "%~dp0deno.exe" set "deno_arg=--js-runtimes "deno:%~dp0deno.exe""
+if exist "!SCRIPT_DIR!deno.exe" set "deno_arg=--js-runtimes "deno:!SCRIPT_DIR!deno.exe""
 
 rem F13. Точный handshake вместо поиска по mtime: yt-dlp сам сообщает финальный путь
 rem каждого готового файла (after_move — уже после post-processor'ов и move).
@@ -476,19 +531,19 @@ if not "%translate_lang%"=="" (
     rem они могли смешать пути и удалить файл друг друга. !random!!random! — fallback,
     rem если powershell недоступен.
     set "_dl_manifest=%TEMP%\ytdlp_manifest_!random!!random!.txt"
-    for /f "delims=" %%g in ('powershell -NoProfile -Command "[guid]::NewGuid().ToString('N')" 2^>nul') do set "_dl_manifest=%TEMP%\ytdlp_manifest_%%g.txt"
+    for /f "delims=" %%g in ('powershell -NoProfile -Command "[guid]::NewGuid().ToString('N')" ^<nul 2^>nul') do set "_dl_manifest=%TEMP%\ytdlp_manifest_%%g.txt"
     break>"!_dl_manifest!"
     set "manifest_arg=--print-to-file "after_move:filepath" "!_dl_manifest!""
 )
 
-"!dlp!" !cookie_arg! !deno_arg! !manifest_arg! !audiofmt_arg! !sb_arg! !subsvid_arg! !archive_arg! !embed_arg! --retries 10 --fragment-retries 10 --file-access-retries 5 --socket-timeout 30 --concurrent-fragments 4 -c -i -w --windows-filenames --compat-options filename-sanitization -o "!folder!\%file_tpl%" %save_settings%%sections_arg% "!url!"
+"!dlp!" !cookie_arg! !deno_arg! !manifest_arg! !audiofmt_arg! !sb_arg! !subsvid_arg! !archive_arg! !embed_arg! --retries 10 --fragment-retries 10 --file-access-retries 5 --socket-timeout 30 --concurrent-fragments 4 -c -i -w --windows-filenames --compat-options filename-sanitization -o "!folder!\%file_tpl%" !save_settings!!sections_arg! "!url!"
 
 set "dl_errorlevel=%errorlevel%"
 if %dl_errorlevel%==0 (
-    set "final_message=Загрузка завершена успешно!"
+    set "final_message=Загрузка завершена успешно^!"
     set "col=02"
 ) else (
-    set "final_message=Ошибка при загрузке!"
+    set "final_message=Ошибка при загрузке^!"
     set "col=04"
 )
 
@@ -500,15 +555,31 @@ if not "%translate_lang%"=="" (
         rem Иначе провал (нет зависимостей, vot без результата, пустой манифест, ошибка
         rem мержа) тонет: загрузка «успешна», а перевода нет.
         set "translate_ok="
+        rem Пустой манифест = архив: yt-dlp отработал успешно, но НИЧЕГО не
+        rem переместил, потому что видео уже было скачано. Переводить нечего, и
+        rem проверять это надо ДО сетевого вызова vot: раньше перевод честно
+        rem скачивался (минуты и трафик), а следом печаталось «yt-dlp не сообщил
+        rem ни одного медиафайла» и скрипт выходил с кодом 1. В .sh это `return 2`.
+        set "_manifest_empty="
+        if defined _dl_manifest (
+            set "_manifest_empty=1"
+            for %%Z in ("!_dl_manifest!") do if %%~zZ GTR 0 set "_manifest_empty="
+        )
+        if defined _manifest_empty (
+            echo.
+            echo AI-перевод пропущен: видео уже было в архиве, новых файлов нет.
+            set "translate_ok=1"
+            goto :skip_translate
+        )
         echo.
         echo ─────────────────────────────────────────
         echo Получение AI-перевода ^(%translate_lang%^)...
         echo ─────────────────────────────────────────
 
-        :: Проверка зависимостей — ищем vot-cli-live рядом со скриптом, потом в PATH
+        rem Проверка зависимостей — ищем vot-cli-live рядом со скриптом, потом в PATH
         set "vot_cmd=vot-cli-live"
-        if exist "%~dp0vot-cli-live.exe" (
-            set "vot_cmd=%~dp0vot-cli-live.exe"
+        if exist "!SCRIPT_DIR!vot-cli-live.exe" (
+            set "vot_cmd=!SCRIPT_DIR!vot-cli-live.exe"
         ) else (
             where vot-cli-live >nul 2>&1
             if errorlevel 1 (
@@ -520,11 +591,11 @@ if not "%translate_lang%"=="" (
         rem ffprobe: тот же local-first порядок, что и у ffmpeg. Нужен для подсчёта
         rem оригинальных аудиодорожек в dual_track; отсутствие не фатально (fallback=1).
         set "probe_cmd=ffprobe"
-        if exist "%~dp0ffprobe.exe" set "probe_cmd=%~dp0ffprobe.exe"
+        if exist "!SCRIPT_DIR!ffprobe.exe" set "probe_cmd=!SCRIPT_DIR!ffprobe.exe"
         rem ffmpeg: сначала рядом со скриптом (ffmpeg.exe), потом PATH — паритет с yt-dlp/.sh/.ps1.
         set "ff_cmd=ffmpeg"
-        if exist "%~dp0ffmpeg.exe" (
-            set "ff_cmd=%~dp0ffmpeg.exe"
+        if exist "!SCRIPT_DIR!ffmpeg.exe" (
+            set "ff_cmd=!SCRIPT_DIR!ffmpeg.exe"
         ) else (
             where ffmpeg >nul 2>&1
             if errorlevel 1 (
@@ -546,12 +617,12 @@ if not "%translate_lang%"=="" (
             )
         )
 
-        :: Скачать перевод. temp_dir уникален на запуск. GUID (не !random!): пространство
-        :: %RANDOM% мало (0..32767), и rmdir /s /q мог снести temp-директорию параллельного
-        :: запуска при коллизии. GUID через .NET убирает гонку — предварительный rmdir не нужен.
-        :: !random!!random! — fallback, если powershell недоступен.
+        rem Скачать перевод. temp_dir уникален на запуск. GUID (не !random!): пространство
+        rem %RANDOM% мало (0..32767), и rmdir /s /q мог снести temp-директорию параллельного
+        rem запуска при коллизии. GUID через .NET убирает гонку — предварительный rmdir не нужен.
+        rem !random!!random! — fallback, если powershell недоступен.
         set "temp_dir=%TEMP%\yt-dlp-translate-!random!!random!"
-        for /f "delims=" %%g in ('powershell -NoProfile -Command "[guid]::NewGuid().ToString('N')" 2^>nul') do set "temp_dir=%TEMP%\yt-dlp-translate-%%g"
+        for /f "delims=" %%g in ('powershell -NoProfile -Command "[guid]::NewGuid().ToString('N')" ^<nul 2^>nul') do set "temp_dir=%TEMP%\yt-dlp-translate-%%g"
         mkdir "!temp_dir!" 2>nul
         echo [WARN] TLS-проверка отключена для AI-перевода vot-cli-live - риск MITM во враждебной сети.
         set "NODE_TLS_REJECT_UNAUTHORIZED=0"
@@ -559,47 +630,75 @@ if not "%translate_lang%"=="" (
         set "vot_rc=!errorlevel!"
         set "NODE_TLS_REJECT_UNAUTHORIZED="
 
-        if !vot_rc! geq 1 (
+        rem Не "geq 1": краш Node даёт отрицательный код (например -1073741819),
+        rem и он проходил как успех — обрезанный mp3 тихо вмерживался в результат.
+        if not "!vot_rc!"=="0" (
             echo ПРЕДУПРЕЖДЕНИЕ: не удалось получить перевод
             rmdir /s /q "!temp_dir!" 2>nul
             goto :skip_translate
         )
 
-        :: F13. Источник пути — манифест самого yt-dlp (--print-to-file after_move:filepath),
-        :: а не «самый свежий файл в дереве»: тот мог принадлежать параллельному процессу.
-        :: Берём первую строку-медиаконтейнер; манифест может содержать и sidecar-субтитры.
-        for %%f in ("!temp_dir!\*.mp3") do set "trans_file=%%f"
+        rem F13. Источник пути — манифест самого yt-dlp (--print-to-file after_move:filepath),
+        rem а не «самый свежий файл в дереве»: тот мог принадлежать параллельному процессу.
+        rem Берём первую строку-медиаконтейнер; манифест может содержать и sidecar-субтитры.
+        rem Результат vot переименовываем в ФИКСИРОВАННОЕ имя: исходное строится из
+        rem названия ролика, а `for %%f in (...)` подставляет его в фазе 4, после чего
+        rem фаза 5 (delayed expansion) съедает "!" — обычный на YouTube символ.
+        set "trans_file="
+        ren "!temp_dir!\*.mp3" "translated.mp3" >nul 2>&1
+        if exist "!temp_dir!\translated.mp3" set "trans_file=!temp_dir!\translated.mp3"
         set "video_file="
-        if defined _dl_manifest for /f "usebackq delims=" %%f in ("!_dl_manifest!") do (
-            if not defined video_file for %%E in ("%%f") do (
-                if /i "%%~xE"==".mp4" set "video_file=%%f"
-                if /i "%%~xE"==".mkv" set "video_file=%%f"
-                if /i "%%~xE"==".webm" set "video_file=%%f"
-            )
+        rem `set /p` читает ПЕРВУЮ строку манифеста СЫРОЙ: "!", кириллица и "%" доезжают
+        rem целыми. Через `for /f %%f` значение проходило подстановку и теряло "!":
+        rem «Wow! Title.mp4» превращалось в «Wow Title.mp4», `if not exist` сбрасывал
+        rem переменную, и перевод падал с «yt-dlp не сообщил ни одного медиафайла» при
+        rem полностью исправном yt-dlp. Идиома `endlocal & set` здесь не работает.
+        if defined _dl_manifest (
+            <"!_dl_manifest!" set /p "video_file=" || set "video_file="
         )
+        rem Расширение — срезом с конца: вложенный `for %%E in (...)` вернул бы нас
+        rem в ту же подстановку с потерей "!".
+        set "_vf_ext="
+        if defined video_file (
+            if /i "!video_file:~-4!"==".mp4" set "_vf_ext=.mp4"
+            if /i "!video_file:~-4!"==".mkv" set "_vf_ext=.mkv"
+            if /i "!video_file:~-5!"==".webm" set "_vf_ext=.webm"
+        )
+        if not defined _vf_ext set "video_file="
         if defined video_file if not exist "!video_file!" set "video_file="
 
         if defined trans_file if defined video_file (
             echo Объединение аудиодорожек ^(режим: %translate_mode%^)...
             rem %%~xE сохраняет исходное расширение (.mp4/.mkv/.webm) — иначе -c:v copy
             rem VP9/AV1 в mp4-контейнер может упасть; move ниже целит в оригинальное имя.
-            for %%E in ("!video_file!") do (set "output_file=%%~dpnE_translated%%~xE" & set "a_codec=aac" & if /i "%%~xE"==".webm" set "a_codec=libopus")
+            rem Имя выхода собираем ПОДСТРОКАМИ: %%~dpnE прошло бы ту же подстановку
+            rem и снова потеряло "!" в названии ролика.
+            set "a_codec=aac"
+            if /i "!_vf_ext!"==".webm" (
+                set "a_codec=libopus"
+                set "output_file=!video_file:~0,-5!_translated.webm"
+            ) else (
+                set "output_file=!video_file:~0,-4!_translated!_vf_ext!"
+            )
 
             rem `-map 0:a` переносит ВСЕ оригинальные дорожки, поэтому индекс перевода равен
             rem их числу, а не единице: при двух оригиналах metadata для a:1 села бы на второй
             rem оригинал, а сам перевод (a:2) остался бы без языка и названия. Счётчик целый —
             rem set /a справляется (в отличие от float-арифметики, которой в CMD нет).
             set /a orig_a_count=0
-            for /f "usebackq delims=" %%A in (`""!probe_cmd!" -v error -select_streams a -show_entries stream^=index -of csv^=p^=0 "!video_file!" 2^>nul"`) do set /a orig_a_count+=1
+            for /f "usebackq delims=" %%A in (`""!probe_cmd!" -v error -select_streams a -show_entries stream^=index -of csv^=p^=0 "!video_file!" ^<nul 2^>nul"`) do set /a orig_a_count+=1
             if !orig_a_count! LSS 1 set /a orig_a_count=1
 
             rem F4: -map 0:s? -map 0:t? + -c:s copy сохраняют субтитры/вложения исходника
             rem (иначе встроенные субтитры исчезают после мержа перевода). ? — необязательный map.
+            rem Трёхбуквенные коды считаем ДО веток: ветка replace тоже их использует.
+            call :iso6392 "%translate_orig_lang%" _lang_orig3
+            call :iso6392 "%translate_lang%" _lang_trans3
             if "%translate_mode%"=="dual_track" (
-                "!ff_cmd!" -y -i "!video_file!" -i "!trans_file!" -map 0:v -map 0:a -map 1:a -map 0:s? -map 0:t? -c:v copy -c:a copy -c:a:!orig_a_count! !a_codec! -b:a:!orig_a_count! 192k -c:s copy -metadata:s:a:0 language=%translate_orig_lang% -metadata:s:a:0 title="Original" -metadata:s:a:!orig_a_count! language=%translate_lang% -metadata:s:a:!orig_a_count! title="AI Translation" -disposition:a:0 default "!output_file!" 2>nul
+                "!ff_cmd!" -y -i "!video_file!" -i "!trans_file!" -map 0:v -map 0:a -map 1:a -map 0:s? -map 0:t? -c:v copy -c:a copy -c:a:!orig_a_count! !a_codec! -b:a:!orig_a_count! 192k -c:s copy -metadata:s:a:0 language=!_lang_orig3! -metadata:s:a:0 title="Original" -metadata:s:a:0 handler_name="Original" -metadata:s:a:!orig_a_count! language=!_lang_trans3! -metadata:s:a:!orig_a_count! title="AI Translation" -metadata:s:a:!orig_a_count! handler_name="AI Translation" -disposition:a:0 default "!output_file!" 2>nul
             )
             if "%translate_mode%"=="replace" (
-                "!ff_cmd!" -y -i "!video_file!" -i "!trans_file!" -map 0:v -map 1:a -map 0:s? -map 0:t? -c:v copy -c:a !a_codec! -b:a 192k -c:s copy -metadata:s:a:0 language=%translate_lang% -metadata:s:a:0 title="AI Translation" "!output_file!" 2>nul
+                "!ff_cmd!" -y -i "!video_file!" -i "!trans_file!" -map 0:v -map 1:a -map 0:s? -map 0:t? -c:v copy -c:a !a_codec! -b:a 192k -c:s copy -metadata:s:a:0 language=!_lang_trans3! -metadata:s:a:0 title="AI Translation" -metadata:s:a:0 handler_name="AI Translation" "!output_file!" 2>nul
             )
             if "%translate_mode%"=="mix" (
                 "!ff_cmd!" -y -i "!video_file!" -i "!trans_file!" -filter_complex "[0:a]volume=!translate_orig_vol![a0];[1:a]volume=!translate_trans_vol![a1];[a0][a1]amix=inputs=2:duration=longest:normalize=0[aout]" -map 0:v -map "[aout]" -map 0:s? -map 0:t? -c:v copy -c:a !a_codec! -b:a 192k -c:s copy "!output_file!" 2>nul
@@ -614,7 +713,7 @@ if not "%translate_lang%"=="" (
                     rem выдаётся за успешный (translate_ok не выставляется).
                     set "mv_rc=!errorlevel!"
                     if "!mv_rc!"=="0" (
-                        echo Перевод добавлен успешно!
+                        echo Перевод добавлен успешно^^!
                         set "translate_ok=1"
                     ) else (
                         echo ОШИБКА: не удалось заменить оригинал переведённым файлом
@@ -633,7 +732,7 @@ if not "%translate_lang%"=="" (
         if not defined trans_file echo ОШИБКА: vot не создал файл перевода — переводить нечего
         if not defined video_file echo ОШИБКА: yt-dlp не сообщил ни одного медиафайла — переводить нечего
 
-        :: Очистка
+        rem Очистка
         rmdir /s /q "!temp_dir!" 2>nul
     )
 )
@@ -643,7 +742,7 @@ if defined _dl_manifest del "!_dl_manifest!" 2>nul
 :: F14: перевод был запрошен, загрузка удалась, но переведённого файла нет → это НЕ
 :: полный успех. Итог и цвет отражают ошибку, а CLI-код становится ненулевым (cron/CI).
 if not "%translate_lang%"=="" if %dl_errorlevel%==0 if not defined translate_ok (
-    set "final_message=Загрузка успешна, но AI-перевод не выполнен!"
+    set "final_message=Загрузка успешна, но AI-перевод не выполнен^!"
     set "col=06"
     set "translate_failed=1"
 )
@@ -652,12 +751,21 @@ if not "%translate_lang%"=="" if %dl_errorlevel%==0 if not defined translate_ok 
 echo.
 echo =========================================
 color %col%
-echo   %final_message%
+rem !var!, а не %var%: иначе фаза отложенного раскрытия снимет "^!" в тексте.
+echo   !final_message!
 echo =========================================
 echo.
 pause
+rem Кодовую страницу и цвет возвращаем как было: при запуске из уже открытого окна
+rem cmd они оставались 65001/цветными и портили вывод последующих команд.
+call :restore_console
 if not "%dl_errorlevel%"=="0" exit /b 1
 if defined translate_failed exit /b 1
+exit /b 0
+
+:restore_console
+color
+if defined _orig_cp chcp !_orig_cp! >nul 2>&1
 exit /b 0
 
 rem ── Чтение громкости для режима mix ──────────────────────────────────────
@@ -666,6 +774,31 @@ rem Принимаем только неотрицательное десяти�
 rem Проверка — средствами самого CMD, без pipe/findstr: pipe порождает дочерний cmd,
 rem который ре-парсит & ^| ^< ^> из пользовательского ввода (та же причина, по которой
 rem без них обходится валидация URL выше). Невалидный ввод оставляет дефолт.
+:iso6392
+rem mp4 упаковывает ровно 3 символа языка (ISO 639-2): двухбуквенный код теряется
+rem целиком. %1 = код, %2 = имя переменной результата.
+set "_i3=%~1"
+if /i "%~1"=="ru" set "_i3=rus"
+if /i "%~1"=="en" set "_i3=eng"
+if /i "%~1"=="kk" set "_i3=kaz"
+if /i "%~1"=="de" set "_i3=deu"
+if /i "%~1"=="fr" set "_i3=fra"
+if /i "%~1"=="es" set "_i3=spa"
+if /i "%~1"=="it" set "_i3=ita"
+if /i "%~1"=="pt" set "_i3=por"
+if /i "%~1"=="pl" set "_i3=pol"
+if /i "%~1"=="uk" set "_i3=ukr"
+if /i "%~1"=="tr" set "_i3=tur"
+if /i "%~1"=="ja" set "_i3=jpn"
+if /i "%~1"=="ko" set "_i3=kor"
+if /i "%~1"=="zh" set "_i3=zho"
+if /i "%~1"=="ar" set "_i3=ara"
+if /i "%~1"=="be" set "_i3=bel"
+if /i "%~1"=="uz" set "_i3=uzb"
+if /i "%~1"=="az" set "_i3=aze"
+set "%~2=!_i3!"
+exit /b 0
+
 :read_vol
 setlocal enabledelayedexpansion
 set "_rv=!%~2!"
@@ -673,6 +806,9 @@ set "_probe=!_rv!"
 for %%d in (0 1 2 3 4 5 6 7 8 9 .) do if defined _probe set "_probe=!_probe:%%d=!"
 if defined _probe goto :read_vol_bad
 if "!_rv!"=="." goto :read_vol_bad
+rem Две точки подряд: `for /f delims=.` схлопывает разделители, поэтому "1..2"
+rem проходил проверку «не больше одной точки» и уезжал в ffmpeg как громкость.
+if not "!_rv:..=!"=="!_rv!" goto :read_vol_bad
 for /f "tokens=1,2* delims=." %%a in ("!_rv!") do if not "%%c"=="" goto :read_vol_bad
 endlocal & set "%~1=%_rv%"
 exit /b 0

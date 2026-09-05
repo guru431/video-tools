@@ -98,17 +98,20 @@ suite "Интеграция: базовый вызов (URL + качество 7
 
 run_script --quality 720 "$FAKE_URL"
 
-# На Windows Git Bash read_config форкает sed на каждой строке config.ini, и
-# даже на минимальном конфиге load_config может занять >10s — mock не успевает
-# отработать до timeout. Это известное ограничение Windows + cygwin (MEMORY.md).
-# На Linux/macOS log создаётся быстро. Если log не создан — скипаем (не fail).
+# Отсутствие лога — это ПРОВАЛ, а не пропуск. Прежняя ветка `skip` ссылалась на
+# sed-форки в read_config, которых нет с тех пор, как парсер переписан: прогон
+# production-скрипта с моком занимает ~2 с и на этой Windows-машине. Пока ветка
+# существовала, любая регрессия ДО вызова yt-dlp (--config, load_config, parse_args,
+# build_format_args) давала pass=1..2 skip=5..6 fail=0 — зелёный suite на всех линиях
+# CI, а STRICT_SKIP считает только целиком пропущенные файлы. Тот же выбор уже сделан
+# в tests/ffmpeg/test_07_integration.sh.
 if [ -f "$YTDLP_LOG" ]; then
     pass "mock yt-dlp был вызван"
     CALL=$(cat "$YTDLP_LOG")
     assert_contains "URL передан в mock"           "$FAKE_URL"          "$CALL"
     assert_contains "качество 720 → height<=720"   "height<=720"        "$CALL"
 else
-    skip "mock yt-dlp вызов" "config.ini load timed out (slow sed-fork on Windows)"
+    fail "mock yt-dlp был вызван" "лог мока создан" "лога нет — скрипт упал до вызова yt-dlp"
 fi
 
 # ══════════════════════════════════════════════════════════════
@@ -121,7 +124,7 @@ if [ -f "$YTDLP_LOG" ]; then
     CALL=$(cat "$YTDLP_LOG")
     assert_contains "1080 → height<=1080"  "height<=1080"  "$CALL"
 else
-    skip "mock yt-dlp вызов при --quality 1080" "config.ini load timed out"
+    fail "mock yt-dlp вызван при --quality 1080" "лог мока создан" "лога нет — скрипт упал до вызова yt-dlp"
 fi
 
 # ══════════════════════════════════════════════════════════════
@@ -135,7 +138,7 @@ if [ -f "$YTDLP_LOG" ]; then
     # avc1_https + 720 = "-f 140+136/135/134"
     assert_contains "avc1_https 720 → числовые ID"  "140+136"  "$CALL"
 else
-    skip "avc1_https тест" "mock не был вызван"
+    fail "avc1_https 720 → числовые ID" "лог мока создан" "лога нет — скрипт упал до вызова yt-dlp"
 fi
 
 # ══════════════════════════════════════════════════════════════
@@ -150,7 +153,7 @@ if [ -f "$YTDLP_LOG" ]; then
     assert_contains "cookies browser → --cookies-from-browser"  \
         "--cookies-from-browser"  "$CALL"
 else
-    skip "cookies browser тест" "mock не был вызван"
+    fail "cookies browser → --cookies-from-browser" "лог мока создан" "лога нет — скрипт упал до вызова yt-dlp"
 fi
 
 # ══════════════════════════════════════════════════════════════
@@ -165,7 +168,7 @@ if [ -f "$YTDLP_LOG" ]; then
     assert_contains "subs → --skip-download"    "--skip-download"    "$CALL"
     assert_contains "subs → --sub-langs ru"     "--sub-langs ru"     "$CALL"
 else
-    skip "subs тест" "mock не был вызван"
+    fail "subs → --write-auto-sub" "лог мока создан" "лога нет — скрипт упал до вызова yt-dlp"
 fi
 
 # ══════════════════════════════════════════════════════════════
@@ -199,7 +202,7 @@ if echo "$DRY_OUT" | grep -qF -- "[DRY-RUN]"; then
         fail "dry-run: yt-dlp НЕ должен вызываться" "нет лога" "лог создан"
     fi
 else
-    skip "dry-run тест" "config.ini load timed out (slow sed-fork on Windows)"
+    fail "dry-run печатает [DRY-RUN]" "метка [DRY-RUN] в выводе" "её нет — скрипт упал до печати команды"
 fi
 
 # ── Cleanup (боевой yt-dlp/config.ini не трогали) ─────────────

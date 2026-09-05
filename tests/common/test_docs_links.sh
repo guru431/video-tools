@@ -48,6 +48,11 @@ while IFS= read -r f; do docs+=("$f"); done < <(
     find "$PROJECT_DIR" -maxdepth 1 -name '*.md' -type f ! -name '*-archive.md'
     find "$PROJECT_DIR/docs" -name '*.md' -type f -not -path '*/plans/*' 2>/dev/null
     find "$PROJECT_DIR/tests" -maxdepth 1 -name '*.md' -type f 2>/dev/null
+    # tools/**/*.md и .github/**/*.md — тоже действующие документы: они описывают
+    # рабочие процедуры (сборка, пробы антивируса, CI), и ссылка в никуда там стоит
+    # ровно столько же, сколько в README. Раньше они не сканировались вовсе.
+    find "$PROJECT_DIR/tools" -name '*.md' -type f 2>/dev/null
+    find "$PROJECT_DIR/.github" -name '*.md' -type f 2>/dev/null
 )
 
 # ══════════════════════════════════════════════════════════════

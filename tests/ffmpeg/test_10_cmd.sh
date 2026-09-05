@@ -409,8 +409,12 @@ cc_ln=$(grep -nF 'set "current_format_out=!pf_x!"' "$SCRIPT_CMD" | head -1 | cut
 chk_ln=$(grep -nF -- '-i "!_existing_out!" -f null -' "$SCRIPT_CMD" | head -1 | cut -d: -f1)
 order="bad"; [ -n "$cc_ln" ] && [ -n "$chk_ln" ] && [ "$cc_ln" -lt "$chk_ln" ] && order="ok"
 assert_eq "copy_codecs ext вычислен ДО validity-check"  "ok"  "$order"
-# Duration N/A → num=0 fallback
-assert_contains "Duration N/A → num fallback"  'if not defined num set "num=0"'  "$src_cmd"
+# Duration N/A → num=0 fallback. «Целиком» обязано означать целиком: раньше
+# сбрасывался только список границ, а current_set_length оставался -t L, и выход
+# без суффикса (part.N) содержал первые L секунд со статусом OK.
+assert_contains "Duration N/A → num fallback"  'if not defined num ('  "$src_cmd"
+assert_contains "Duration N/A → ограничение длительности снято" \
+    'if defined _length_disabled set "current_set_length="'  "$src_cmd"
 
 # AMF: constant-quality через cqp + qp_i/qp_p/qp_b, а не несуществующий одиночный -qp.
 assert_contains     "CMD AMF: режим cqp + qp_i/qp_p/qp_b"  '_amf" set "crf_args=-rc cqp -qp_i'  "$src_cmd"

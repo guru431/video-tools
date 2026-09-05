@@ -68,6 +68,10 @@ inline_cmt = value # это инлайн-комментарий
 hash_val = my#file.log
 spaced    =    trimmed
 var_ref = ${MY_PARITY_VAR}/sub
+quoted_dq = "C:/video/in"
+quoted_sq = 'C:/video/out'
+dup_key = first
+dup_key = second
 EOCONFIG
 
 CFG_WIN=$(cygpath -w "$CONFIG_FILE" 2>/dev/null || echo "$CONFIG_FILE")
@@ -83,7 +87,7 @@ CFG_WIN=$(cygpath -w "$CONFIG_FILE" 2>/dev/null || echo "$CONFIG_FILE")
 export MY_PARITY_VAR="parity-val-42"
 
 # ── Ключи для сравнения ──────────────────────────────────────────────────────
-KEYS=(embed_eq inline_cmt hash_val spaced var_ref)
+KEYS=(embed_eq inline_cmt hash_val spaced var_ref quoted_dq quoted_sq dup_key)
 
 # ══════════════════════════════════════════════════════════════
 suite "Кросс-парсерный паритет: SH read_config vs PS1 Read-Config"
@@ -115,6 +119,14 @@ assert_eq "spaced: пробелы обрезаны"           "trimmed"  "$(read
 # только потому, что проверялась inline-копия без этой ветки. Оба production-парсера
 # (SH и PS1) подстановку делают, так что тест закреплял ложь о собственном коде.
 assert_eq "var_ref: \${VAR} подставлена из окружения" "parity-val-42/sub" "$(read_config var_ref tricky '')"
+# Кавычки вокруг значения снимаются: путь, вставленный через «Копировать как путь»
+# в проводнике Windows, приходит в кавычках, и без снятия «папка не найдена» на всех
+# трёх платформах (а PS1 вдобавок падал исключением IsPathRooted).
+assert_eq "quoted_dq: двойные кавычки сняты" "C:/video/in"  "$(read_config quoted_dq tricky '')"
+assert_eq "quoted_sq: одинарные кавычки сняты" "C:/video/out" "$(read_config quoted_sq tricky '')"
+# Дубликат ключа: побеждает ПЕРВОЕ вхождение — контракт всех платформ. Раньше CMD и
+# GUI брали последнее, и один config.ini давал разные кодеки на разных платформах.
+assert_eq "dup_key: побеждает первое вхождение" "first" "$(read_config dup_key tricky '')"
 
 # Незаданная переменная → пустая подстановка + предупреждение (значение не остаётся
 # литералом ${...}, иначе оно уехало бы в ffmpeg как имя каталога).
@@ -168,7 +180,50 @@ else
     skip "CMD: log_file абсолютный" "cmd.exe не доступен"
 fi
 
+# ══════════════════════════════════════════════════════════════
+suite "config.ini с UTF-8 BOM: первая секция распознаётся на всех платформах"
+# ══════════════════════════════════════════════════════════════
+# Notepad и часть редакторов Windows сохраняют UTF-8 с BOM по умолчанию. Три байта
+# BOM приклеиваются к ПЕРВОЙ строке файла, и regex секции `^\[…\]$` (SH) и проверка
+# первого символа на «[» (CMD) на ней не срабатывали: секция [folders] не находилась
+# вовсе, скрипт брал умолчания и падал с «Папка источника не найдена: …/_video_/0».
+# PS1 читал тот же файл верно — расхождение платформ на обычном пользовательском
+# действии «открыл config.ini в блокноте и сохранил».
+BOM_CFG="$MY_DIR/config_bom.ini"
+trap 'rm -f "$CONFIG_FILE" "$BOM_CFG"' EXIT
+printf '\xEF\xBB\xBF[folders]\r\nsource = C:/bom/in\r\ndestination = C:/bom/out\r\n' > "$BOM_CFG"
+# Байты BOM обязаны реально стоять в файле — иначе тест проверяет не то.
+_bom_head=$(head -c 3 "$BOM_CFG" | od -An -tx1 | tr -d ' \n')
+assert_eq "тестовый файл действительно с BOM" "efbbbf" "$_bom_head"
+
+CONFIG_FILE="$BOM_CFG"
+assert_eq "SH: [folders] source читается из файла с BOM" "C:/bom/in" "$(read_config source folders '__MISS__')"
+CONFIG_FILE="$MY_DIR/config.ini"
+
+if [ "$HAVE_PS1" = true ]; then
+    BOM_WIN=$(cygpath -w "$BOM_CFG" 2>/dev/null || echo "$BOM_CFG")
+    assert_eq "PS1: [folders] source читается из файла с BOM" "C:/bom/in" \
+        "$(run_ps1_readconfig "$BOM_WIN" source folders '__MISS__')"
+else
+    skip "PS1: [folders] source читается из файла с BOM" "PowerShell не найден"
+fi
+
+# CMD-сторона: подменяем рабочий config.ini на BOM-версию и смотрим --print-config.
+if cmd //c "exit 0" &>/dev/null; then
+    FF_CFG="$PROJECT_DIR/ffmpeg/config.ini"
+    FF_CFG_BAK="$PROJECT_DIR/ffmpeg/config.ini.parity-bak"
+    if [ -f "$FF_CFG" ]; then mv "$FF_CFG" "$FF_CFG_BAK"; fi
+    cp "$BOM_CFG" "$FF_CFG"
+    RUN_CMD_WIN=$(cygpath -w "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v18.cmd" 2>/dev/null || echo "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v18.cmd")
+    cmd_src=$(cmd //c "$RUN_CMD_WIN --print-config" 2>/dev/null | tr -d '\r' | grep '^folder_sources=' | head -1 | sed 's/^folder_sources=//')
+    rm -f "$FF_CFG"
+    if [ -f "$FF_CFG_BAK" ]; then mv "$FF_CFG_BAK" "$FF_CFG"; fi
+    assert_eq "CMD: [folders] source читается из файла с BOM" "C:/bom/in" "$cmd_src"
+else
+    skip "CMD: [folders] source читается из файла с BOM" "cmd.exe не доступен"
+fi
+
 # ── Cleanup ───────────────────────────────────────────────────
-rm -f "$CONFIG_FILE"
+rm -f "$CONFIG_FILE" "$BOM_CFG"
 
 summary

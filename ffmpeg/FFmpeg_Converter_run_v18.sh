@@ -40,6 +40,11 @@ read_config() {
 		line="${line#"${line%%[![:space:]]*}"}"
 		line="${line%"${line##*[![:space:]]}"}"
 		line="${line%$'\r'}"
+		# UTF-8 BOM в начале файла. Notepad и часть редакторов Windows сохраняют его по
+		# умолчанию, а он приклеивается к ПЕРВОЙ строке: регэксп секции ^\[…\]$ на ней
+		# не совпадал, [folders] не находилась вовсе, и скрипт молча брал умолчания —
+		# «[ОШИБКА] Папка источника не найдена: …/_video_/0». PS1 читал тот же файл верно.
+		line="${line#$'\xEF\xBB\xBF'}"
 		[[ -z "$line" || "$line" == \#* ]] && continue
 
 		if [[ "$line" =~ ^\[([^]]+)\]$ ]]; then
@@ -62,11 +67,34 @@ read_config() {
 			# всех, кто удалённым бэкендом не пользуется (а он выключен по умолчанию),
 			# и WARN печатался бы на каждом запуске. Про незаданную переменную громко
 			# говорит remote_preflight — ровно тогда, когда она действительно нужна.
-			while [[ "$value" == *'${'*'}'* ]]; do
+			# Два ограничителя, и оба обязательны: имя обязано быть валидным
+			# идентификатором (`${}` и `${A-B}` роняли `${!_vn}` с «invalid variable
+			# name», значение терялось молча), и число итераций ограничено —
+			# самоссылка (SELF='${SELF}' в окружении) давала вечный цикл.
+			local _sub_guard=0
+			while [[ "$value" == *'${'*'}'* ]] && [ "$_sub_guard" -lt 32 ]; do
+				_sub_guard=$((_sub_guard + 1))
 				local _vn="${value#*\$\{}"; _vn="${_vn%%\}*}"
+				if [[ ! "$_vn" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+					echo "WARN: '\${$_vn}' — недопустимое имя переменной окружения, оставлено как есть" >&2
+					break
+				fi
 				[ -n "${!_vn:-}" ] || [ "$section" = "remote" ] || echo "WARN: переменная $_vn не задана" >&2
 				value="${value//\$\{$_vn\}/${!_vn:-}}"
 			done
+			# Кавычки вокруг значения — обычный результат «Копировать как путь» в
+			# проводнике Windows. Без снятия путь «"C:/video/in"» не находился ни на
+			# одной платформе, а PS1 вдобавок падал исключением IsPathRooted.
+			if [ ${#value} -ge 2 ]; then
+				case "$value" in
+					'"'*'"') value="${value#\"}"; value="${value%\"}" ;;
+					"'"*"'") value="${value#\'}"; value="${value%\'}" ;;
+				esac
+			fi
+			# ПЕРВОЕ вхождение ключа — контракт (объявлен в комментарии run_v18.ps1).
+			# `break` фиксирует его здесь, ContainsKey-guard — в PS1 и GUI,
+			# `if not defined` — в CMD. Дубликат ключа не имеет права давать разные
+			# кодеки на разных платформах из одного config.ini.
 			result="$value"
 			break
 		fi
@@ -151,6 +179,7 @@ remote_api_key="$(read_config "api_key" "remote" "")"
 remote_api_key_command="$(read_config "api_key_command" "remote" "")"
 remote_prefer="$(read_config "prefer" "remote" "auto")"
 remote_wait_timeout="$(read_config "wait_timeout" "remote" "1800")"
+remote_stall_timeout="$(read_config "stall_timeout" "remote" "900")"
 remote_on_failure="$(read_config "on_failure" "remote" "abort")"
 # Нормализация адреса живёт в ОДНОМ месте на платформу — remote_normalize_endpoint
 # в remote_client.sh, вызывается из remote_preflight. Здесь её нет намеренно:
@@ -173,6 +202,79 @@ case "$log_file" in
 	*) log_file="$SCRIPT_DIR/$log_file" ;;
 esac
 
+# --- Диагностика окружения (--doctor) ---
+# Одна команда вместо разрозненных отказов на разных стадиях: без ffmpeg прогон
+# падает на первом файле, без curl/sha256 — на первой удалённой задаче, а адрес
+# службы без /vN даёт 404, о котором сказать больше нечего. Отчёт печатает, ЧТО
+# именно перестаёт работать без каждого инструмента, — это и есть недостающее.
+ffconv_doctor() {
+	echo ""
+	echo "═══ Проверка окружения (ffmpeg) ═══"
+	echo ""
+	echo "Каталог скрипта: $SCRIPT_DIR"
+	echo "Конфиг:          $CONFIG_FILE$([ -f "$CONFIG_FILE" ] || printf ' (нет — используются умолчания)')"
+	echo ""
+	echo "  инструмент     статус   путь / версия · что без него не работает"
+	echo "  -------------- -------- -------------------------------------------"
+
+	local rc=0 p v
+	if p="$(command -v "$ffmpeg" 2>/dev/null)"; then
+		v="$("$ffmpeg" -version 2>/dev/null | head -1)"
+		printf '  %-14s %-8s %s\n' "ffmpeg" "есть" "${v:-$p}"
+	else
+		if [ "$remote_enabled" = "yes" ]; then
+			printf '  %-14s %-8s %s\n' "ffmpeg" "НЕТ" "тонкий клиент: считает служба; локально недоступны проверка результата и длительность"
+		else
+			printf '  %-14s %-8s %s\n' "ffmpeg" "НЕТ" "КОНВЕРТАЦИЯ НЕВОЗМОЖНА — это основной инструмент"
+			rc=1
+		fi
+	fi
+
+	if [ "$remote_enabled" = "yes" ]; then
+		if p="$(command -v "${CURL_BIN:-curl}" 2>/dev/null)"; then
+			printf '  %-14s %-8s %s\n' "curl" "есть" "$p"
+		else
+			printf '  %-14s %-8s %s\n' "curl" "НЕТ" "удалённый бэкенд не работает вовсе"
+			rc=1
+		fi
+		if p="$(command -v sha256sum 2>/dev/null || command -v shasum 2>/dev/null)"; then
+			printf '  %-14s %-8s %s\n' "sha256" "есть" "$p"
+		else
+			printf '  %-14s %-8s %s\n' "sha256" "НЕТ" "нечем подтвердить загрузку службе (POST /uploads/{id}/complete)"
+			rc=1
+		fi
+	fi
+
+	echo ""
+	echo "Настройки, влияющие на раскладку файлов и на то, где идёт счёт:"
+	echo "  Источник:    $folder_sources$([ -d "$folder_sources" ] || printf '   ← каталога НЕТ')"
+	echo "  Назначение:  $folder_destination"
+	echo "  Расширения:  $format_files_in"
+	echo "  Лог:         $([ "$enable_log" = "yes" ] && printf '%s' "$log_file" || printf 'выключен')"
+	echo "  Удалённый:   $remote_enabled$([ "$remote_enabled" = "yes" ] && printf ' → %s' "${remote_endpoint:-<адрес не задан>}")"
+	if [ "$remote_enabled" = "yes" ]; then
+		case "$remote_endpoint" in
+			*/v[0-9]|*/v[0-9][0-9]) ;;
+			"") echo "  ВНИМАНИЕ:    адрес службы пуст — задайте [remote] endpoint" ;;
+			*)  echo "  ВНИМАНИЕ:    адрес без версии API (/v1) — вероятен HTTP 404 на /capabilities" ;;
+		esac
+		if [ -n "$remote_api_key_command" ]; then
+			echo "  Ключ:        из команды api_key_command (значение не печатаем)"
+		elif [ -n "$remote_api_key" ]; then
+			echo "  Ключ:        задан (значение не печатаем)"
+		else
+			echo "  ВНИМАНИЕ:    ключ службы пуст — задайте [remote] api_key или api_key_command"
+		fi
+	fi
+	echo ""
+	if [ "$rc" -eq 0 ]; then
+		echo "Обязательные инструменты на месте."
+	else
+		echo "Не хватает обязательных инструментов — см. таблицу выше."
+	fi
+	return $rc
+}
+
 # start coding #
 # Гард запускает конвейер только при ПРЯМОМ запуске. Дот-сорсинг отдаёт настоящие
 # read_config/to_flag тестам, которые раньше держали у себя inline-копию. Копия успела
@@ -185,9 +287,11 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 	for _arg in "$@"; do
 		case "$_arg" in
 			--remote-selftest) export FFCONV_REMOTE_SELFTEST=1 ;;
+			--doctor) ffconv_doctor; exit $? ;;
 			-h|--help)
-				echo "Использование: $(basename "${BASH_SOURCE[0]}") [--remote-selftest]"
+				echo "Использование: $(basename "${BASH_SOURCE[0]}") [--remote-selftest] [--doctor]"
 				echo "  --remote-selftest  прогнать удалённый путь целиком на пробном ролике и выйти"
+				echo "  --doctor           отчёт об окружении: что найдено, где и что без него не работает"
 				exit 0 ;;
 			*)
 				echo "Неизвестный аргумент: $_arg (см. --help)" >&2

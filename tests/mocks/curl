@@ -37,6 +37,9 @@ METHOD="GET"
 URL=""
 OUT_FILE=""
 READ_CONFIG=0
+CONFIG_FILE_ARG=""
+READ_BODY=0
+WRITE_OUT=""
 PREV=""
 for arg in "$@"; do
 	case "$PREV" in
@@ -49,21 +52,53 @@ for arg in "$@"; do
 	# Тело куска приходит файлом (--data-binary @file). Под MOCK_CURL_LOG_DATA=1
 	# кладём его содержимое в лог: без этого проверить, КАКИЕ байты уехали, нечем —
 	# а именно там жил дефект чтения куска с невыровненного смещения.
+	if [ "$PREV" = "--data-binary" ] && [ "$arg" = "@-" ]; then
+		READ_BODY=1
+	fi
 	if [ "${MOCK_CURL_LOG_DATA:-0}" = "1" ] && [ "$PREV" = "--data-binary" ]; then
 		case "$arg" in
+			@-) ;;
 			@*) [ -f "${arg#@}" ] && echo "DATA: $(cat "${arg#@}")" >> "$LOG_FILE" ;;
 		esac
 	fi
-	[ "$PREV" = "--config" ] && [ "$arg" = "-" ] && READ_CONFIG=1
+	# Ключ приходит либо конфигом на stdin (`--config -`), либо ФАЙЛОМ конфига
+	# (`--config <(…)`, process substitution) — второй вариант нужен там, где stdin
+	# занят телом куска. Оба обязаны попадать в лог, иначе проверка «ключ ушёл
+	# заголовком, а не в argv» перестала бы что-либо значить.
+	if [ "$PREV" = "--config" ]; then
+		if [ "$arg" = "-" ]; then READ_CONFIG=1; else CONFIG_FILE_ARG="$arg"; fi
+	fi
+	# Формат -w клиент задаёт сам; мок обязан ответить ровно им, иначе разбор
+	# ответа в production и в тесте разойдётся.
+	[ "$PREV" = "-w" ] && WRITE_OUT="$arg"
 	PREV="$arg"
 done
 
 # Конфиг на stdin: читаем целиком и кладём в лог, чтобы заголовок с ключом
-# остался проверяемым.
+# остался проверяемым. С переходом на потоковую отправку куска ключ уезжает
+# через `--config <(…)` — файл, а не «-»; читаем и такой.
 if [ "$READ_CONFIG" = "1" ]; then
 	while IFS= read -r _cfg_line; do
 		[ -n "$_cfg_line" ] && echo "$_cfg_line" >> "$LOG_FILE"
 	done
+fi
+if [ -n "$CONFIG_FILE_ARG" ] && [ -f "$CONFIG_FILE_ARG" ]; then
+	while IFS= read -r _cfg_line; do
+		[ -n "$_cfg_line" ] && echo "$_cfg_line" >> "$LOG_FILE"
+	done < "$CONFIG_FILE_ARG"
+fi
+
+# Тело куска приходит потоком (`--data-binary @-`). Читаем его целиком: иначе curl
+# в production завершился бы с EPIPE, а тест не смог бы проверить, КАКИЕ байты
+# уехали — именно там жил дефект чтения с невыровненного смещения.
+# %{size_upload} клиент сверяет с объявленной длиной, поэтому мок обязан его отдать.
+BODY_BYTES=0
+if [ "${READ_BODY:-0}" = "1" ]; then
+	_body_tmp="$(mktemp "${TMPDIR:-/tmp}/mock_curl_body_XXXXXX")"
+	cat > "$_body_tmp"
+	BODY_BYTES=$(wc -c < "$_body_tmp" | tr -d ' ')
+	[ "${MOCK_CURL_LOG_DATA:-0}" = "1" ] && echo "DATA: $(cat "$_body_tmp")" >> "$LOG_FILE"
+	rm -f "$_body_tmp"
 fi
 
 [ "${MOCK_CURL_FAIL:-0}" = "1" ] && exit 7
@@ -105,10 +140,27 @@ EOF
 	fi
 fi
 
+# Хвост собираем по формату -w, который задал клиент: он бывает
+# '\n%{http_code}' и '\n%{http_code} %{size_upload}'. Подставляем оба
+# плейсхолдера, а неизвестные оставляем как есть — так расхождение формата
+# станет видно в тесте, а не превратится в молча неверный разбор.
+# Плейсхолдеры держим в ПЕРЕМЕННЫХ и подставляем в кавычках: запись
+# ${TAIL//\%\{http_code\}/...} ломается — экранированная } закрывает саму
+# подстановку, и в ответе оставался хвостовой символ «}» (код «200}»).
+_ph_code='%{http_code}'
+_ph_size='%{size_upload}'
+_default_w='
+%{http_code}'
+TAIL="$WRITE_OUT"
+[ -n "$TAIL" ] || TAIL="$_default_w"
+TAIL="${TAIL//"$_ph_code"/$CODE}"
+TAIL="${TAIL//"$_ph_size"/$BODY_BYTES}"
+
 if [ -n "$OUT_FILE" ]; then
 	printf '%s' "$BODY" > "$OUT_FILE"
-	printf '%s' "$CODE"
+	printf '%b' "$TAIL"
 else
-	printf '%s\n%s' "$BODY" "$CODE"
+	printf '%s' "$BODY"
+	printf '%b' "$TAIL"
 fi
 exit 0

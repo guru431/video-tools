@@ -6,6 +6,7 @@
 #   bash tests/run_tests.sh           # все тесты
 #   bash tests/run_tests.sh ffmpeg    # только ffmpeg
 #   bash tests/run_tests.sh yt-dlp    # только yt-dlp
+#   bash tests/run_tests.sh common    # только кросс-платформенные инварианты
 # ============================================================
 
 TESTS_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -51,9 +52,37 @@ run_suite() {
     fail=$(echo "$marker" | grep -o 'fail=[0-9]*' | grep -o '[0-9]*')
     skip=$(echo "$marker" | grep -o 'skip=[0-9]*' | grep -o '[0-9]*')
 
+    # Маркер ОБЯЗАТЕЛЕН. Без него pass=fail=skip=0, и suite с rc=0 уходил в зелёную
+    # ветку как «✓» — то есть одна забытая `summary` перед `exit 0` делала целый файл
+    # невидимкой на всех линиях CI. Нарушителей сейчас нет (все ранние выходы PS1/CMD
+    # тестов идут через summary), и правило существует ровно затем, чтобы так и осталось.
+    if [ -z "$marker" ]; then
+        TOTAL_FAIL=$((TOTAL_FAIL + 1))
+        SUITE_RESULTS+=("${RED}✗${NC} $suite_name (нет маркера TESTS_RESULT: suite не вызвал summary)")
+        return
+    fi
+
     pass="${pass:-0}"
     fail="${fail:-0}"
     skip="${skip:-0}"
+
+    # STRICT_SKIP (Windows-CI и release-гейт) падает не только на ЦЕЛИКОМ пропущенном
+    # suite, но и на частичных пропусках «инструмент не найден»: они означают, что
+    # проверка не выполнялась, а не что она не нужна. Причины ищем в тексте вывода —
+    # framework печатает их рядом с ○.
+    if [ "${STRICT_SKIP:-0}" = "1" ] && [ "$skip" -gt 0 ]; then
+        local why
+        why=$(printf '%s' "$output" | grep -oE '○[^
+]*(не найден|недоступен|не установлен|не был вызван)[^
+]*' | head -3)
+        if [ -n "$why" ]; then
+            TOTAL_FAIL=$((TOTAL_FAIL + 1))
+            SUITE_RESULTS+=("${RED}✗${NC} $suite_name (STRICT_SKIP: пропуск из-за отсутствующего инструмента)")
+            TOTAL_PASS=$((TOTAL_PASS + pass))
+            TOTAL_SKIP=$((TOTAL_SKIP + skip))
+            return
+        fi
+    fi
 
     # Любой ненулевой rc обязан дать провал. Если fail>0 — он уже посчитан (summary
     # возвращает 1 именно из-за этих провалов, второй раз добавлять нельзя). Если
@@ -123,6 +152,7 @@ FFMPEG_TESTS=(
     "$TESTS_DIR/ffmpeg/test_21_remote_client.sh"
     "$TESTS_DIR/ffmpeg/test_22_remote_ps1.sh"
     "$TESTS_DIR/ffmpeg/test_23_remote_parity.sh"
+    "$TESTS_DIR/ffmpeg/test_24_gui_worker_runspace.sh"
 )
 
 YTDLP_TESTS=(
@@ -140,6 +170,7 @@ YTDLP_TESTS=(
     "$TESTS_DIR/yt-dlp/test_12_findings_cli.sh"
     "$TESTS_DIR/yt-dlp/test_13_path_limit.sh"
     "$TESTS_DIR/yt-dlp/test_14_stop_and_window.sh"
+    "$TESTS_DIR/yt-dlp/test_15_cmd_smoke.sh"
 )
 
 # Кросс-платформенные инварианты (кодировки, паритет ключей config.ini, guardrail'ы)
@@ -184,7 +215,7 @@ case "$FILTER" in
             run_or_missing "$test_file"
         done
         ;;
-    all|*)
+    all)
         echo -e "${BOLD}Модуль: FFmpeg Converter${NC}"
         for test_file in "${FFMPEG_TESTS[@]}"; do
             run_or_missing "$test_file"
@@ -199,6 +230,13 @@ case "$FILTER" in
         for test_file in "${COMMON_TESTS[@]}"; do
             run_or_missing "$test_file"
         done
+        ;;
+    *)
+        # Опечатка в фильтре («commmon») раньше молча трактовалась как all: прогон
+        # выглядел успешным, а запрошенный набор не запускался никогда.
+        echo -e "${RED}Неизвестный фильтр: '$FILTER'${NC}"
+        echo "Использование: bash tests/run_tests.sh [all|ffmpeg|yt-dlp|common]"
+        exit 2
         ;;
 esac
 

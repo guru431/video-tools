@@ -73,6 +73,22 @@ if ([string]::IsNullOrWhiteSpace($folder_destination)) {
 # CreateDirectory идемпотентен — предварительный Test-Path не нужен
 New-DirLiteral $folder_destination
 
+# Оба корня приводим к канонической форме СРАЗУ, пока не построен ни один путь: карта
+# коллизий выходов склеивает ключ из $folder_destination, а пофайловая проверка
+# канонизирует уже созданный каталог. При `destination = ..\out` две формы одного пути
+# не совпадали строкой, и конфликт выходов печатался, но не предотвращался.
+# Паритет с _canon_root в .sh.
+function Resolve-RootPath {
+	param([string]$Path)
+	try {
+		$rp = (Resolve-Path -LiteralPath $Path -ErrorAction Stop).ProviderPath
+		if ($rp) { return (Normalize-FolderPath $rp) }
+	} catch {}
+	return $Path
+}
+$folder_sources     = Resolve-RootPath $folder_sources
+$folder_destination = Resolve-RootPath $folder_destination
+
 # ffmpeg обязателен ровно тогда, когда именно он и считает. При
 # [remote] enabled = yes считает служба, и требовать локальный ffmpeg значило бы
 # закрывать заявленный сценарий «тонкий клиент». Отсутствие НЕ бесплатно: без
@@ -150,12 +166,21 @@ $hw_decode_args = @()
 #   • кодек вне маппинга (например libvpx-vp9) оставался программным, но
 #     -hwaccel_output_format cuda уже включался → софт получал hardware-кадры
 #     («Impossible to convert between the formats»).
-if ($hw_accel_status -eq "+") {
+# Без локального ffmpeg (тонкий клиент, [remote] enabled = yes) спрашивать список
+# энкодеров не у кого: CommandNotFoundException — терминирующая, проходит сквозь
+# `2>&1 | Out-String` и уходит в top-level trap, обрывая весь пакет ДО первого файла.
+# Дефолт шаблона hw_accel = +intel делал это поведением по умолчанию. Паритет с .sh.
+if ($hw_accel_status -eq "+" -and -not $ffmpeg_available) {
+	Write-Host "[ПРЕДУПРЕЖДЕНИЕ] Локального ffmpeg нет — аппаратное ускорение не проверяется, выбор энкодера остаётся за службой."
+}
+if ($hw_accel_status -eq "+" -and $ffmpeg_available) {
 	$encoders_list = & $ffmpeg -encoders 2>&1 | Out-String
 	$hw_suffix = ""; $hw_label = ""; $hw_try_args = @(); $hw_try_type = ""
 	switch ($hw_accel_value) {
 		"nvidia" { $hw_suffix = "_nvenc"; $hw_label = "NVENC"; $hw_try_type = "nvidia"; $hw_try_args = @("-hwaccel", "cuda", "-hwaccel_output_format", "cuda") }
 		"intel"  { $hw_suffix = "_qsv";   $hw_label = "QSV";   $hw_try_type = "intel";  $hw_try_args = @("-hwaccel", "qsv", "-hwaccel_output_format", "qsv") }
+		# Опечатка в значении (+nvida, +amd) означала «считаем на процессоре» — молча.
+		default  { Write-Host "[ПРЕДУПРЕЖДЕНИЕ] Неизвестное значение [performance] hw_accel = '$hw_accel_value' (ожидается nvidia или intel). Кодирование идёт на процессоре." }
 	}
 	if ($hw_suffix) {
 		# Кандидат: маппинг software→GPU либо уже готовое GPU-имя от пользователя.
@@ -205,6 +230,13 @@ if ($start_coding_status -eq "+") {
 $_, $length_coding_status, $length_coding_value = $length_coding -split ":"
 if ($length_coding_status -eq "+") {
 	$length_coding_value = ConvertTo-Seconds "$length_coding_value" "[split] length"
+	# Нулевая длительность (`length = +00-00-00`) проходила валидацию формата и
+	# давала `-t 0`: ffmpeg честно создавал пустые файлы и отчитывался успехом.
+	if ($length_coding_value -le 0) {
+		Write-Host "`n[ОШИБКА] [split] length: длительность должна быть больше нуля, получено: '00-00-00'`n"
+		Pause-Prompt "Нажмите [Enter], чтобы выйти..."
+		exit 1
+	}
 	$set_length_coding = "-t $length_coding_value"
 } else {
 	$set_length_coding = ""
@@ -237,9 +269,22 @@ if ($audio_only -eq "yes") {
 	}
 	$video_settings_args = @("-vn")
 } else {
-	# D3. Выходной контейнер
+	# D3. Выходной контейнер.
+	#
+	# Расширение выхода и имя muxer'а — РАЗНЫЕ вещи, и ffmpeg выводит muxer из
+	# расширения. Для части привычных расширений такого muxer'а нет вовсе:
+	# `container = +m4v` даёт сырой elementary-stream (файл, который не откроет ни
+	# один плеер), `.mpg` и `.wmv` — не те муксеры, `.mts/.m2ts` — не находятся.
+	# Отображаем известные случаи и говорим об этом вслух: молча отдать
+	# неоткрываемый файл хуже, чем сменить расширение с объяснением.
 	if ($output_container_status -eq "+") {
 		$format_files_out = $output_container_value
+		switch -Regex ($format_files_out) {
+			'^m4v$'      { Write-Host "[ПРЕДУПРЕЖДЕНИЕ] [video] container = m4v: ffmpeg выберет по расширению raw-muxer вместо MP4. Использую mp4."; $format_files_out = "mp4" }
+			'^mpg$'      { Write-Host "[ПРЕДУПРЕЖДЕНИЕ] [video] container = mpg: корректное имя контейнера — mpeg. Использую mpeg."; $format_files_out = "mpeg" }
+			'^wmv$'      { Write-Host "[ПРЕДУПРЕЖДЕНИЕ] [video] container = wmv: контейнер называется asf. Использую asf."; $format_files_out = "asf" }
+			'^(mts|m2ts)$' { Write-Host "[ПРЕДУПРЕЖДЕНИЕ] [video] container = $($format_files_out): контейнер называется mpegts. Использую mpegts."; $format_files_out = "mpegts" }
+		}
 	} else {
 		$format_files_out = "mp4"
 	}
@@ -265,7 +310,11 @@ if ($audio_only -eq "yes") {
 			switch ($scale_backend) {
 				"nvidia" { $vf_parts += "scale_cuda=${res_w}:${res_h}:force_original_aspect_ratio=decrease" }
 				"intel"  { $vf_parts += "scale_qsv=${res_w}:${res_h}:force_original_aspect_ratio=decrease" }
-				default  { $vf_parts += "scale=${res_w}:${res_h}:force_original_aspect_ratio=decrease,pad=${res_w}:${res_h}:(ow-iw)/2:(oh-ih)/2" }
+				# force_divisible_by=2 обязателен: на нестандартных пропорциях
+				# force_original_aspect_ratio=decrease даёт нечётную сторону
+				# (1366×768 в рамку 1280×720 → 1280×719), а yuv420p-энкодеры такие
+				# кадры не принимают — «height not divisible by 2», файл падает.
+				default  { $vf_parts += "scale=${res_w}:${res_h}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${res_w}:${res_h}:(ow-iw)/2:(oh-ih)/2" }
 			}
 		} else {
 			switch ($scale_backend) {
@@ -394,11 +443,15 @@ $sub_meta_codec = switch ($format_files_out) { "mkv" { "srt" } "webm" { "webvtt"
 # получится. Порядок и состав полей — паритет с SH; побайтового совпадения строки между
 # платформами не требуется: чужая подпись просто не совпадёт и вызовет перекодирование —
 # безопасное направление ошибки (лишняя работа, а не пропуск незаконченного файла).
+# [video] bitrate входит в подпись ОТДЕЛЬНО: он собирается per-file (потолок по
+# исходному битрейту), поэтому в $video_settings_args его нет. Без него смена
+# `bitrate = +3000` на `+1500` не устаревала manifest, и весь пакет отвечал
+# «Обработано: 0, Пропущено: N» без единого вызова ffmpeg.
 $settings_sig = @(
 	($video_settings_args -join ' '), ($audio_settings_args -join ' '),
 	($vf_parts -join ','), ($af_parts -join ','),
 	$format_files_out, $sub_meta_codec, $video_subtitles, $subtitles_style,
-	$start_coding, $length_coding, $split_by_silence
+	$start_coding, $length_coding, $split_by_silence, $video_bitrate
 ) -join '|'
 # При split_by_silence=yes границы частей задаются порогом/длительностью тишины: их смена
 # меняет содержимое выходов, поэтому они обязаны обесценивать manifest. Вне режима split
@@ -442,7 +495,10 @@ $_in_exts = @($format_files_in -split "," | ForEach-Object { "." + $_.Trim().Tri
 # `.ffconv-partial-*` — недобитые temp-файлы прерванного прогона: они подпадают под
 # фильтр расширений и в in-place режиме (destination == source) становились входами
 # следующего запуска. Паритет с `! -name '.ffconv-partial-*'` в SH.
-$format_files_in_list = Get-ChildItem -LiteralPath $folder_sources -Recurse -File |
+# -Force обязателен: без него Get-ChildItem пропускает скрытые и системные файлы и
+# каталоги, а `find` в .sh и `for /r` в .cmd их обходят. Один и тот же каталог давал
+# разный набор входов на разных платформах — молча, без единой строки в сводке.
+$format_files_in_list = Get-ChildItem -LiteralPath $folder_sources -Recurse -File -Force |
 	Where-Object { $_in_exts -contains $_.Extension -and -not $_.Name.StartsWith('.ffconv-partial-') }
 
 # F-collision. Если каталог назначения лежит СТРОГО ВНУТРИ источника, рекурсивный обход
@@ -531,8 +587,20 @@ function Write-RemoteUploadProgress {
 }
 
 # Удалённый бэкенд — отдельный модуль: только объявляет функции, ничего не делает сам.
-$_remoteModule = Join-Path $PSScriptRoot 'remote_client.ps1'
-if (Test-Path -LiteralPath $_remoteModule) { . $_remoteModule }
+#
+# $PSScriptRoot здесь НЕ работает и не может: GUI подаёт этот файл строкой через
+# PowerShell.AddScript(), а у строкового скрипта автоматическая $PSScriptRoot равна
+# пустой строке И ПЕРЕКРЫВАЕТ значение, выставленное через SessionStateProxy. Join-Path
+# на пустой строке бросает «Cannot bind argument to parameter 'Path'», top-level trap
+# делает break — воркер умирал до первого файла, и так вело себя ВСЁ, что запускалось из
+# GUI и из EXE. Каталог приходит отдельной переменной $guiAppDir, которую AddScript не
+# трогает. В EXE функции модуля вклеены в ту же строку (build_exe.ps1) — тогда искать
+# файл не нужно вовсе, и проверка по объявленной функции надёжнее проверки пути.
+if (-not (Get-Command Set-RemoteActive -ErrorAction SilentlyContinue)) {
+	$_appRoot = if ($guiAppDir) { $guiAppDir } elseif ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+	$_remoteModule = Join-Path $_appRoot 'remote_client.ps1'
+	if (Test-Path -LiteralPath $_remoteModule) { . $_remoteModule }
+}
 
 # --- Откат на локальный ffmpeg: только по ключу и только шумно ---
 # Отказ от МОЛЧАЛИВОГО отката остаётся в силе и обоснован: тихий переход на
@@ -544,9 +612,25 @@ if (Test-Path -LiteralPath $_remoteModule) { . $_remoteModule }
 # on_failure = local каждый откат печатает причину, попадает в отдельный счётчик
 # сводки и делает код возврата ненулевым.
 $script:countLocalFallback = 0
+# Проверку отмены отдаём модулю: длинные фазы (отправка гигабайтов, скачивание
+# результата) шли до конца, сколько бы раз пользователь ни нажал «Остановить».
+$script:RemoteCancelCheck = { [bool]($guiCancelFile -and (Test-Path -LiteralPath $guiCancelFile)) }
+
 function Test-RemoteFallbackAllowed {
 	param([string]$Name, [string]$Reason)
 	if ($remote_on_failure -ne 'local') { return $false }
+	# Отмена пользователем (Stop) — не «служба недоступна»: считать файл локально
+	# после явной остановки значит проигнорировать саму остановку.
+	if ($guiCancelFile -and (Test-Path -LiteralPath $guiCancelFile)) {
+		Log-Msg "WARN" "${Name}: $Reason, но прогон остановлен — локально не считаем"
+		return $false
+	}
+	# Отмена пользователем (Stop) — не «служба недоступна»: считать файл локально
+	# после явной остановки значит проигнорировать саму остановку.
+	if ($guiCancelFile -and (Test-Path -LiteralPath $guiCancelFile)) {
+		Log-Msg "WARN" "${Name}: $Reason, но прогон остановлен — локально не считаем"
+		return $false
+	}
 	# Тонкий клиент без ffmpeg откатываться некуда — честнее сказать это вслух.
 	if (-not $ffmpeg_available) {
 		Log-Msg "WARN" "${Name}: $Reason, а локального ffmpeg нет — откат невозможен"
@@ -676,7 +760,9 @@ function Log-Msg {
 	$logLine = "[$timestamp] [$Level] $Msg"
 	Write-Host $logLine
 	if ($enable_log -eq "yes" -and $log_file) {
-		Add-Content -LiteralPath $log_file -Value $logLine
+		# -Encoding UTF8 обязателен: без него Add-Content пишет в ANSI-кодировке системы,
+		# и один и тот же лог, дописанный из .sh и из .ps1, читается наполовину.
+		Add-Content -LiteralPath $log_file -Value $logLine -Encoding UTF8
 	}
 }
 
@@ -718,17 +804,27 @@ function Write-GUIProgress {
 	# Путь резервной копии обязателен: PowerShell превращает $null в пустую строку, и
 	# трёхаргументный Replace падает с «The path is not of a legal form» — прогресс
 	# замирал бы на первой же записи. Копию сразу удаляем, она нужна только API.
-	try {
-		$_tmp = "$guiProgressFile.tmp"
-		[System.IO.File]::WriteAllText($_tmp, ($data | ConvertTo-Json))
-		if ([System.IO.File]::Exists($guiProgressFile)) {
-			$_bak = "$guiProgressFile.bak"
-			[System.IO.File]::Replace($_tmp, $guiProgressFile, $_bak)
-			[System.IO.File]::Delete($_bak)
-		} else {
-			[System.IO.File]::Move($_tmp, $guiProgressFile)
+	# Replace/Move конкурируют с ReadAllText из таймера GUI (400 мс): если тик
+	# открыл файл ровно в этот момент, вызов бросает IOException. Одиночная
+	# попытка в пустом catch означала потерянную запись — и если терялась
+	# ПОСЛЕДНЯЯ, успешный батч показывался как «Ошибка (state='running')».
+	# Три коротких повтора закрывают гонку, не удорожая обычный путь.
+	for ($_try = 1; $_try -le 3; $_try++) {
+		try {
+			$_tmp = "$guiProgressFile.tmp"
+			[System.IO.File]::WriteAllText($_tmp, ($data | ConvertTo-Json))
+			if ([System.IO.File]::Exists($guiProgressFile)) {
+				$_bak = "$guiProgressFile.bak"
+				[System.IO.File]::Replace($_tmp, $guiProgressFile, $_bak)
+				[System.IO.File]::Delete($_bak)
+			} else {
+				[System.IO.File]::Move($_tmp, $guiProgressFile)
+			}
+			break
+		} catch {
+			if ($_try -lt 3) { Start-Sleep -Milliseconds 40 }
 		}
-	} catch {}
+	}
 }
 
 # --- A5. Функция кодирования одного файла (аргументы через массив, не Split) ---
@@ -806,6 +902,16 @@ function Encode-File {
 			default    { 'mka'  }
 		}
 		$outAudio = "$folder_destination$file_path$file_name.$ext"
+		# F12 для extract. Расширение выхода выбирается по кодеку ИСХОДНИКА, поэтому при
+		# in-place (destination == source) вход song.m4a/song.mp3/song.ogg/song.flac даёт
+		# выход, равный входу, и overwrite_existing=yes удалял его ДО запуска ffmpeg —
+		# исходник терялся безвозвратно. Проверка стоит ДО overwrite-блока.
+		if ((Get-CanonPath $outAudio) -ieq (Get-CanonPath $full_path)) {
+			Log-Msg "FAIL" "$($file.Name): выход совпадает с входом (извлечение аудио в тот же файл)"
+			$script:countFail++
+			Write-GUIProgress -CurrentFile $file.Name
+			return
+		}
 		# Единый overwrite-контракт: при overwrite_existing=yes перезаписываем готовый файл,
 		# а не пропускаем молча (раньше пропуск был безусловным — overwrite не работал).
 		# D7. Удаление — мутация; при dry_run её делать нельзя, иначе режим, обещающий лишь
@@ -829,7 +935,9 @@ function Encode-File {
 		Log-Msg "INFO" "Извлечение аудио: $($file.Name)"
 		$_cmdStr = "$ffmpeg -hide_banner -strict -2 -i `"$full_path`" -vn -c:a copy `"$outAudio`" -y"
 		Write-GUIProgress -FilePercent 0 -CurrentFile $file.Name -Command $_cmdStr
-		& $ffmpeg -hide_banner -strict -2 -i $full_path -vn -c:a copy $outAudio -y
+		# 2>&1 в конвейер: в hostless-runspace GUI stderr нативной команды иначе оседает
+		# в $ps.Streams.Error, и успешный прогон показывался как «Ошибка» с MessageBox.
+		& $ffmpeg -nostdin -hide_banner -strict -2 -i $full_path -vn -c:a copy $outAudio -y 2>&1 | ForEach-Object { Write-Host "$_" }
 		if ($LASTEXITCODE -ne 0) {
 			Log-Msg "FAIL" "$($file.Name)"
 			if (Test-Path -LiteralPath $outAudio) { Remove-Item -LiteralPath $outAudio -Force }
@@ -853,22 +961,43 @@ function Encode-File {
 			Write-GUIProgress -CurrentFile $file.Name
 			return
 		}
+		# F-percent. `%` в имени файла ИЛИ в пути ломает image2-мультиплексор: после `%`
+		# он принимает только d/цифру/%. Удваиваем везде, кроме собственного счётчика.
+		$frame_out = ($frame_dir -replace '%', '%%') + "\" + ($file_name -replace '%', '%%') + "_%05d.png"
 		if ($dry_run -eq "yes") {
-			$_cmdStr = "$ffmpeg -hide_banner -strict -2 -i `"$full_path`" -r 1/1 `"$frame_dir\${file_name}_%05d.png`""
+			$_cmdStr = "$ffmpeg -hide_banner -strict -2 -i `"$full_path`" -r 1/1 `"$frame_out`""
 			Write-Host "[DRY-RUN] $_cmdStr"
 			Write-GUIProgress -FilePercent 100 -CurrentFile $file.Name -Command $_cmdStr
 			return
 		}
-		# Частичный каталог с прошлого прогона удаляем, чтобы кадры не смешивались.
-		if (Test-Path -LiteralPath $frame_dir) { Remove-Item -LiteralPath $frame_dir -Recurse -Force -ErrorAction SilentlyContinue }
+		# Частичный каталог с прошлого прогона удаляем, чтобы кадры не смешивались — но
+		# ТОЛЬКО если каталог наш. Раньше сносился ЛЮБОЙ существующий каталог с именем
+		# стема: при in-place `clip.mp4` рядом с пользовательским каталогом `clip\` тот
+		# вычищался без единого сообщения. Признак «наш» — маркер начала или завершения;
+		# пустой каталог безопасен.
+		$frame_partial = "$frame_dir\.frames_partial"
+		if (Test-Path -LiteralPath $frame_dir) {
+			if ((Test-Path -LiteralPath $frame_partial) -or (Test-Path -LiteralPath $frame_done)) {
+				Remove-Item -LiteralPath $frame_dir -Recurse -Force -ErrorAction SilentlyContinue
+			} elseif (@(Get-ChildItem -LiteralPath $frame_dir -Force -ErrorAction SilentlyContinue).Count -gt 0) {
+				Log-Msg "FAIL" "$($file.Name): каталог кадров занят посторонними файлами: $frame_dir"
+				$script:countFail++
+				Write-GUIProgress -CurrentFile $file.Name
+				return
+			}
+		}
 		New-DirLiteral $frame_dir
+		New-EmptyFileLiteral $frame_partial
 		Log-Msg "INFO" "Извлечение кадров: $full_path"
-		& $ffmpeg -hide_banner -strict -2 -i $full_path -r 1/1 "$frame_dir\${file_name}_%05d.png"
+		# 2>&1 в конвейер: в hostless-runspace GUI stderr нативной команды иначе оседает
+		# в $ps.Streams.Error, и успешный прогон показывался как «Ошибка» с MessageBox.
+		& $ffmpeg -nostdin -hide_banner -strict -2 -i $full_path -r 1/1 $frame_out 2>&1 | ForEach-Object { Write-Host "$_" }
 		if ($LASTEXITCODE -ne 0) {
 			Log-Msg "FAIL" "$($file.Name)"
 			Remove-Item -LiteralPath $frame_dir -Recurse -Force -ErrorAction SilentlyContinue
 			$script:countFail++
 		} else {
+			Remove-Item -LiteralPath $frame_partial -Force -ErrorAction SilentlyContinue
 			New-EmptyFileLiteral $frame_done
 			Log-Msg "OK" "Кадры: $($file.Name)"
 			$script:countOk++
@@ -899,15 +1028,10 @@ function Encode-File {
 		return
 	}
 
-	# F-collision-map. Выход этого файла оспаривается другим входом (карта построена
-	# до кодирования). Обрабатывать нельзя: кто-то из группы затрёт чужой результат.
-	if ($collision_outputs.ContainsKey($canon_out.ToLowerInvariant())) {
-		Log-Msg "FAIL" "$($file.Name): конфликт выходов — файл пропущен"
-		$script:countFail++
-		Write-GUIProgress -CurrentFile $file.Name
-		return
-	}
-
+	# ВАЖЕН ПОРЯДОК: manifest проверяется РАНЬШЕ карты коллизий. При in-place
+	# (destination == source) повторный прогон видит и movie.avi, и уже созданный
+	# movie.mp4 — оба претендуют на один выход, и карта давала FAIL «конфликт
+	# выходов» файлу, который на самом деле давно готов. Готовность старше спора.
 	# Готовность подтверждает manifest: state=complete + неизменившийся источник + все
 	# перечисленные выходы на месте. Раньше признаком готовности считалось наличие одной
 	# лишь `(part.1)` — если остальные части не создались (обрыв, падение, нехватка
@@ -920,6 +1044,15 @@ function Encode-File {
 		return
 	}
 
+	# F-collision-map. Выход этого файла оспаривается другим входом (карта построена
+	# до кодирования). Обрабатывать нельзя: кто-то из группы затрёт чужой результат.
+	if ($collision_outputs.ContainsKey($canon_out.ToLowerInvariant())) {
+		Log-Msg "FAIL" "$($file.Name): конфликт выходов — файл пропущен"
+		$script:countFail++
+		Write-GUIProgress -CurrentFile $file.Name
+		return
+	}
+
 	# E3. Проверка валидности существующего файла
 	# Судим по exit code (как SH/CMD), а не по тексту stderr: ffmpeg с -v error может
 	# вывести не-фатальную диагностику для полностью декодируемого файла — тогда
@@ -928,11 +1061,23 @@ function Encode-File {
 	# новыми настройками (ffmpeg -y перезапишет). Иначе валидный файл пропускается.
 	if ($overwrite_existing -ne "yes") {
 		if (Test-Path -LiteralPath "$out_base$part_suffix_known.$current_format_out") {
-			& $ffmpeg -v error -i "$out_base$part_suffix_known.$current_format_out" -f null - 2>&1 | Out-Null
+			# Без локального ffmpeg (тонкий клиент, [remote] enabled = yes) проверить
+			# нечем, и «не прошёл проверку» означало бы УДАЛЕНИЕ готового файла из-за
+			# отсутствия инструмента — считаем такой файл готовым. Паритет с .sh.
+			if (-not $ffmpeg_available) {
+				$script:countSkip++
+				Write-GUIProgress -CurrentFile $file.Name
+				return
+			}
+			& $ffmpeg -nostdin -v error -i "$out_base$part_suffix_known.$current_format_out" -f null - 2>&1 | Out-Null
 			if ($LASTEXITCODE -eq 0) {
 				$script:countSkip++
 				Write-GUIProgress -CurrentFile $file.Name
 				return
+			} elseif ($dry_run -eq "yes") {
+				# D7. Dry-run обещает «только показать команды». Удаление битого выхода —
+				# мутация, и при холостом прогоне её быть не должно.
+				Log-Msg "WARN" "[DRY-RUN] битый файл был бы удалён: $out_base$part_suffix_known.$current_format_out"
 			} else {
 				Log-Msg "WARN" "Удаление битого файла: $out_base$part_suffix_known.$current_format_out"
 				Remove-Item -LiteralPath "$out_base$part_suffix_known.$current_format_out" -Force
@@ -942,7 +1087,19 @@ function Encode-File {
 
 	# E4 + J1. Один вызов ffmpeg -i для битрейта и длительности (раньше запускались
 	# два отдельных pipeline'а на тот же файл — лишняя задержка для больших библиотек).
-	$ffmpeg_info = (& $ffmpeg -i $full_path 2>&1 | Out-String)
+	#
+	# Склейка строк вручную, а НЕ Out-String: тот переносит вывод по ширине хоста
+	# ($Host.UI.RawUI.BufferSize, в hostless-runspace — 80 символов), и строка
+	# `Stream #0:0: Video: h264 ..., 4523 kb/s` длиной 150-200 символов рвалась до
+	# `kb/s` — регексп F25 не совпадал никогда, битрейт видеопотока не читался,
+	# и на каждом файле печаталось ложное предупреждение об откате на битрейт контейнера.
+	#
+	# Без локального ffmpeg (тонкий клиент) вызывать нечего: CommandNotFoundException —
+	# терминирующая и уходит в top-level trap, обрывая весь пакет.
+	$ffmpeg_info = ""
+	if ($ffmpeg_available) {
+		$ffmpeg_info = ((& $ffmpeg -nostdin -i $full_path 2>&1 | ForEach-Object { "$_" }) -join "`n")
+	}
 
 	# F25. Битрейт ИМЕННО видеопотока: строка `Stream #...: Video: ..., N kb/s`.
 	# Раньше брали `Duration: ..., bitrate: N kb/s` — это битрейт КОНТЕЙНЕРА
@@ -983,10 +1140,31 @@ function Encode-File {
 			$convert_args += @("-map_metadata", "0")  # сохранить глобальные теги источника
 	}
 
+	# Одна загрузка на исходный файл, задач — по одной на часть. Обнуление стоит
+	# ДО блока определения длительности: тонкий клиент грузит файл именно там,
+	# и сброс после него стёр бы уже полученный идентификатор.
+	$script:remoteUploadId = ''
+	$script:remoteSubId = ''
 	$fileDuration = 0
 	$dur_match = [regex]::Match($ffmpeg_info, "Duration:\s+(\d+):(\d+):(\d+)")
 	if ($dur_match.Success) {
 		$fileDuration = [int]$dur_match.Groups[1].Value * 3600 + [int]$dur_match.Groups[2].Value * 60 + [int]$dur_match.Groups[3].Value
+	}
+
+	# Запасной источник длительности — ответ службы на POST /uploads/{id}/complete.
+	# Он нужен ДО расчёта границ частей, поэтому загрузку делаем здесь, а не в цикле:
+	# иначе `remote_active = yes` + `[split] length` у тонкого клиента давали
+	# «Длительность неизвестна, разбиение пропущено», и фолбэк был мёртв. Загрузка
+	# одна на файл — блок в цикле по частям её не повторит. Паритет с .sh.
+	if ($remote_active -eq 'yes' -and $dry_run -ne 'yes' -and $fileDuration -le 0 -and $length_coding_status -eq '+') {
+		Log-Msg "INFO" "Длительность неизвестна локально — берём её у службы: $($file.Name)"
+		$script:_remoteUploadName = $file.Name
+		$script:RemoteUploadSidecar = "$manifest.upload"
+		$script:remoteUploadId = Send-RemoteUpload $full_path
+		$script:RemoteUploadSidecar = ''
+		if ($script:remoteUploadId -and $script:RemoteUploadDuration) {
+			$fileDuration = [int]([double]$script:RemoteUploadDuration)
+		}
 	}
 
 	# Видео/аудио фильтры для текущего файла. _base — снимок до per-part модификаций
@@ -1015,7 +1193,10 @@ function Encode-File {
 				if ($lineStr -match "silence_start:\s+(-?[\d.]+)") { $silence_start_val = [double]$matches[1] }
 				if ($lineStr -match "silence_end:\s+(-?[\d.]+)" -and $null -ne $silence_start_val) {
 					$silence_end_val = [double]$matches[1]
-					$split_points += [int](($silence_start_val + $silence_end_val) / 2)
+					# Floor, а не [int]: приведение к int в .NET округляет «к ближайшему
+					# чётному» (банковское), а printf "%d" в .sh усекает — точка разреза
+					# по одной и той же паузе отличалась между платформами на секунду.
+					$split_points += [int][Math]::Floor(($silence_start_val + $silence_end_val) / 2)
 				}
 			}
 		}
@@ -1067,9 +1248,20 @@ function Encode-File {
 	}
 
 	# Duration N/A или 0 → num пуст → файл молча пропускался. Обрабатываем целиком.
+	#
+	# «Целиком» обязано означать целиком. Раньше сбрасывался только массив границ, а
+	# $current_set_length оставался равным `-t L` — выход без суффикса «(part.N)»
+	# содержал ПЕРВЫЕ L секунд, статус OK, manifest записан, и следующий прогон
+	# пропускал файл навсегда. Входы с Duration: N/A реальны: недописанные mkv/webm.
+	$lengthDisabled = $false
 	if ($num.Count -eq 0) {
 		$num = @(0)
-		Log-Msg "WARN" "Длительность неизвестна, разбиение пропущено: $($file.Name)"
+		if ($set_length_coding) {
+			Log-Msg "WARN" "Длительность неизвестна: разбиение пропущено И ограничение длительности снято, файл обрабатывается целиком: $($file.Name)"
+			$lengthDisabled = $true
+		} else {
+			Log-Msg "WARN" "Длительность неизвестна, разбиение пропущено: $($file.Name)"
+		}
 	}
 
 	if ($start_coding_status -eq "+") { $num = @($start_coding_value) }
@@ -1080,9 +1272,6 @@ function Encode-File {
 	# и счётчики молча терялись бы.
 	$script:produced = @()
 	$script:anyFail = $false
-	# Одна загрузка на исходный файл, задач — по одной на часть.
-	$script:remoteUploadId = ''
-	$script:remoteSubId = ''
 
 	# F29. Размер входа засчитываем ОДИН раз на исходный файл. Раньше он прибавлялся
 	# на КАЖДУЮ часть, поэтому при разбиении на N частей вход суммировался N раз —
@@ -1099,7 +1288,9 @@ function Encode-File {
 		$current_af_parts = [System.Collections.ArrayList]@($af_parts_base)
 
 		$current_set_length = $set_length_coding
-		if ($split_by_silence -eq "yes" -and $length_coding_status -eq "+") {
+		# Длительность неизвестна → -t снят вместе с разбиением (см. выше).
+		if ($lengthDisabled) { $current_set_length = "" }
+		if ($split_by_silence -eq "yes" -and $length_coding_status -eq "+" -and -not $lengthDisabled) {
 			$silent_idx = $c - 1
 			if ($length_silent_values.ContainsKey($silent_idx)) {
 				# F16. "END" — последняя часть: -t не ставим вообще, иначе хвост обрезается.
@@ -1121,7 +1312,17 @@ function Encode-File {
 					$sub_file = "$folder_sources$file_path$input_stem.$ext"
 					if (Test-Path -LiteralPath $sub_file) {
 						if ($video_subtitles_value -eq "burn") {
-							$sub_escaped = $sub_file -replace '\\','/' -replace "'","\'" -replace ':','\:' -replace '\[','\[' -replace '\]','\]' -replace ';','\;' -replace '%','\%'; $sub_burned = $true
+							# Апостроф — единственный символ, которого не спасают кавычки
+							# вокруг значения: внутри '…' backslash копируется буквально,
+							# а первая же ' закрывает строку. Разбор двухуровневый (граф
+							# фильтров → опции фильтра), поэтому экранирований два:
+							# уровень опций ' → \' и уровень графа ' → '\'' — вместе \'\''.
+							# Проверено на ffmpeg 8.1.2: и \' , и '\'' по отдельности дают
+							# «Unable to open …/its video». Паритет с .sh и .cmd.
+							$sub_escaped = $sub_file -replace '\\','/'
+							$sub_escaped = $sub_escaped.Replace("'", "\'\''")
+							$sub_escaped = $sub_escaped -replace ':','\:' -replace '\[','\[' -replace '\]','\]' -replace ';','\;' -replace '%','\%'
+							$sub_burned = $true
 							# subtitles — CPU-фильтр: на GPU-кадрах (hwaccel_output_format cuda/qsv)
 							# ffmpeg падает с "Impossible to convert between the formats". Скачиваем
 							# кадры в системную память перед прожигом. Проверено на RTX 5060 Ti.
@@ -1195,11 +1396,17 @@ function Encode-File {
 		if ($partRemote) {
 			$rLen = 0
 			if ($current_set_length -match '^-t\s+(\d+)') { $rLen = [int]$Matches[1] }
-			$rMap = Get-RemoteOpForConfig ([int]$b) $rLen
+			# Третий аргумент — «sidecar найден»: без него поле subtitles уезжало
+			# службе и при отсутствующем файле титров.
+			$rMap = Get-RemoteOpForConfig ([int]$b) $rLen ([bool]$sub_found)
 			if ($null -eq $rMap) {
 				Log-Msg "FAIL" "$($file.Name): кодек $set_video_codec служба не поддерживает"
 				$script:anyFail = $true; $script:countFail++
 				$partRemote = $false; $partDone = $true
+			} elseif ($dry_run -eq 'yes') {
+				# dry_run НЕ загружает: «только показать команды» не имеет права
+				# стоить часов трафика и гигабайт в хранилище службы.
+				$script:remoteUploadId = '<pending>'
 			} elseif (-not $script:remoteUploadId) {
 				Log-Msg "INFO" "Отправка на сервер: $($file.Name)"
 				$script:_remoteUploadName = $file.Name
@@ -1212,14 +1419,29 @@ function Encode-File {
 				if ($script:remoteUploadId) {
 					# Длительность из ответа службы — запасной источник для тонкого
 					# клиента без локального ffmpeg.
-					if ((-not $file_duration -or $file_duration -le 0) -and $script:RemoteUploadDuration) {
-						$file_duration = [int]([double]$script:RemoteUploadDuration)
+					# Имя переменной здесь — $fileDuration: писалось $file_duration, а
+					# читалось везде $fileDuration, и «запасной источник длительности»
+					# был мёртв на этой платформе.
+					if ((-not $fileDuration -or $fileDuration -le 0) -and $script:RemoteUploadDuration) {
+						$fileDuration = [int]([double]$script:RemoteUploadDuration)
 					}
 					$script:remoteSubId = ''
 					# Файл субтитров приходит той же дорогой, что видео: путей в
 					# параметрах служба не принимает по построению.
+					# Провал загрузки титров — ПРОВАЛ части, а не тихое «без титров»:
+					# раньше задача создавалась без subtitle_upload_id, и файл
+					# приезжал без субтитров со статусом OK.
 					if ($sub_found -and $sub_file) {
 						$script:remoteSubId = Send-RemoteUpload $sub_file
+						if (-not $script:remoteSubId) {
+							if (Test-RemoteFallbackAllowed $file.Name "загрузка файла субтитров не удалась") {
+								$partRemote = $false
+							} else {
+								Log-Msg "FAIL" "$($file.Name): загрузка файла субтитров не удалась"
+								$script:anyFail = $true; $script:countFail++
+								$partRemote = $false; $partDone = $true
+							}
+						}
 					}
 				} else {
 					if (Test-RemoteFallbackAllowed $file.Name "загрузка не удалась") {
@@ -1308,6 +1530,15 @@ function Encode-File {
 				if ($null -ne $EventArgs.Data) { [void]$Event.MessageData.Add($EventArgs.Data) }
 			}
 			$errSub = Register-ObjectEvent -InputObject $proc -EventName ErrorDataReceived -Action $errHandler -MessageData $errBuf
+			# try/finally вокруг всей жизни процесса. Ctrl+C в CLI останавливает конвейер
+			# PowerShell, но НЕ доходит до ffmpeg: он запущен с CreateNoWindow, то есть в
+			# собственной скрытой консоли, куда CTRL_C_EVENT родительской консоли не
+			# доставляется. Без finally он дописывал файл до конца (часы на большом входе),
+			# а .ffconv-partial-* оставался в destination. GUI-путь защищён cancel-файлом,
+			# .sh — trap-ом; CLI-PS1 был единственным незакрытым. finally выполняется и при
+			# остановке конвейера.
+			$procDone = $false
+			try {
 			$proc.Start() | Out-Null
 			$proc.BeginErrorReadLine()
 
@@ -1374,6 +1605,15 @@ function Encode-File {
 			} else {
 				# Публикация — общая с удалённым путём (см. Publish-EncodedResult выше).
 				Publish-EncodedResult $file $out_tmp $out_file $startTime | Out-Null
+			}
+			$procDone = $true
+			} finally {
+				if (-not $procDone) {
+					try { if ($proc -and -not $proc.HasExited) { $proc.Kill() } } catch {}
+					if ($errSub) { Unregister-Event -SourceIdentifier $errSub.Name -ErrorAction SilentlyContinue; Remove-Job $errSub -Force -ErrorAction SilentlyContinue }
+					Remove-Item -LiteralPath $progressTempFile -Force -ErrorAction SilentlyContinue
+					if (Test-Path -LiteralPath $out_tmp) { Remove-Item -LiteralPath $out_tmp -Force -ErrorAction SilentlyContinue }
+				}
 			}
 		}
 		$c++
@@ -1461,10 +1701,17 @@ if ($env:FFCONV_REMOTE_SELFTEST -eq '1') {
 if ($merge_files -eq "yes") {
 	if (($format_files_in_list | Measure-Object).Count -eq 0) {
 		Log-Msg "WARN" "Нет файлов для объединения в $folder_sources"
+		$script:countSkip++
 	} else {
 	$_mergeSorted = $format_files_in_list | Sort-Object FullName  # F10: паритет с .sh sort -z
 		$fname = $_mergeSorted[0].Name
-	if ($overwrite_existing -eq "yes" -or !(Test-Path -LiteralPath "$folder_destination\$fname")) {
+	if ($overwrite_existing -ne "yes" -and (Test-Path -LiteralPath "$folder_destination\$fname")) {
+		# Цель существует, а перезапись выключена — это ПРОПУСК, и он обязан быть
+		# назван. Раньше ветки не было вовсе: сводка показывала 0/0/0, rc=0, GUI писал
+		# «Готово», и понять, почему объединения не произошло, было нечем.
+		Log-Msg "SKIP" "Объединение пропущено: «$folder_destination\$fname» уже существует (overwrite_existing = no)"
+		$script:countSkip++
+	} else {
 		$tmpFile = [System.IO.Path]::GetTempFileName()
 		[System.IO.File]::WriteAllLines($tmpFile, ($_mergeSorted.FullName | ForEach-Object { "file '" + ($_ -replace "'", "'\''") + "'" }))
 		# Мержим в соседний temp, а не сразу поверх цели. Прежний вызов шёл без -y на
@@ -1483,13 +1730,19 @@ if ($merge_files -eq "yes") {
 		if ($_mergeTargetIsInput) {
 			Log-Msg "FAIL" "Объединение отклонено: результат «$mergeTarget» совпадает с одним из входов (in-place merge затёр бы источник). Задайте другой destination."
 			$script:countFail++
+			# Временный concat-список удаляем и здесь: без этого отклонённый in-place
+			# мерж оставлял файл в %TEMP% на каждом прогоне.
+			Remove-Item -LiteralPath $tmpFile -Force -ErrorAction SilentlyContinue
 		} elseif ($dry_run -eq "yes") {
 			Write-Host "[DRY-RUN] $ffmpeg -hide_banner -nostdin -strict -2 -f concat -safe 0 -i `"$tmpFile`" -c copy -map 0 -y `"$mergeTmp`""
 			Remove-Item $tmpFile -Force
 		} else {
 			Log-Msg "INFO" "Объединение файлов -> $mergeTarget"
 			if (Test-Path -LiteralPath $mergeTmp) { Remove-Item -LiteralPath $mergeTmp -Force -ErrorAction SilentlyContinue }
-			& $ffmpeg -hide_banner -nostdin -strict -2 -f concat -safe 0 -i $tmpFile -c copy -map 0 -y $mergeTmp
+			# 2>&1 в конвейер: в hostless-runspace GUI stderr нативной команды иначе
+			# оседает в $ps.Streams.Error, и успешное объединение показывалось как
+			# «Ошибка» с MessageBox.
+			& $ffmpeg -hide_banner -nostdin -strict -2 -f concat -safe 0 -i $tmpFile -c copy -map 0 -y $mergeTmp 2>&1 | ForEach-Object { Write-Host "$_" }
 			$mergeRc = $LASTEXITCODE
 			# rc=0 сам по себе не гарантирует читаемый контейнер — валидируем тем же
 			# `-f null -`, что и обычные выходные файлы, и только потом подменяем цель.
@@ -1539,6 +1792,12 @@ if (-not $guiProgressFile) {
 	# CLI: показываем сводку в консоли
 	Write-Host ""
 	Write-Host "══════════════════════════════════════════════"
+	# Пустой прогон обязан объяснять себя: сводка 0/0/0 без единой строки
+	# неотличима от «отработало и ничего не нашло по ошибке в пути», а GUI при
+	# этом показывает «Готово».
+	if (($format_files_in_list | Measure-Object).Count -eq 0) {
+		Write-Host ("  Входных файлов не найдено: в «{0}» нет файлов с расширениями из [files] format_files_in ({1})." -f $folder_sources, $format_files_in)
+	}
 	Write-Host ("  Обработано:  {0} файлов" -f $script:countOk)
 	Write-Host ("  Пропущено:   {0} (уже существуют)" -f $script:countSkip)
 	Write-Host ("  Ошибки:      {0}" -f $script:countFail)

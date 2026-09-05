@@ -86,7 +86,7 @@ remote_map_codec() {
 # и результат тихо разойдётся с локальным. Поэтому каждое включённое (+) поле
 # config.ini обязано оказаться здесь.
 remote_op_for_config() {
-	local start_sec="${1:-0}" length_sec="${2:-0}"
+	local start_sec="${1:-0}" length_sec="${2:-0}" sub_found="${3:-0}"
 	local op="transcode" p=""
 
 	local codec
@@ -103,7 +103,10 @@ remote_op_for_config() {
 	fi
 
 	[ "$video_resolution_status" = "+" ] && p="$p,\"resolution\":\"$video_resolution_value\""
-	if [ "$keep_aspect_ratio_value" = "yes" ]; then
+	# Статус ключа значим ровно так же, как значение: локальный путь требует «+»
+	# (script.sh: scale_backend/pad), и `keep_aspect_ratio = -yes` локально означает
+	# «выключено», а удалённо уезжало как true — один config.ini давал разную геометрию.
+	if [ "$keep_aspect_ratio_status" = "+" ] && [ "$keep_aspect_ratio_value" = "yes" ]; then
 		p="$p,\"keep_aspect\":true"
 	else
 		p="$p,\"keep_aspect\":false"
@@ -116,25 +119,47 @@ remote_op_for_config() {
 		p="$p,\"speed\":$playback_speed_value"
 	fi
 
-	if [ "$video_subtitles_status" = "+" ]; then
+	# Поле subtitles уезжает только когда sidecar РЕАЛЬНО найден. Раньше оно шло по
+	# одному статусу ключа: `subtitles = +burn` без файла локально означал «кодируем
+	# без титров», а службе отправлялось "subtitles":"burn" без subtitle_upload_id —
+	# либо 400 на каждом файле (уже ПОСЛЕ полной загрузки видео), либо молчаливое
+	# игнорирование. Тот же путь проходила и --remote-selftest.
+	if [ "$video_subtitles_status" = "+" ] && [ "$sub_found" = "1" ]; then
 		p="$p,\"subtitles\":\"$video_subtitles_value\""
 		[ -n "$subtitles_style" ] && \
 			p="$p,\"subtitle_style\":\"$(remote_json_escape "$subtitles_style")\""
 	fi
 
-	p="$p,\"container\":\"$output_container_value\""
+	# Контейнер — ПО СТАТУСУ, как в локальном пути (script.sh: «+» → значение,
+	# иначе mp4). Раньше значение бралось всегда: `container = -mkv` локально давал
+	# movie.mp4, а службе уходило "container":"mkv" — она отдавала Matroska, клиент
+	# клал её в .ffconv-partial-movie.mp4, проверка `-f null -` по содержимому
+	# проходила, и публиковался movie.mp4 с MKV внутри. Тихо неверный результат.
+	if [ "$output_container_status" = "+" ]; then
+		p="$p,\"container\":\"$output_container_value\""
+	else
+		p="$p,\"container\":\"mp4\""
+	fi
 	p="$p,\"threads\":${threads:-4}"
 
 	[ "$gpu_preset_status" = "+" ] && p="$p,\"preset\":\"$gpu_preset_value\""
 	[ "$gpu_tune_status" = "+" ]   && p="$p,\"tune\":\"$gpu_tune_value\""
 	[ "$gpu_rc_status" = "+" ]     && p="$p,\"rc\":\"$gpu_rc_value\""
 
-	local a="\"codec\":\"${audio_codec_value}\""
-	[ "$audio_codec_status" = "+" ] || a="\"codec\":\"copy\""
-	[ "$audio_bitrate_status" = "+" ]         && a="$a,\"bitrate\":$audio_bitrate_value"
-	[ "$audio_number_channels_status" = "+" ] && a="$a,\"channels\":$audio_number_channels_value"
-	[ "$audio_sampling_rate_status" = "+" ]   && a="$a,\"rate\":$audio_sampling_rate_value"
-	[ "$audio_normalize_status" = "+" ]       && a="$a,\"normalize\":\"$audio_normalize_value\""
+	# `codec` без статуса «+» означает «звук не трогаем» — локально скрипт не ставит
+	# -c:a вовсе. Тогда bitrate/channels/rate бессмысленны: перекодирования нет, и
+	# запрос «copy плюс битрейт 128» противоречив (служба отвечает 400 либо молча
+	# решает по-своему). Отправляем только сам copy.
+	local a
+	if [ "$audio_codec_status" = "+" ]; then
+		a="\"codec\":\"${audio_codec_value}\""
+		[ "$audio_bitrate_status" = "+" ]         && a="$a,\"bitrate\":$audio_bitrate_value"
+		[ "$audio_number_channels_status" = "+" ] && a="$a,\"channels\":$audio_number_channels_value"
+		[ "$audio_sampling_rate_status" = "+" ]   && a="$a,\"rate\":$audio_sampling_rate_value"
+		[ "$audio_normalize_status" = "+" ]       && a="$a,\"normalize\":\"$audio_normalize_value\""
+	else
+		a="\"codec\":\"copy\""
+	fi
 	p="$p,\"audio\":{$a}"
 
 	# Отрезок — это op: cut с перекодированием, а не op: split. Разрезание на
@@ -164,11 +189,22 @@ remote_op_for_config() {
 # возвращает пустоту вместо числа, и падает это только на macOS-джобе CI.
 # Кавычка исключена из класса намеренно: пустая строка ("") обязана дать пустой
 # результат, как и раньше, а не два символа кавычек.
+#
+# `.*"key"` — ЖАДНЫЙ префикс, то есть sed берёт ПОСЛЕДНЕЕ вхождение ключа в строке.
+# Для плоского ответа это одно и то же, но ответы вложенные: у
+# {"state":"running","steps":[{"state":"done"}]} поле state читалось как "done", и
+# клиент считал завершённой задачу, которая ещё идёт. Берём ПЕРВОЕ вхождение: срезаем
+# всё до первого `"key"` отдельным шагом, а значение вынимаем уже из хвоста.
 remote_json_field() {
-	local json="$1" key="$2" v
-	v="$(printf '%s' "$json" | sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -1)"
+	local json="$1" key="$2" tail v
+	# Переводы строк схлопываем: pretty-printed JSON от службы иначе не разбирается
+	# построчным sed вовсе (ключ и значение оказываются на разных строках).
+	json="$(printf '%s' "$json" | tr '\n' ' ')"
+	case "$json" in *"\"${key}\""*) ;; *) return 0 ;; esac
+	tail="${json#*\"${key}\"}"
+	v="$(printf '%s' "$tail" | sed -n "s/^[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -1)"
 	if [ -n "$v" ]; then printf '%s' "$v"; return 0; fi
-	v="$(printf '%s' "$json" | sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\([^\",}[:space:]]\{1,\}\).*/\1/p" | head -1)"
+	v="$(printf '%s' "$tail" | sed -n "s/^[[:space:]]*:[[:space:]]*\([^\",}[:space:]]\{1,\}\).*/\1/p" | head -1)"
 	printf '%s' "$v"
 }
 
@@ -200,20 +236,57 @@ REMOTE_HTTP_BODY=""
 remote_http() {
 	local method="$1" path="$2" body="${3:-}"; shift 3 2>/dev/null || shift $#
 	local curl_bin="${CURL_BIN:-curl}"
-	local args=(-sS -X "$method" -w '\n%{http_code}')
+	# --connect-timeout/--max-time обязательны: без них зависший TCP-connect держит
+	# клиента до таймаута ОС (на Linux — минуты), а `remote_cancel` из trap'а Ctrl+C
+	# при этом блокирует выход. Значения — для КОРОТКИХ запросов; отправка куска идёт
+	# через remote_upload_chunk со своим потолком.
+	local args=(-sS -X "$method" -w '\n%{http_code}'
+		--connect-timeout "${REMOTE_CONNECT_TIMEOUT:-10}"
+		--max-time "${REMOTE_MAX_TIME:-60}")
 	local h
 	for h in "$@"; do args+=(-H "$h"); done
 	if [ -n "$body" ]; then
 		args+=(-H "Content-Type: application/json" --data-binary "$body")
 	fi
-	local out
+	local out err_file
 	REMOTE_HTTP_BODY=""
-	out="$(remote_curl_auth | "$curl_bin" --config - "${args[@]}" "${remote_endpoint}${path}" 2>/dev/null)" || {
-		REMOTE_HTTP_CODE="000"; return 1
+	# stderr curl'а не выбрасываем, а сохраняем: «HTTP 000» без причины — самая
+	# бесполезная строка, которую может увидеть пользователь.
+	err_file="$(mktemp "${TMPDIR:-/tmp}/ffconv_curl_XXXXXX")"
+	out="$(remote_curl_auth | "$curl_bin" --config - "${args[@]}" "${remote_endpoint}${path}" 2>"$err_file")" || {
+		REMOTE_HTTP_CODE="000"
+		local why; why="$(head -3 "$err_file" | tr '\n' ' ')"
+		[ -n "$why" ] && echo "[ПРЕДУПРЕЖДЕНИЕ] curl: $why" >&2
+		rm -f "$err_file"
+		return 1
 	}
+	rm -f "$err_file"
 	REMOTE_HTTP_CODE="${out##*$'\n'}"
 	REMOTE_HTTP_BODY="${out%$'\n'*}"
 	return 0
+}
+
+# Единая retry-политика для КОРОТКИХ запросов (poll/submit/fetch/cancel).
+# До этого повтор был только у PATCH куска, и одна минутная пауза службы (рестарт,
+# 502 от reverse-proxy, 429) на пакете в 200 файлов давала N провалов и N задач-сирот
+# на карте. Повторяем только то, что имеет смысл повторять (remote_retryable_code),
+# пауза растёт, `Retry-After` уважается.
+remote_http_retry() {
+	local tries="${REMOTE_HTTP_RETRIES:-4}" try=1 pause="${REMOTE_RETRY_SECONDS:-3}"
+	while :; do
+		remote_http "$@"
+		case "$REMOTE_HTTP_CODE" in 200|201|202|204) return 0 ;; esac
+		remote_retryable_code "$REMOTE_HTTP_CODE" || return 1
+		[ "$try" -ge "$tries" ] && return 1
+		# Retry-After в теле служба не шлёт, а заголовки мы не читаем — берём
+		# растущую паузу с потолком в минуту.
+		local wait_s="$pause"
+		[ "$wait_s" -gt 60 ] 2>/dev/null && wait_s=60
+		echo "[ПРЕДУПРЕЖДЕНИЕ] Служба ответила HTTP $REMOTE_HTTP_CODE — повтор через ${wait_s}с (попытка $((try + 1)) из $tries)." >&2
+		sleep "$wait_s"
+		pause=$((pause * 2))
+		try=$((try + 1))
+	done
 }
 
 # --- Предпусковая проверка ---
@@ -223,6 +296,10 @@ remote_http() {
 REMOTE_CAPS_ARGS_VERSION=""
 REMOTE_CAPS_ENCODERS=""
 REMOTE_CHUNK_SIZE=""
+# Версия сборщика аргументов, на которую рассчитан ЭТОТ клиент. Бампить вместе с
+# изменением набора полей в remote_op_for_config/remote_job_body. Значение обязано
+# совпадать в .sh и .ps1 — это сверяет test_23_remote_parity.sh.
+REMOTE_CLIENT_ARGS_VERSION="1"
 
 # Ключ службы из внешнего источника. Приоритет: api_key_command → api_key.
 # Файл config.ini не коммитится, но остаётся в бэкапах и в синхронизируемой
@@ -230,8 +307,12 @@ REMOTE_CHUNK_SIZE=""
 # оболочки. Команда (`pass show …`, `security find-generic-password`, `op read`)
 # не оставляет значения ни там, ни там. Выполняется ОДИН раз, в preflight:
 # менеджер паролей может спросить пароль, и делать это на каждом файле нельзя.
+# Однократный кэш: --remote-selftest выполняет preflight дважды, и менеджер
+# паролей спрашивал пароль два раза подряд на одном прогоне.
+REMOTE_API_KEY_RESOLVED="no"
 remote_resolve_api_key() {
 	[ -n "${remote_api_key_command:-}" ] || return 0
+	[ "$REMOTE_API_KEY_RESOLVED" = "yes" ] && return 0
 	local out
 	out="$(eval "$remote_api_key_command" 2>/dev/null)" || {
 		echo "[ОШИБКА] [remote] api_key_command завершилась с ошибкой — ключ не получен." >&2
@@ -245,6 +326,7 @@ remote_resolve_api_key() {
 		return 1
 	fi
 	remote_api_key="$out"
+	REMOTE_API_KEY_RESOLVED="yes"
 	return 0
 }
 
@@ -253,8 +335,18 @@ remote_resolve_api_key() {
 # remote_map_codec. Поэтому сверяем по семейству: наличие h264_nvenc означает,
 # что h264 служба посчитает. Сверять литерально («нет libx264 → отказ») нельзя:
 # это противоречило бы самому отображению, ради которого оно и заведено.
+# tr '\n' ' ' — pretty-printed JSON: без склейки строк список энкодеров, разбитый
+# на строки, не находится вовсе, и «служба не объявила» принимало ЛЮБОЙ кодек.
 remote_caps_encoders() {
-	printf '%s' "$1" | sed -n 's/.*"encoders"[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/p' | head -1
+	printf '%s' "$1" | tr '\n' ' ' | sed -n 's/.*"encoders"[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/p' | head -1
+}
+
+# Пустой список ("encoders": []) и отсутствие ключа — РАЗНЫЕ вещи. Первое означает
+# «служба не умеет ничего», второе — «служба ничего не сказала», и раньше оба
+# приводили к «принять любой кодек».
+remote_caps_declared() {
+	case "$(printf '%s' "$1" | tr '\n' ' ')" in *'"encoders"'*) return 0 ;; esac
+	return 1
 }
 
 remote_caps_has_codec() {
@@ -273,12 +365,53 @@ remote_caps_has_codec() {
 	return 1
 }
 
+# Всё, что уезжает в JSON без кавычек, обязано быть проверено ДО загрузки гигабайт.
+# Нечисловой wait_timeout («30 мин») давал невалидное тело `{"wait_timeout":30 мин}`,
+# и обнаруживалось это ПОСЛЕ полной отправки файла; prefer вне списка служба
+# отвергает 400 там же. Паритет с Test-RemoteConfigValues в .ps1.
+remote_validate_config() {
+	local ok=0
+	case "${remote_wait_timeout:-1800}" in
+		''|*[!0-9]*) echo "[ОШИБКА] [remote] wait_timeout должен быть целым числом секунд (получено: '${remote_wait_timeout}')." >&2; ok=1 ;;
+	esac
+	case "${remote_stall_timeout:-900}" in
+		''|*[!0-9]*) echo "[ОШИБКА] [remote] stall_timeout должен быть целым числом секунд (получено: '${remote_stall_timeout}')." >&2; ok=1 ;;
+	esac
+	case "${remote_prefer:-auto}" in
+		auto|gpu|cpu) ;;
+		*) echo "[ОШИБКА] [remote] prefer принимает auto, gpu или cpu (получено: '${remote_prefer}')." >&2; ok=1 ;;
+	esac
+	case "${remote_on_failure:-abort}" in
+		abort|local) ;;
+		*) echo "[ОШИБКА] [remote] on_failure принимает abort или local (получено: '${remote_on_failure}')." >&2; ok=1 ;;
+	esac
+	if [ "$video_resolution_status" = "+" ]; then
+		case "$video_resolution_value" in
+			*[!0-9x]*|x*|*x) echo "[ОШИБКА] [video] resolution ожидается в виде ШИРИНАxВЫСОТА без пробелов (получено: '${video_resolution_value}')." >&2; ok=1 ;;
+			*x*) ;;
+			*) echo "[ОШИБКА] [video] resolution ожидается в виде ШИРИНАxВЫСОТА (получено: '${video_resolution_value}')." >&2; ok=1 ;;
+		esac
+	fi
+	if [ "$video_bitrate_status" = "+" ]; then
+		case "$video_bitrate_value" in
+			''|*[!0-9]*) echo "[ОШИБКА] [video] bitrate ожидается числом в кбит/с без суффикса (получено: '${video_bitrate_value}')." >&2; ok=1 ;;
+		esac
+	fi
+	if [ "$audio_bitrate_status" = "+" ]; then
+		case "$audio_bitrate_value" in
+			''|*[!0-9]*) echo "[ОШИБКА] [audio] bitrate ожидается числом в кбит/с без суффикса (получено: '${audio_bitrate_value}')." >&2; ok=1 ;;
+		esac
+	fi
+	return $ok
+}
+
 remote_preflight() {
 	remote_endpoint="$(remote_normalize_endpoint "$remote_endpoint")"
 	if [ -z "$remote_endpoint" ]; then
 		echo "[ОШИБКА] [remote] enabled = yes, но адрес службы пуст. Задайте [remote] endpoint в config.ini (или переменную окружения TRANSCODE_URL)." >&2
 		return 1
 	fi
+	remote_validate_config || return 1
 	remote_resolve_api_key || return 1
 	if [ -z "$remote_api_key" ]; then
 		echo "[ОШИБКА] [remote] enabled = yes, но ключ службы пуст. Задайте [remote] api_key (или api_key_command) в config.ini, либо переменную окружения TRANSCODE_API_KEY." >&2
@@ -320,15 +453,25 @@ remote_preflight() {
 		echo "[ОШИБКА] Кодек «${set_video_codec}» удалённой службе неизвестен (ожидаются h264/hevc/av1-энкодеры)." >&2
 		return 1
 	fi
+	# Пустой список и отсутствие ключа — разные вещи: первое означает «служба не
+	# умеет ничего» и обязано быть отказом, второе — «служба ничего не сказала».
+	if remote_caps_declared "$caps" && [ -z "$REMOTE_CAPS_ENCODERS" ]; then
+		echo "[ОШИБКА] Служба объявила пустой список энкодеров — считать нечем." >&2
+		return 1
+	fi
 	if ! remote_caps_has_codec "$family" "$REMOTE_CAPS_ENCODERS"; then
 		echo "[ОШИБКА] Служба не умеет кодек «${family}» (из [video] codec = $set_video_codec). Служба объявила: $REMOTE_CAPS_ENCODERS" >&2
 		return 1
 	fi
 	# Версия сборщика аргументов службы. Расхождение не запрещает работу, но
 	# молча получить файл, собранный логикой, которой у нас нет, — хуже, чем шумно.
-	if [ -n "${REMOTE_KNOWN_ARGS_VERSION:-}" ] && \
-	   [ "$REMOTE_CAPS_ARGS_VERSION" != "$REMOTE_KNOWN_ARGS_VERSION" ]; then
-		echo "[ПРЕДУПРЕЖДЕНИЕ] Служба собирает аргументы версии $REMOTE_CAPS_ARGS_VERSION, клиент рассчитан на $REMOTE_KNOWN_ARGS_VERSION. Сверьте холостой прогон."
+	# Ожидаемое значение — КОНСТАНТА клиента: раньше сверка шла только при
+	# переменной окружения REMOTE_KNOWN_ARGS_VERSION, которую никто нигде не
+	# задавал, то есть риск из §13 спеки не был закрыт вовсе.
+	local known="${REMOTE_KNOWN_ARGS_VERSION:-$REMOTE_CLIENT_ARGS_VERSION}"
+	if [ -n "$known" ] && [ -n "$REMOTE_CAPS_ARGS_VERSION" ] && \
+	   [ "$REMOTE_CAPS_ARGS_VERSION" != "$known" ]; then
+		echo "[ПРЕДУПРЕЖДЕНИЕ] Служба собирает аргументы версии $REMOTE_CAPS_ARGS_VERSION, клиент рассчитан на $known. Сверьте холостой прогон (--remote-selftest)."
 	fi
 	return 0
 }
@@ -369,16 +512,46 @@ remote_sha256() {
 # что спека называет недопустимым. Путь задаёт вызывающий (REMOTE_UPLOAD_SIDECAR,
 # рядом с manifest'ом): модуль не знает раскладки каталога назначения, а пустое
 # значение просто отключает докачку между запусками (субтитры, самопроверка).
+# Время изменения источника — вторая половина отпечатка. Один размер ничего не
+# доказывает: подмена файла другим той же длины (перекодировка, восстановление из
+# бэкапа) заставляла клиент докачивать ЧУЖИЕ байты в старую загрузку, и complete
+# отвечал 409 на верно собранном по мнению клиента файле.
+remote_file_mtime() {
+	stat -c%Y "$1" 2>/dev/null || stat -f%m "$1" 2>/dev/null || echo 0
+}
+
 remote_upload_sidecar_read() {
-	local f="$REMOTE_UPLOAD_SIDECAR" src="$1" uid="" size="" ep=""
+	local f="$REMOTE_UPLOAD_SIDECAR" src="$1" uid="" size="" ep="" mt=""
 	[ -n "$f" ] && [ -f "$f" ] || return 0
 	uid="$(sed -n 's/^upload_id=//p' "$f" | head -1)"
 	size="$(sed -n 's/^size=//p' "$f" | head -1)"
 	ep="$(sed -n 's/^endpoint=//p' "$f" | head -1)"
+	mt="$(sed -n 's/^mtime=//p' "$f" | head -1)"
 	# Источник изменился или сменилась служба — прежние байты не наши.
 	[ "$size" = "$(file_size "$src")" ] || return 0
 	[ "$ep" = "$remote_endpoint" ] || return 0
+	# Старый sidecar без mtime не отвергаем: поле добавлено позже, и жёсткая проверка
+	# обесценила бы докачку ровно на тех файлах, ради которых её и писали.
+	[ -z "$mt" ] || [ "$mt" = "$(remote_file_mtime "$src")" ] || return 0
 	printf '%s' "$uid"
+}
+
+# Идентификатор задачи живёт рядом с идентификатором загрузки: после падения клиента
+# на фазе ожидания или скачивания следующий запуск идёт сразу в GET /jobs/{id} вместо
+# повторной отправки гигабайт. Дедупликация службы спасает саму задачу, но не трафик.
+remote_upload_sidecar_read_job() {
+	local f="$REMOTE_UPLOAD_SIDECAR"
+	[ -n "$f" ] && [ -f "$f" ] || return 0
+	sed -n 's/^job_id=//p' "$f" | head -1
+}
+
+remote_upload_sidecar_write_job() {
+	local f="$REMOTE_UPLOAD_SIDECAR" jid="$1"
+	[ -n "$f" ] && [ -f "$f" ] || return 0
+	[ -n "$jid" ] || return 0
+	grep -q '^job_id=' "$f" 2>/dev/null && return 0
+	echo "job_id=$jid" >> "$f" 2>/dev/null || true
+	return 0
 }
 
 remote_upload_sidecar_write() {
@@ -387,6 +560,7 @@ remote_upload_sidecar_write() {
 	{
 		echo "upload_id=$uid"
 		echo "size=$(file_size "$src")"
+		echo "mtime=$(remote_file_mtime "$src")"
 		echo "endpoint=$remote_endpoint"
 	} > "$f" 2>/dev/null || true
 }
@@ -399,6 +573,18 @@ remote_upload_sidecar_clear() {
 # Повторять имеет смысл обрыв и перегрузку, а не отказ по существу: 413 «файл
 # больше предела» не станет верным с третьей попытки, а три лишних отправки
 # 32 МБ стоят минут.
+# Идентификаторы (upload_id/job_id) подставляются в ПУТЬ URL. Значение приходит от
+# службы, но доверять ему на слово незачем: пробел или «..» в нём меняют адрес
+# запроса — «../jobs/x y» адресовал бы чужой ресурс. Алфавит тот же, что у
+# типичных идентификаторов служб.
+remote_valid_id() {
+	case "$1" in
+		''|*[!A-Za-z0-9._-]*) return 1 ;;
+		*..*) return 1 ;;
+	esac
+	return 0
+}
+
 remote_retryable_code() {
 	case "$1" in
 		""|000|408|429|5[0-9][0-9]) return 0 ;;
@@ -418,7 +604,7 @@ remote_upload() {
 	uid="$(remote_upload_sidecar_read "$file")"
 	if [ -n "$uid" ]; then
 		# Сколько уже принято. Не 200 — идентификатор протух, начинаем заново.
-		remote_http GET "/uploads/$uid"
+		remote_http_retry GET "/uploads/$uid"
 		if [ "$REMOTE_HTTP_CODE" = "200" ]; then
 			offset="$(remote_json_field "$REMOTE_HTTP_BODY" received)"
 			# Не число или больше файла — считаем нулём: лишний перезалив дешевле
@@ -431,7 +617,7 @@ remote_upload() {
 	fi
 
 	if [ -z "$uid" ]; then
-		remote_http POST /uploads
+		remote_http_retry POST /uploads
 		answer="$REMOTE_HTTP_BODY"
 		[ "$REMOTE_HTTP_CODE" = "200" ] || {
 			echo "[ОШИБКА] Служба не приняла загрузку: HTTP $REMOTE_HTTP_CODE." >&2
@@ -439,36 +625,31 @@ remote_upload() {
 		}
 		uid="$(remote_json_field "$answer" upload_id)"
 		[ -n "$uid" ] || { echo "[ОШИБКА] Служба не вернула upload_id." >&2; return 1; }
+		# Идентификатор уезжает прямо в URL — принимаем только безопасный алфавит:
+		# «../jobs/x y» из ответа службы иначе адресовал бы чужой ресурс.
+		remote_valid_id "$uid" || { echo "[ОШИБКА] Служба вернула недопустимый upload_id." >&2; return 1; }
 		chunk="$(remote_json_field "$answer" chunk_size)"
 		[ -n "$chunk" ] && [ "$chunk" -gt 0 ] 2>/dev/null && REMOTE_CHUNK_SIZE="$chunk"
 		offset=0
 		remote_upload_sidecar_write "$file" "$uid"
 	fi
 
-	local tmp_chunk
-	tmp_chunk="$(mktemp "${TMPDIR:-/tmp}/ffconv_chunk_XXXXXX")"
 	while [ "$offset" -lt "$size" ]; do
 		local this=$((size - offset))
 		[ "$this" -gt "$REMOTE_CHUNK_SIZE" ] && this="$REMOTE_CHUNK_SIZE"
-		# Кусок читается с ТОЧНОГО смещения. Раньше здесь стоял `dd skip` в блоках
-		# размером с кусок, и комментарий утверждал, что смещение всегда кратно —
-		# посылка неверна: offset приходит из ответа службы (received), а кратности
-		# ей никто не обещал. При received=1500 и chunk=1024 клиент объявлял
-		# Content-Range 1500-2523, а отправлял байты с 1024: собранный на сервере
-		# файл — мусор, и sha256 в complete не сходился без указания на причину.
-		# tail -c +N на обычном файле делает lseek, а не чтение с начала, поэтому
-		# точность здесь не стоит скорости (в отличие от dd bs=1 skip=$offset).
-		tail -c "+$((offset + 1))" "$file" 2>/dev/null | head -c "$this" > "$tmp_chunk"
-		local got; got="$(file_size "$tmp_chunk")"
-		if [ "$got" != "$this" ]; then
-			echo "[ОШИБКА] Прочитано $got байт вместо $this со смещения $offset — отправка прервана." >&2
-			rm -f "$tmp_chunk"; return 1
-		fi
+		# Кусок читается с ТОЧНОГО смещения и уходит потоком (см. remote_upload_chunk).
+		# Раньше здесь стоял `dd skip` в блоках размером с кусок, и комментарий
+		# утверждал, что смещение всегда кратно — посылка неверна: offset приходит из
+		# ответа службы (received), а кратности ей никто не обещал. При received=1500
+		# и chunk=1024 клиент объявлял Content-Range 1500-2523, а отправлял байты с
+		# 1024: собранный на сервере файл — мусор. tail -c +N на обычном файле делает
+		# lseek, а не чтение с начала, поэтому точность здесь не стоит скорости.
+		#
 		# Повтор отправки куска: разрыв на 90-м проценте трёхгигабайтного файла
 		# не должен стоить всего файла (спека, §8).
 		local try=1 sent="no" tries="${REMOTE_UPLOAD_RETRIES:-3}"
 		while [ "$try" -le "$tries" ]; do
-			if remote_upload_chunk "$uid" "$tmp_chunk" "$offset" \
+			if remote_upload_chunk "$uid" "$file" "$offset" \
 				$((offset + this - 1)) "$size"; then sent="yes"; break; fi
 			remote_retryable_code "$REMOTE_HTTP_CODE" || break
 			try=$((try + 1))
@@ -477,17 +658,22 @@ remote_upload() {
 				sleep "${REMOTE_RETRY_SECONDS:-3}"
 			fi
 		done
-		[ "$sent" = "yes" ] || { rm -f "$tmp_chunk"; return 1; }
+		[ "$sent" = "yes" ] || return 1
 		offset=$((offset + this))
 		remote_report_upload "$offset" "$size" "$file"
 	done
-	rm -f "$tmp_chunk"
 
 	local sha; sha="$(remote_sha256 "$file")" || return 1
 	remote_http POST "/uploads/$uid/complete" \
 		"{\"size\":$size,\"sha256\":\"$sha\"}"
 	if [ "$REMOTE_HTTP_CODE" != "200" ]; then
 		echo "[ОШИБКА] Служба не подтвердила загрузку: HTTP $REMOTE_HTTP_CODE." >&2
+		# Sidecar здесь ОБЯЗАН исчезнуть. Он хранит upload_id, и при следующем запуске
+		# клиент воскрешал ровно ту же загрузку: GET /uploads/{id} отвечал
+		# received == size, куски не слались, complete снова возвращал 409 sha mismatch —
+		# файл попадал в тупик до ручного удаления sidecar'а. Спека (§11) обещает
+		# повтор «с нуля», и без очистки он не происходил НИКОГДА.
+		remote_upload_sidecar_clear
 		return 1
 	fi
 	# Длительность службе уже известна: файл она приняла и разобрала. Локальный
@@ -502,21 +688,51 @@ remote_upload() {
 # Отдельной функцией, потому что тело куска — двоичное и идёт из файла:
 # --data-binary @file, а не строкой, иначе нули и переводы строк исказятся.
 # Ключ, как и везде, уходит через stdin (--config -), а не аргументом.
+# Кусок уходит ПОТОКОМ со стандартного ввода (`--data-binary @-`), без temp-файла:
+# прежняя схема писала на диск лишние байты в размер всего исходника — по куску за
+# раз, но 20 ГБ суммарно на 20-гигабайтном файле. Ключ при этом по-прежнему вне
+# argv: curl-конфиг подаётся process substitution'ом `--config <(…)`, который есть
+# и в bash 3.2, и потому больше не занимает stdin.
+#
+# %{size_upload} обязателен: раньше «сколько байт реально отправлено» проверялось
+# по размеру temp-файла, и без файла эта проверка исчезла бы. Короткое чтение с
+# сетевой шары дало бы Content-Range на полную длину при неполном теле — ровно тот
+# класс, из-за которого sha256 в complete не сходился без указания причины.
+#
+# Потолок времени свой: 32 МБ на медленном канале живут дольше REMOTE_MAX_TIME,
+# рассчитанного на короткие запросы.
 remote_upload_chunk() {
-	local uid="$1" chunk_file="$2" from="$3" to="$4" total="$5"
+	local uid="$1" file="$2" from="$3" to="$4" total="$5"
 	local curl_bin="${CURL_BIN:-curl}" out
-	out="$(remote_curl_auth | "$curl_bin" --config - -sS -X PATCH \
+	local this=$((to - from + 1))
+	out="$( { tail -c "+$((from + 1))" "$file" 2>/dev/null | head -c "$this"; } | \
+		"$curl_bin" --config <(remote_curl_auth) -sS -X PATCH \
+		--connect-timeout "${REMOTE_CONNECT_TIMEOUT:-10}" \
+		--max-time "${REMOTE_CHUNK_MAX_TIME:-1800}" \
 		-H "Content-Range: bytes ${from}-${to}/${total}" \
 		-H "Content-Type: application/octet-stream" \
-		--data-binary "@$chunk_file" \
-		-w '\n%{http_code}' \
+		--data-binary "@-" \
+		-w '\n%{http_code} %{size_upload}' \
 		"${remote_endpoint}/uploads/${uid}" 2>/dev/null)" || {
 		echo "[ОШИБКА] Обрыв связи при отправке куска ${from}-${to}." >&2
 		REMOTE_HTTP_CODE="000"
 		return 1
 	}
-	REMOTE_HTTP_CODE="${out##*$'\n'}"
-	[ "$REMOTE_HTTP_CODE" = "200" ] && return 0
+	local last="${out##*$'\n'}"
+	REMOTE_HTTP_CODE="${last%% *}"
+	local sent_bytes="${last##* }"
+	if [ "$REMOTE_HTTP_CODE" = "200" ]; then
+		# Мок может не сообщать size_upload — тогда доверяем коду ответа.
+		case "$sent_bytes" in
+			''|*[!0-9]*) return 0 ;;
+		esac
+		if [ "$sent_bytes" != "$this" ]; then
+			echo "[ОШИБКА] Отправлено $sent_bytes байт вместо $this (кусок ${from}-${to}) — тело куска неполное." >&2
+			REMOTE_HTTP_CODE="000"
+			return 1
+		fi
+		return 0
+	fi
 	echo "[ОШИБКА] Служба отвергла кусок ${from}-${to}: HTTP $REMOTE_HTTP_CODE." >&2
 	return 1
 }
@@ -559,7 +775,7 @@ REMOTE_JOB_ID=""
 remote_submit() {
 	local answer jid
 	REMOTE_JOB_ID=""
-	remote_http POST /jobs "$(remote_job_body "$@")"
+	remote_http_retry POST /jobs "$(remote_job_body "$@")"
 	answer="$REMOTE_HTTP_BODY"
 	if [ "$REMOTE_HTTP_CODE" != "200" ]; then
 		echo "[ОШИБКА] Служба отвергла задачу: HTTP $REMOTE_HTTP_CODE — $(remote_json_field "$answer" error)" >&2
@@ -567,15 +783,31 @@ remote_submit() {
 	fi
 	jid="$(remote_json_field "$answer" job_id)"
 	[ -n "$jid" ] || { echo "[ОШИБКА] Служба не вернула job_id." >&2; return 1; }
+	remote_valid_id "$jid" || { echo "[ОШИБКА] Служба вернула недопустимый job_id." >&2; return 1; }
 	[ "$(remote_json_field "$answer" reused)" = "true" ] && \
 		log_msg "INFO" "Служба вернула готовый результат прежней задачи (дедупликация)"
 	REMOTE_JOB_ID="$jid"
 	return 0
 }
 
+# Холостой прогон НЕ загружает исходник. «Только показать команды» не имеет права
+# стоить часов трафика и гигабайт в хранилище службы: загрузка шла ДО проверки
+# dry_run, задача при этом не создавалась (и не освобождала место), а `mkdir -p`
+# назначения при dry_run пропущен — sidecar не писался, и прерванный «холостой»
+# прогон даже не докачивался. Вместо этого печатаем тело POST /jobs, которое
+# поехало бы: `upload_id` в нём — плейсхолдер <pending>.
+#
+# План службы (§9 спеки) запрашивается только когда исходник уже загружен по
+# другой причине, то есть когда вызывающий передал настоящий upload_id.
 remote_dry_run() {
-	local answer
-	remote_http POST /jobs "$(remote_job_body "$1" "$2" "$3" "${4:-}" '"dry_run":true')"
+	local uid="$1" answer
+	local body; body="$(remote_job_body "$1" "$2" "$3" "${4:-}" '"dry_run":true')"
+	if [ -z "$uid" ] || [ "$uid" = "<pending>" ]; then
+		echo "[DRY-RUN][REMOTE] POST ${remote_endpoint}/jobs $body"
+		echo "[DRY-RUN][REMOTE] Исходник не загружен: холостой прогон не отправляет байты. План службы доступен только после реальной загрузки."
+		return 0
+	fi
+	remote_http POST /jobs "$body"
 	answer="$REMOTE_HTTP_BODY"
 	if [ "$REMOTE_HTTP_CODE" != "200" ]; then
 		echo "[ОШИБКА] Холостой прогон отвергнут: HTTP $REMOTE_HTTP_CODE — $(remote_json_field "$answer" error)" >&2
@@ -593,29 +825,64 @@ remote_dry_run() {
 # двести файлов это то же самое зависание, ради недопущения которого в проекте
 # отказались от тихого отката на локальный ffmpeg. remote_wait_timeout уезжает
 # в тело задачи и трактуется СЛУЖБОЙ; клиенту нужен свой, с запасом на очередь.
-remote_wait_deadline_seconds() {
-	local base="${remote_wait_timeout:-1800}"
-	[ "$base" -gt 0 ] 2>/dev/null || base=1800
-	printf '%s' "$((base * ${REMOTE_WAIT_FACTOR:-3}))"
+# Дедлайн считается по ЗАСТРЕВАНИЮ, а не по общему времени задачи. Прежний
+# `3 × wait_timeout на всю задачу` выводил предел из параметра с другим смыслом
+# (`wait_timeout` = «сколько служба ждёт окна на карте»): при wait_timeout = 60
+# на любую задачу приходилось 180 с, и часовой 4K-файл отменялся при живом
+# прогрессе; при prefer = cpu и умолчании 1800 отмена приходила через 90 минут,
+# убивая часы серверной работы. Теперь таймер сбрасывается на каждое изменение
+# state/progress: отменяем то, что действительно стоит, а не то, что долго идёт.
+remote_stall_seconds() {
+	local s="${remote_stall_timeout:-900}"
+	[ "$s" -gt 0 ] 2>/dev/null || s=900
+	printf '%s' "$s"
 }
 
 REMOTE_CURRENT_JOB=""
+# Отпечаток результата из ответа службы (если она его сообщает) и признак того,
+# что скачанное с ним сошлось. Читает publish_result в script.sh.
+REMOTE_RESULT_SHA256=""
+REMOTE_RESULT_SIZE=""
+REMOTE_RESULT_VERIFIED="no"
 remote_wait() {
 	local jid="$1" label="$2" polls=0 answer state
-	local started limit
-	started="$(date +%s)"
-	limit="$(remote_wait_deadline_seconds)"
+	local last_change limit sig last_sig="" fails=0 maxfails="${REMOTE_POLL_MAX_FAILS:-5}"
+	last_change="$(date +%s)"
+	limit="$(remote_stall_seconds)"
 	REMOTE_CURRENT_JOB="$jid"
 	while :; do
 		remote_http GET "/jobs/$jid"
 		answer="$REMOTE_HTTP_BODY"
 		if [ "$REMOTE_HTTP_CODE" != "200" ]; then
-			echo "[ОШИБКА] Состояние задачи недоступно: HTTP $REMOTE_HTTP_CODE." >&2
-			REMOTE_CURRENT_JOB=""; return 1
+			# Один сбойный опрос не должен стоить файла: многочасовая задача
+			# опрашивается тысячи раз, и 502 от reverse-proxy при рестарте службы
+			# (или 429, или обрыв) считался фатальным — файл падал, а служба
+			# продолжала кодировать результат, который никто не заберёт.
+			fails=$((fails + 1))
+			if [ "$fails" -ge "$maxfails" ]; then
+				printf "\n"
+				echo "[ОШИБКА] Состояние задачи недоступно $fails раз подряд (последний код: HTTP $REMOTE_HTTP_CODE) — отменяем задачу." >&2
+				remote_cancel "$jid"
+				REMOTE_CURRENT_JOB=""; return 1
+			fi
+			remote_retryable_code "$REMOTE_HTTP_CODE" || {
+				printf "\n"
+				echo "[ОШИБКА] Состояние задачи недоступно: HTTP $REMOTE_HTTP_CODE." >&2
+				remote_cancel "$jid"
+				REMOTE_CURRENT_JOB=""; return 1
+			}
+			echo "[ПРЕДУПРЕЖДЕНИЕ] Опрос задачи не удался (HTTP $REMOTE_HTTP_CODE), попытка $fails из $maxfails." >&2
+			sleep "$(( ${REMOTE_POLL_SECONDS:-2} * fails ))"
+			continue
 		fi
+		fails=0
 		state="$(remote_json_field "$answer" state)"
 		case "$state" in
 			done)
+				# Служба может назвать sha256/размер результата — запоминаем, чтобы
+				# сверить скачанное без полного декода (см. remote_fetch).
+				REMOTE_RESULT_SHA256="$(remote_json_field "$answer" result_sha256)"
+				REMOTE_RESULT_SIZE="$(remote_json_field "$answer" result_size)"
 				show_progress_bar 100 "$label" "кодирование"; printf "\n"
 				REMOTE_CURRENT_JOB=""; return 0 ;;
 			failed|cancelled)
@@ -631,13 +898,20 @@ remote_wait() {
 			*)
 				show_progress_bar "$(remote_json_field "$answer" progress)" "$label" "кодирование" ;;
 		esac
+		# Признак живости — пара (state, progress). Задача, честно идущая с 40 % до
+		# 41 %, обязана жить дальше; зависшая на одном и том же — быть отменённой.
+		sig="${state}|$(remote_json_field "$answer" progress)"
+		if [ "$sig" != "$last_sig" ]; then
+			last_sig="$sig"
+			last_change="$(date +%s)"
+		fi
 		polls=$((polls + 1))
 		if [ -n "${REMOTE_WAIT_MAX_POLLS:-}" ] && [ "$polls" -ge "$REMOTE_WAIT_MAX_POLLS" ]; then
 			printf "\n"; REMOTE_CURRENT_JOB=""; return 1
 		fi
-		if [ "$(( $(date +%s) - started ))" -ge "$limit" ]; then
+		if [ "$(( $(date +%s) - last_change ))" -ge "$limit" ]; then
 			printf "\n"
-			echo "[ОШИБКА] Задача $jid не завершилась за $limit с — отменяем и считаем файл неудачным." >&2
+			echo "[ОШИБКА] Задача $jid не подаёт признаков движения $limit с — отменяем и считаем файл неудачным." >&2
 			remote_cancel "$jid"
 			REMOTE_CURRENT_JOB=""; return 1
 		fi
@@ -670,6 +944,29 @@ remote_fetch() {
 		rm -f "$dst"; return 1
 	fi
 	show_progress_bar 100 "$label" "скачивание"; printf "\n"
+
+	# Если служба назвала sha256/размер результата — сверяем ИХ, а не декодируем
+	# файл целиком. `-f null -` на трёхгигабайтном выходе стоит минут на файл, а у
+	# тонкого клиента без локального ffmpeg его нет вовсе, и проверка сводилась к
+	# «файл непустой». Хеш отвечает на тот же вопрос точнее и почти бесплатно.
+	# Поля нет — молчим и оставляем прежнюю проверку вызывающему.
+	REMOTE_RESULT_VERIFIED="no"
+	if [ -n "${REMOTE_RESULT_SHA256:-}" ]; then
+		local got; got="$(remote_sha256 "$dst")" || got=""
+		if [ -n "$got" ] && [ "$got" = "$REMOTE_RESULT_SHA256" ]; then
+			REMOTE_RESULT_VERIFIED="yes"
+		else
+			echo "[ОШИБКА] Скачанный результат не совпал с sha256 службы — файл повреждён при передаче." >&2
+			rm -f "$dst"; return 1
+		fi
+	elif [ -n "${REMOTE_RESULT_SIZE:-}" ]; then
+		local sz; sz="$(file_size "$dst")"
+		if [ "$sz" != "$REMOTE_RESULT_SIZE" ]; then
+			echo "[ОШИБКА] Размер скачанного результата ($sz) не совпал с объявленным службой ($REMOTE_RESULT_SIZE)." >&2
+			rm -f "$dst"; return 1
+		fi
+		REMOTE_RESULT_VERIFIED="yes"
+	fi
 	return 0
 }
 

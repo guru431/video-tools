@@ -56,6 +56,7 @@ set "remote_api_key="
 set "remote_api_key_command="
 set "remote_prefer=auto"
 set "remote_wait_timeout=1800"
+set "remote_stall_timeout=900"
 set "remote_on_failure=abort"
 
 :: --- Чтение config.ini ---
@@ -68,37 +69,55 @@ set "_section="
 :: (напр. дефолтный subtitles_style=...&HFFFFFF&). Для путей с '!' используйте SH/PS1.
 for /f "usebackq tokens=* delims=" %%L in ("%CONFIG_FILE%") do (
 	set "_line=%%L"
-	:: Убрать пробелы/табы в начале (delims = пробел+TAB)
+	rem UTF-8 BOM в начале файла: Notepad и часть редакторов Windows сохраняют его
+	rem по умолчанию, а он приклеивается к ПЕРВОЙ строке — проверка на "[" на ней
+	rem не срабатывала, [folders] не находилась вовсе, и скрипт молча брал умолчания
+	rem («Папка источника не найдена»). Под chcp 65001 три байта BOM видны как один
+	rem символ U+FEFF; режем и его, и mojibake-форму из ANSI-кодовой страницы.
+	if defined _line if "!_line:~0,1!"=="﻿" set "_line=!_line:~1!"
+	if defined _line if "!_line:~0,3!"=="ï»¿" set "_line=!_line:~3!"
+	rem Убрать пробелы/табы в начале (delims = пробел+TAB)
 	for /f "tokens=* delims=	 " %%T in ("!_line!") do set "_line=%%T"
-	:: Пропустить пустые строки и комментарии
+	rem Пропустить пустые строки и комментарии
 	if defined _line if not "!_line:~0,1!"=="#" (
-		:: Секция? Без echo|findstr — пайп исполнял & из значений, а якорь $ не работал
+		rem Секция? Без echo|findstr — пайп исполнял & из значений, а якорь $ не работал
 		set "_is_section="
 		if "!_line:~0,1!"=="[" if "!_line:~-1!"=="]" set "_is_section=1"
 		if defined _is_section (
 			set "_section=!_line:~1,-1!"
 		) else (
-			:: Парсинг key = value
+			rem Парсинг key = value
 			for /f "tokens=1,* delims==" %%K in ("!_line!") do (
 				set "_key=%%K"
 				set "_val=%%~L"
-				:: Убрать пробелы/табы из ключа (ведущие + хвостовые)
+				rem Убрать пробелы/табы из ключа (ведущие + хвостовые)
 				for /f "tokens=* delims=	 " %%T in ("!_key!") do set "_key=%%T"
 				call :trim_key
 				rem Инлайн-комментарий режем только по " #" (см. :strip_inline_comment).
 				call :strip_inline_comment
-				:: Убрать ведущие пробелы/табы и trailing
+				rem Убрать ведущие пробелы/табы и trailing
 				for /f "tokens=* delims=	 " %%T in ("!_val!") do set "_val=%%T"
 				call :trim_val
-				:: Подстановка ${ENV_VAR} из окружения (паритет с yt-dlp/SH/PS1)
+				rem Подстановка ${ENV_VAR} из окружения (паритет с yt-dlp/SH/PS1)
 				call :expand_env
-				:: Присвоить переменную по секции+ключу
+				rem Кавычки вокруг значения — обычный результат «Копировать как путь»
+				rem в проводнике. Без снятия путь не находился ни на одной платформе,
+				rem а PS1 вдобавок падал исключением IsPathRooted.
+				call :strip_quotes
+				rem Присвоить переменную по секции+ключу
 				call :assign_var
 			)
 		)
 	)
 )
 goto :start_coding
+
+:strip_quotes
+if not defined _val exit /b
+if "!_val:~0,1!"=="\"" if "!_val:~-1!"=="\"" set "_val=!_val:~1,-1!"
+if not defined _val exit /b
+if "!_val:~0,1!"=="'" if "!_val:~-1!"=="'" set "_val=!_val:~1,-1!"
+exit /b
 
 :trim_val
 :: Убрать все trailing spaces/tabs из значения
@@ -134,17 +153,41 @@ exit /b
 :: Ограничение: значения env-переменной с '!' не поддерживаются (см. шапку про delayed expansion).
 if not defined _val exit /b
 :_ee_loop
+if not defined _val exit /b
 if "!_val!"=="!_val:${=!" exit /b
-for /f "tokens=2 delims={}" %%V in ("!_val!") do set "_ee_name=%%V"
+rem Имя берём из ХВОСТА после первого "${", а не первым токеном по {}: при
+rem значении вида a{x}b${FFT_A} токен №2 давал "x" — не имя переменной, а кусок
+rem текста. Подстановка "${x}" затем ничего не меняла, и :_ee_loop крутился
+rem вечно (6403 строки WARN за 20 с, rc=124 под timeout).
+set "_ee_tail=!_val:*${=!"
+set "_ee_name="
+for /f "tokens=1 delims=}" %%V in ("!_ee_tail!") do set "_ee_name=%%V"
+if not defined _ee_name exit /b
+set "_ee_prev=!_val!"
 :: Кроме секции [remote]: TRANSCODE_URL/TRANSCODE_API_KEY не заданы у всех, кто
 :: удалённым бэкендом не пользуется, а он выключен по умолчанию — WARN печатался
 :: бы на каждом запуске. В CMD удалённый счёт и так не поддерживается.
 if /i not "!_section!"=="remote" if not defined !_ee_name! echo WARN: переменная !_ee_name! не задана 1>&2
 call set "_ee_val=%%%_ee_name%%%"
+rem Незаданная переменная: подставляем пустую строку явно. Значение, целиком
+rem равное ${UNSET}, после подстановки делало _val НЕОПРЕДЕЛЁННОЙ, а !_val! в
+rem правой части следующего set раскрывался в литерал — получался мусор вида
+rem enable_log==.
+if not defined _ee_val set "_ee_val="
 set "_val=!_val:${%_ee_name%}=%_ee_val%!"
+if not defined _val exit /b
+rem Страховка от зацикливания: подстановка обязана менять значение.
+if "!_val!"=="!_ee_prev!" exit /b
 goto :_ee_loop
 
 :assign_var
+rem ПЕРВОЕ вхождение ключа — контракт всех платформ (.sh делает break, PS1 и GUI —
+rem ContainsKey-guard). Здесь каждое присваивание перезаписывало переменную, то
+rem есть побеждало ПОСЛЕДНЕЕ: один config.ini с дублем `codec` давал libx264 в
+rem SH/PS1 и libx265 в CMD — молча, что прямо запрещено правилом паритета.
+set "_seen_name=_seen_!_section!_!_key!"
+if defined !_seen_name! exit /b
+set "!_seen_name!=1"
 :: Вспомогательная: конвертировать +val/-val в :+:val/:-:val
 :: Простые значения (yes/no/числа/пути) — напрямую
 if /i "!_section!"=="folders" (
@@ -212,6 +255,7 @@ if /i "!_section!"=="remote" (
 	if /i "!_key!"=="api_key_command" set "remote_api_key_command=!_val!"
 	if /i "!_key!"=="prefer" set "remote_prefer=!_val!"
 	if /i "!_key!"=="wait_timeout" set "remote_wait_timeout=!_val!"
+	if /i "!_key!"=="stall_timeout" set "remote_stall_timeout=!_val!"
 	if /i "!_key!"=="on_failure" set "remote_on_failure=!_val!"
 )
 exit /b
@@ -267,7 +311,10 @@ if not defined _abs set "log_file=%~dp0!log_file!"
 
 rem Тестовый хук: --print-config печатает распарсенные переменные и выходит, не запуская script
 if "%~1"=="--print-config" (
-	for %%V in (folder_sources folder_destination audio_only merge_files create_frame copy_codecs extract_audio_copy overwrite_existing audio_codec audio_number_channels audio_bitrate audio_sampling_rate audio_normalize video_codec video_resolution video_bitrate video_number_frames video_rotation video_subtitles video_quality keep_aspect_ratio output_container multithreads parallel_files hw_accel gpu_preset gpu_tune gpu_rc playback_speed start_coding length_coding split_by_silence silence_duration silence_threshold save_old_extension format_files_in subtitles_style dry_run enable_log log_file) do echo %%V=!%%V!
+	for %%V in (folder_sources folder_destination audio_only merge_files create_frame copy_codecs extract_audio_copy overwrite_existing audio_codec audio_number_channels audio_bitrate audio_sampling_rate audio_normalize video_codec video_resolution video_bitrate video_number_frames video_rotation video_subtitles video_quality keep_aspect_ratio output_container multithreads parallel_files hw_accel gpu_preset gpu_tune gpu_rc playback_speed start_coding length_coding split_by_silence silence_duration silence_threshold save_old_extension format_files_in subtitles_style dry_run enable_log log_file remote_enabled remote_endpoint remote_api_key_command remote_prefer remote_wait_timeout remote_stall_timeout remote_on_failure) do echo %%V=!%%V!
+	rem Ключ печатаем маской: --print-config — тестовый хук, но его вывод уходит
+	rem в логи CI, а Bearer-ключ службы не имеет права там оказаться.
+	if defined remote_api_key (echo remote_api_key=***) else (echo remote_api_key=)
 	exit /b 0
 )
 

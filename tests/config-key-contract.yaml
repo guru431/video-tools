@@ -28,6 +28,7 @@ ffmpeg:
       - api_key_command
       - prefer
       - wait_timeout
+      - stall_timeout
       - on_failure
 
 yt-dlp:

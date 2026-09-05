@@ -32,7 +32,11 @@ assert_contains "мерж через \$ffmpegBin"                  '& $ffmpegBin
 # ── yt-dlp CMD: GUID temp-dir, резолвер ffmpeg ────────────────────────────
 suite "guardrails: yt-dlp CMD temp-dir/ffmpeg"
 assert_contains "temp-dir через GUID (не голый %RANDOM%)"  "[guid]::NewGuid"  "$ycmd"
-assert_contains "ffmpeg-резолвер (рядом со скриптом)"     '%~dp0ffmpeg.exe'  "$ycmd"
+# %~dp0 снимается ДО setlocal EnableDelayedExpansion (иначе путь скрипта с «!»
+# теряет эти символы, и бинарники рядом со скриптом молча игнорируются), поэтому
+# дальше по файлу используется !SCRIPT_DIR!.
+assert_contains "путь скрипта снят до setlocal"          'set "SCRIPT_DIR=%~dp0"'  "$ycmd"
+assert_contains "ffmpeg-резолвер (рядом со скриптом)"    '!SCRIPT_DIR!ffmpeg.exe'  "$ycmd"
 assert_contains "мерж через !ff_cmd!"                     '"!ff_cmd!" -y'  "$ycmd"
 
 # ── ffmpeg CMD: детект имён с '!' ─────────────────────────────────────────
@@ -330,6 +334,24 @@ assert_eq "README (примеры): ffmpeg-файлов = runner" "$n_ff" "${usa
 assert_eq "README (примеры): yt-dlp-файлов = runner" "$n_yt" "${usage_yt:-НЕ_НАЙДЕНО}"
 assert_eq "README (примеры): common-файлов = runner" "$n_cm" "${usage_cm:-НЕ_НАЙДЕНО}"
 
+# Заголовки таблиц («### Тест-модули Common (N файлов)») тоже несут числа, и они
+# расходились при зелёном guardrail'е: сверялись только дерево и usage-строки.
+hdr_ff=$(grep -oE '### Тест-модули FFmpeg \([0-9]+ файл(ов|а)?\)' "$README_F" | grep -oE '[0-9]+')
+hdr_yt=$(grep -oE '### Тест-модули YT-DLP \([0-9]+ файл(ов|а)?\)' "$README_F" | grep -oE '[0-9]+')
+hdr_cm=$(grep -oE '### Тест-модули Common \([0-9]+ файл(ов|а)?\)' "$README_F" | grep -oE '[0-9]+')
+assert_eq "README (заголовок): ffmpeg-файлов = runner" "$n_ff" "${hdr_ff:-НЕ_НАЙДЕНО}"
+assert_eq "README (заголовок): yt-dlp-файлов = runner" "$n_yt" "${hdr_yt:-НЕ_НАЙДЕНО}"
+assert_eq "README (заголовок): common-файлов = runner" "$n_cm" "${hdr_cm:-НЕ_НАЙДЕНО}"
+
+# Обратная проверка: КАЖДЫЙ зарегистрированный в раннере файл упомянут в таблице
+# README. Числовой сверки для этого мало — именно она была зелёной, когда из
+# таблицы Common пропал test_docs_links: количество совпадало, строки не было.
+_missing_rows=""
+for _reg in $(grep -oE '\$TESTS_DIR/(ffmpeg|yt-dlp|common)/test_[a-z0-9_]+\.sh' "$TESTS_DIR/run_tests.sh" | sed 's#.*/##; s#\.sh$##' | sort -u); do
+    grep -qF -- "\`$_reg\`" "$README_F" || _missing_rows="$_missing_rows $_reg"
+done
+assert_empty "каждый зарегистрированный тест упомянут в таблице README" "$_missing_rows"
+
 # Числа ТЕСТОВ (в отличие от числа файлов) не сверяет никто и сверить статически нечем:
 # итог зависит от платформы — без CMD/PowerShell suite'ы пропускаются целиком, и один
 # `skip` заменяет десятки assert'ов. Поэтому контракт такой: конкретных чисел тестов в
@@ -447,6 +469,18 @@ if [ -f "$CHK" ]; then
     assert_contains "есть резолвер Git-for-Windows bash" "function Resolve-GitBash" "$chk"
     assert_contains "тесты запускаются через резолвнутый \$bash" '& $bash tests/run_tests.sh' "$chk"
     assert_contains "STRICT_SKIP=1 выставляется как в CI" "STRICT_SKIP" "$chk"
+    # Совпадение SHA256 с sidecar'ом означает лишь «EXE не подменён после сборки» и
+    # ничего не говорит о том, собран ли он из ТЕКУЩИХ исходников. Пара «правка в
+    # script.ps1 + старый EXE» проходила все проверки: тесты гоняют .ps1, манифест
+    # сходится сам с собой. Провенанс должен сверяться с git-историей исходников.
+    assert_contains "есть проверка свежести EXE" "function Get-StaleExeSources" "$chk"
+    assert_contains "свежесть считается по git-предку" "merge-base --is-ancestor" "$chk"
+    # Список зависимостей обязан быть полным: воркер и клиент удалённого бэкенда
+    # вкомпилированы в тот же EXE, что и GUI, — правка в них так же его устаревает.
+    assert_contains "зависимость: GUI ffmpeg"       "ffmpeg/FFmpeg_Converter_run_win_v18.ps1" "$chk"
+    assert_contains "зависимость: воркер ffmpeg"    "ffmpeg/FFmpeg_Converter_script.ps1"      "$chk"
+    assert_contains "зависимость: клиент remote"    "ffmpeg/remote_client.ps1"                "$chk"
+    assert_contains "зависимость: GUI yt-dlp"       "yt-dlp/Downloading_from_YouTube_v18.ps1" "$chk"
 else
     fail "check_release.ps1 на месте" "$CHK" "не найден"
 fi
@@ -528,8 +562,76 @@ for _g in "$YT_GUI" "$GUI_PS1"; do
     assert_not_contains "$_n: нет BindingFlags к непубличным членам" "BindingFlags]'Instance," "$_src"
     # Add-Type с C# — альтернатива, которая лечит мерцание, но поднимает heuristic score
     # у того же Касперского (см. kaspersky-workaround в вики). Тоже не пускаем.
-    assert_not_contains "$_n: нет компиляции C# на лету" "Add-Type -TypeDefinition" "$_src"
+    # Позиционная форма `Add-Type @"…"@` (без -TypeDefinition) — та же компиляция и тот
+    # же heuristic score, но литерал выше её не ловил, и в GUI ffmpeg полтора года жил
+    # C#-подкласс TimeoutWebClient. Regex покрывает обе формы и оба вида here-string.
+    _addtype="$(printf '%s\n' "$_src" | grep -nE 'Add-Type[[:space:]]+(-TypeDefinition[[:space:]]+)?@["'"'"']' || true)"
+    assert_empty "$_n: нет компиляции C# на лету (ни -TypeDefinition, ни позиционная)" "$_addtype"
 done
+
+# ══════════════════════════════════════════════════════════════
+suite "PS1-воркер ffmpeg: без \$PSScriptRoot (GUI подаёт скрипт строкой)"
+# ══════════════════════════════════════════════════════════════
+# GUI запускает воркер через PowerShell.AddScript(<строка>). У строкового скрипта
+# автоматическая $PSScriptRoot равна пустой строке И ПЕРЕКРЫВАЕТ значение, выставленное
+# через SessionStateProxy: `Join-Path $PSScriptRoot 'remote_client.ps1'` бросал
+# «Cannot bind argument to parameter 'Path'», top-level trap делал break, и воркер
+# умирал до первого файла — во всех режимах, и в .ps1-GUI, и в собранном EXE.
+# Каталог приложения приходит отдельной переменной $guiAppDir.
+for _w in "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1" "$PROJECT_DIR/ffmpeg/remote_client.ps1"; do
+    _wn="$(basename "$_w")"
+    _whits="$(grep -vE '^[[:space:]]*#' "$_w" | grep -nF '$PSScriptRoot' | grep -v 'guiAppDir' || true)"
+    assert_empty "$_wn: \$PSScriptRoot не используется в одиночку" "$_whits"
+done
+assert_contains "script.ps1 берёт каталог из \$guiAppDir" '$guiAppDir' \
+    "$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1")"
+assert_contains "GUI передаёт guiAppDir в runspace" 'SetVariable("guiAppDir"' \
+    "$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v18.ps1")"
+
+# ══════════════════════════════════════════════════════════════
+suite "CMD: '::' не используется как комментарий внутри блоков"
+# ══════════════════════════════════════════════════════════════
+# `::` — это МЕТКА, а не комментарий. В колонке 0 она безвредна, но внутри
+# скобочного блока `( … )` cmd разбирает блок целиком: несколько `::` подряд
+# исполняют следующую строку как команду, а `::` последней строкой блока даёт
+# «) was unexpected at this time» и rc=255 — так CMD-загрузчик yt-dlp падал после
+# каждой загрузки, начиная с v15, и AI-перевод в нём был недостижим.
+# Отступ — надёжный признак «внутри блока»: на верхнем уровне метки пишутся с колонки 0.
+_colon_offenders=""
+for _c in "$PROJECT_DIR"/ffmpeg/*.cmd "$PROJECT_DIR"/yt-dlp/*.cmd; do
+    [ -f "$_c" ] || continue
+    if grep -qE '^[[:space:]]+::' "$_c"; then
+        _colon_offenders="$_colon_offenders $(basename "$_c")"
+    fi
+done
+assert_empty "ни один .cmd не содержит отступной '::' (нужен rem)" "$_colon_offenders"
+
+# Негативная самопроверка: правило обязано ловить нарушителя, иначе оно вечнозелёное.
+_colon_probe="$(mktemp_suffix "${TMPDIR:-/tmp}/gr_colon_" .cmd)"
+printf '@echo off\r\nif 1==1 (\r\n    :: comment\r\n)\r\n' > "$_colon_probe"
+if grep -qE '^[[:space:]]+::' "$_colon_probe"; then
+    pass "правило ловит отступной '::' в синтетическом файле"
+else
+    fail "правило ловит отступной '::' в синтетическом файле" "совпадение" "совпадения нет"
+fi
+rm -f "$_colon_probe"
+
+# ══════════════════════════════════════════════════════════════
+suite "docs: каждый план помечен архивным баннером"
+# ══════════════════════════════════════════════════════════════
+# Планы — исторические документы: они предписывают действия, которые реализация
+# позже отвергла (возврат через stdout, `dd skip`, коммит приватного config.ini).
+# Агент или человек, исполнивший такой план буквально, вернёт уже исправленные
+# дефекты. test_docs_links исключает plans/ из проверки ссылок, но сам файл об
+# этом ничего не говорил — баннер обязателен и проверяется здесь.
+_plan_offenders=""
+for _p in "$PROJECT_DIR"/docs/superpowers/plans/*.md; do
+    [ -f "$_p" ] || continue
+    if ! head -20 "$_p" | grep -q 'АРХИВ'; then
+        _plan_offenders="$_plan_offenders $(basename "$_p")"
+    fi
+done
+assert_empty "все планы в docs/superpowers/plans/ несут баннер АРХИВ" "$_plan_offenders"
 
 # ══════════════════════════════════════════════════════════════
 suite "mktemp: шаблон обязан оканчиваться на XXXXXX"
@@ -629,13 +731,21 @@ done
 # Все объявленные функции — чтобы рёбра графа вызовов не забивались именами
 # переменных. Полный перебор «функция × печатающая» на каждом проходе стоил бы
 # десятки тысяч форков grep; здесь два прохода awk и замыкание в памяти.
-_all_fns="$(grep -hoE '^[a-z_][a-z0-9_]*\(\) \{' "${_scan_sources[@]}" | sed 's/() {$//' | sort -u | tr '\n' ' ')"
+_all_fns="$(grep -hoE '^[a-z_][a-z0-9_]*\(\)[[:space:]]*\{' "${_scan_sources[@]}" | sed 's/().*$//' | sort -u | tr '\n' ' ')"
 _fn_edges="$(awk -v known=" $_all_fns " '
-    /^[a-z_][a-z0-9_]*\(\) \{/ { fn = $0; sub(/\(\) \{.*/, "", fn); next }
+    /^[a-z_][a-z0-9_]*\(\)[[:space:]]*\{/ { fn = $0; sub(/\(\).*/, "", fn); next }
     /^\}/ { fn = ""; next }
     fn != "" {
         line = $0
         sub(/#.*/, "", line)
+        # Вызов с перенаправлением в stderr не загрязняет stdout — такие рёбра
+        # не строим, иначе расширенный regex выше дал бы ложные срабатывания
+        # на limit_output_template и его соседях.
+        # Проверяем ИСХОДНУЮ строку ($0), а не очищенную от комментариев: наивный
+        # sub(/#.*/) режет и по решётке внутри ${#var}, унося с собой >&2 в конце.
+        # Апострофов здесь быть не может: awk-программа лежит в одинарных кавычках
+        # оболочки, и любой апостроф закрыл бы её (проверено — рёбра исчезали все).
+        if ($0 ~ />&2/) next
         n = split(line, tok, /[^A-Za-z0-9_]+/)
         for (i = 1; i <= n; i++) {
             if (tok[i] == "" || tok[i] == fn) continue
@@ -644,7 +754,7 @@ _fn_edges="$(awk -v known=" $_all_fns " '
     }
 ' "${_scan_sources[@]}" | sort -u)"
 
-_printers=" show_progress_bar log_msg log_info log_warn log_error "
+_printers=" show_progress_bar log_msg log_info log_ok log_warn log_error log_header "
 _changed=1
 while [ "$_changed" = "1" ]; do
     _changed=0
@@ -663,6 +773,63 @@ for _s in "${_scan_sources[@]}"; do
     [ -n "$_hit" ] && _subst_offenders="$_subst_offenders $(basename "$_s"):$_hit"
 done
 assert_empty "ни одна печатающая функция не вызвана через \$( )" "$_subst_offenders"
+
+# Каждая log_*-функция production обязана быть корнем: иначе добавленный log_debug
+# молча выпадет из графа, и правило ослабнет тем же способом, каким уже ослабло.
+_missing_roots=""
+for _lf in $(printf '%s' "$_all_fns" | tr ' ' '\n' | grep -E '^log_' | sort -u); do
+    case "$_printers" in *" $_lf "*) ;; *) _missing_roots="$_missing_roots $_lf" ;; esac
+done
+assert_empty "все log_*-функции production перечислены в корнях замыкания" "$_missing_roots"
+
+# Негативная самопроверка: синтетический нарушитель ОБЯЗАН ловиться. Без неё
+# правило зеленело бы и при сломанном построении графа.
+_neg_probe="$(mktemp_suffix "${TMPDIR:-/tmp}/gr_closure_" .sh)"
+cat > "$_neg_probe" <<'NEGEOF'
+#!/bin/bash
+log_warn()  { echo "[WARN] $*"; }
+helper() {
+    log_warn "печатает в stdout"
+    printf 'value'
+}
+main() {
+    x=$(helper)
+    echo "$x"
+}
+NEGEOF
+_neg_fns="$(grep -hoE '^[a-z_][a-z0-9_]*\(\)[[:space:]]*\{' "$_neg_probe" | sed 's/().*$//' | sort -u | tr '\n' ' ')"
+_neg_edges="$(awk -v known=" $_neg_fns " '
+    /^[a-z_][a-z0-9_]*\(\)[[:space:]]*\{/ { fn = $0; sub(/\(\).*/, "", fn); next }
+    /^\}/ { fn = ""; next }
+    fn != "" {
+        line = $0
+        sub(/#.*/, "", line)
+        if ($0 ~ />&2/) next
+        n = split(line, tok, /[^A-Za-z0-9_]+/)
+        for (i = 1; i <= n; i++) {
+            if (tok[i] == "" || tok[i] == fn) continue
+            if (index(known, " " tok[i] " ") > 0) print fn "\t" tok[i]
+        }
+    }
+' "$_neg_probe" | sort -u)"
+_neg_printers=" log_warn "
+_neg_changed=1
+while [ "$_neg_changed" = "1" ]; do
+    _neg_changed=0
+    while IFS=$'\t' read -r _c1 _c2; do
+        [ -n "$_c1" ] || continue
+        case "$_neg_printers" in *" $_c1 "*) continue ;; esac
+        case "$_neg_printers" in *" $_c2 "*) _neg_printers="$_neg_printers$_c1 "; _neg_changed=1 ;; esac
+    done <<< "$_neg_edges"
+done
+_neg_re="$(printf '%s' "$_neg_printers" | sed -e 's/^ //' -e 's/ $//' -e 's/ /|/g')"
+_neg_hit="$(grep -v '^[[:space:]]*#' "$_neg_probe" | grep -oE "\\\$\([[:space:]]*($_neg_re)([[:space:]]|\))" | head -1)"
+rm -f "$_neg_probe"
+if [ -n "$_neg_hit" ]; then
+    pass "синтетический нарушитель \$(helper) ловится замыканием"
+else
+    fail "синтетический нарушитель \$(helper) ловится замыканием" "совпадение" "совпадения нет"
+fi
 
 # Замыкание обязано что-то находить: пустой список печатающих функций сделал бы
 # проверку выше вечнозелёной (ровно тот дефект, что и у барьера приватности).

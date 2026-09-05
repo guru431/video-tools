@@ -29,6 +29,35 @@ function New-DirLiteral {
         $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)) | Out-Null
 }
 
+# mp4 упаковывает ровно 3 символа языка (ISO 639-2); двухбуквенный код теряется,
+# а per-stream title в mp4 не пишется — имя дорожки плееры берут из handler_name.
+$script:Iso6392 = @{ ru='rus'; en='eng'; kk='kaz'; de='deu'; fr='fra'; es='spa';
+    it='ita'; pt='por'; pl='pol'; uk='ukr'; tr='tur'; ja='jpn'; ko='kor';
+    zh='zho'; ar='ara'; be='bel'; uz='uzb'; az='aze' }
+function ConvertTo-Iso6392 {
+    param([string]$Code)
+    if ($Code -and $script:Iso6392.ContainsKey($Code)) { return $script:Iso6392[$Code] }
+    return $Code
+}
+
+# Манифест yt-dlp — UTF-8 без BOM. Get-Content без -Encoding в PS 5.1 читает его как ANSI:
+# кириллический путь превращается в mojibake и Test-Path даёт False. См. knowledge-base.
+function Get-ManifestLines {
+    param([string]$Path)
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return @() }
+    try { return @([System.IO.File]::ReadAllLines($Path, [System.Text.UTF8Encoding]::new($false))) }
+    catch { return @() }
+}
+
+# Медиафайлы из манифеста: только существующие, без sidecar-субтитров.
+function Get-ManifestMedia {
+    param([string]$Path)
+    return @(Get-ManifestLines $Path |
+        Where-Object { $_ -and ([System.IO.Path]::GetExtension($_) -in @('.mp4','.mkv','.webm')) } |
+        Select-Object -Unique |
+        Where-Object { Test-Path -LiteralPath $_ })
+}
+
 # ── Чтение config.ini (один раз в хеш-таблицу) ──────────────────────────
 $script:_configCache = @{}
 if (Test-Path -LiteralPath $configFile) {
@@ -60,19 +89,48 @@ function Read-Config {
     return $Default
 }
 
+# Неизвестное значение в config.ini не должно молча превращаться в умолчание.
+function Read-ConfigEnum {
+    param([string]$Key, [string]$Section, [string]$Default, [string[]]$Allowed)
+    $v = Read-Config $Key $Section $Default
+    if ($Allowed -contains $v) { return $v }
+    $script:startupWarnings += "[$Section] $Key = «$v» — допустимо: $($Allowed -join ', '). Использую $Default."
+    return $Default
+}
+
+function Read-ConfigBool {
+    param([string]$Key, [string]$Section, [string]$Default)
+    $v = (Read-Config $Key $Section $Default).Trim().ToLower()
+    if ($v -in @("true", "yes", "on", "1", "+")) { return "true" }
+    if ($v -in @("false", "no", "off", "0", "-")) { return "false" }
+    $script:startupWarnings += "[$Section] $Key = «$v» — ожидается true/false. Использую $Default."
+    return $Default
+}
+
 # ── Загрузка настроек ─────────────────────────────────────────────────────
+# Предупреждения старта копим и показываем один раз при открытии окна: Write-Host
+# в EXE (-noConsole) превращается в MessageBox на каждый вызов.
+$script:startupWarnings = @()
 $cfg_proxy_raw = Read-Config "url" "proxy" ""
 $cfg_proxyType = "https"
 $cfg_proxyHost = ""
 $cfg_proxyPort = ""
 $cfg_proxyUser = ""
 $cfg_proxyPass = ""
-if ($cfg_proxy_raw -match '^(https?|socks[45]?)://(?:([^:]+):([^@]+)@)?([^:/]+)(?::(\d+))?') {
+# socks5h/socks4a — обычные схемы (Tor, ssh -D с удалённым DNS), yt-dlp их понимает,
+# а .sh передаёт дословно. Без них GUI молча выставлял «нет прокси»: загрузка шла
+# напрямую, то есть мимо задуманного маршрута и с утечкой реального IP.
+if ($cfg_proxy_raw -match '^(https?|socks5h|socks4a|socks[45]?)://(?:([^:]+):([^@]+)@)?(\[[^\]]+\]|[^:/]+)(?::(\d+))?') {
     $cfg_proxyType = $Matches[1]
     $cfg_proxyUser = if ($Matches[2]) { $Matches[2] } else { "" }
     $cfg_proxyPass = if ($Matches[3]) { $Matches[3] } else { "" }
     $cfg_proxyHost = $Matches[4]
     $cfg_proxyPort = if ($Matches[5]) { $Matches[5] } else { "" }
+} elseif (-not [string]::IsNullOrWhiteSpace($cfg_proxy_raw)) {
+    # Прокси задан, но не разобран — молчать нельзя: «нет прокси» означает загрузку
+    # напрямую, мимо задуманного маршрута. Собирается в очередь и показывается при
+    # старте GUI (Write-Host здесь ушёл бы в MessageBox под -noConsole).
+    $script:startupWarnings += "Прокси «$cfg_proxy_raw» не распознан (ожидается [схема]://[user:pass@]host[:port], схема http/https/socks4/socks4a/socks5/socks5h). Прокси ВЫКЛЮЧЕН — загрузка пойдёт напрямую."
 }
 # ── Сеть: профиль устойчивости + необязательный потолок скорости ──────────
 # Значения раньше были зашиты литералами в строке сборки $command: подстроить их
@@ -81,16 +139,20 @@ if ($cfg_proxy_raw -match '^(https?|socks[45]?)://(?:([^:]+):([^@]+)@)?([^:/]+)(
 # Паритет с build_net_args в .sh — таблица профилей обязана совпадать.
 $cfg_speedProfile = Read-Config "speed_profile" "network" "normal"
 $cfg_limitRate    = Read-Config "limit_rate"    "network" ""
+# Профиль проверяем ОДИН раз при старте, а не в Build-NetArgs: та зовётся на каждый
+# URL, и в EXE (-noConsole) Write-Host = MessageBox — опечатка в config.ini давала
+# модальное окно на каждую ссылку в очереди.
+if ($cfg_speedProfile -notin @("careful", "fast", "normal")) {
+    $script:startupWarnings += "Неизвестный speed_profile «$cfg_speedProfile» — используется normal."
+    $cfg_speedProfile = "normal"
+}
 
 function Build-NetArgs {
     switch ($cfg_speedProfile) {
         "careful" { $frags = 1; $retries = 20; $sock = 60; $sleepS = 5 }
         "fast"    { $frags = 8; $retries = 5;  $sock = 15; $sleepS = 0 }
         "normal"  { $frags = 4; $retries = 10; $sock = 30; $sleepS = 0 }
-        default   {
-            Write-Host "WARN: неизвестный speed_profile '$cfg_speedProfile', используется normal"
-            $frags = 4; $retries = 10; $sock = 30; $sleepS = 0
-        }
+        default   { $frags = 4; $retries = 10; $sock = 30; $sleepS = 0 }
     }
     $a = @("--retries", "$retries", "--fragment-retries", "$retries",
            "--file-access-retries", "5", "--socket-timeout", "$sock",
@@ -104,20 +166,26 @@ $cfg_quality      = Read-Config "default_quality" "download" "720"
 $cfg_baseDir      = Read-Config "base_dir"        "output"   "_video_"
 $cfg_template     = Read-Config "template"         "output"   '%(uploader)s/%(upload_date)s - %(title).100U.%(ext)s'
 $cfg_plTemplate   = Read-Config "playlist_template" "output"  '%(uploader)s/%(playlist)s/%(playlist_index)03d - %(title).100U.%(ext)s'
-$cfg_cookieMethod  = Read-Config "method"          "cookies"  "none"
+$cfg_cookieMethod  = Read-ConfigEnum "method"      "cookies"  "none" @("none", "browser", "file")
 $cfg_cookieBrowser = Read-Config "browser"         "cookies"  "chrome"
 $cfg_cookieFile    = Read-Config "file"            "cookies"  "youtube_cookies.txt"
-$cfg_transEnabled  = Read-Config "enabled"         "translation" "false"
+$cfg_transEnabled  = Read-ConfigBool "enabled"     "translation" "false"
 $cfg_transLang     = Read-Config "target_lang"     "translation" "ru"
-$cfg_transVoice    = Read-Config "voice_style"     "translation" "live"
-$cfg_transMode     = Read-Config "mode"            "translation" "mix"
+$cfg_transVoice    = Read-ConfigEnum "voice_style" "translation" "live" @("live", "tts")
+$cfg_transMode     = Read-ConfigEnum "mode"        "translation" "mix" @("dual_track", "mix", "replace")
 # Паритет с .sh: архив загрузок и громкости/язык для AI-перевода — из config.
-$cfg_continueOnErr = Read-Config "continue_on_error"  "download"    "true"
-$cfg_useArchive    = Read-Config "use_archive"        "download"    "true"
+$cfg_continueOnErr = Read-ConfigBool "continue_on_error" "download" "true"
+$cfg_useArchive    = Read-ConfigBool "use_archive"       "download" "true"
 $cfg_archiveFile   = Read-Config "archive_file"       "download"    "download_archive.txt"
 $cfg_transOrigVol  = Read-Config "original_volume"    "translation" "0.3"
 $cfg_transTransVol = Read-Config "translation_volume" "translation" "1.0"
 $cfg_transOrigLang = Read-Config "original_lang"      "translation" "en"
+# Потолок времени на один вызов vot-cli-live; 0 = без ограничения. Паритет с .sh.
+$cfg_transTimeout  = Read-Config "timeout_sec"        "translation" "900"
+if ($cfg_transTimeout -notmatch '^[0-9]+$') {
+    $script:startupWarnings += "[translation] timeout_sec = «$cfg_transTimeout» — ожидается целое число секунд. Использую 900."
+    $cfg_transTimeout = "900"
+}
 # Trim: парсим "+/-VALUE" в (enabled, value)
 function Parse-TrimFlag {
     param([string]$Raw, [string]$DefaultVal)
@@ -128,18 +196,21 @@ function Parse-TrimFlag {
 }
 $cfg_trim_start = Parse-TrimFlag (Read-Config "start" "trim" "-00:00:00") "00:00:00"
 $cfg_trim_end   = Parse-TrimFlag (Read-Config "end"   "trim" "-00:01:00") "00:01:00"
-$cfg_forceKf    = Read-Config "force_keyframes" "trim" "false"
+$cfg_forceKf    = Read-ConfigBool "force_keyframes" "trim" "false"
 # Аудио-формат / SponsorBlock / субтитры-с-видео — по умолчанию текущее поведение.
-$cfg_audioFormat   = Read-Config "audio_format"        "download"  "best"
-$cfg_sponsorblock  = Read-Config "sponsorblock"        "download"  "off"
-$cfg_subsWithVideo = Read-Config "download_with_video" "subtitles" "off"
+$cfg_audioFormat   = Read-ConfigEnum "audio_format"        "download"  "best" @("best", "mp3", "m4a", "opus")
+$cfg_sponsorblock  = Read-ConfigEnum "sponsorblock"        "download"  "off" @("off", "mark", "remove")
+$cfg_subsWithVideo = Read-ConfigEnum "download_with_video" "subtitles" "off" @("off", "sidecar", "embed")
 $cfg_subLang       = Read-Config "lang"                "subtitles" "ru"
 # F31. Формат субтитров читаем из конфига (паритет с SH). Раньше был захардкожен vtt,
 # то есть ключ [subtitles] format в GUI не работал вовсе.
-$cfg_subFormat     = Read-Config "format"              "subtitles" "vtt"
+$cfg_subFormat     = Read-ConfigEnum "format"          "subtitles" "vtt" @("vtt", "srt", "ass", "best")
 
 $qualityMap = @{ "audio" = 0; "720" = 3; "360" = 1; "480" = 2; "1080" = 4; "1440" = 5; "2160" = 6 }
-$defaultQualityIdx = if ($qualityMap.ContainsKey($cfg_quality)) { $qualityMap[$cfg_quality] } else { 3 }
+$defaultQualityIdx = if ($qualityMap.ContainsKey($cfg_quality)) { $qualityMap[$cfg_quality] } else {
+    $script:startupWarnings += "[download] default_quality = «$cfg_quality» — допустимо: audio, 360, 480, 720, 1080, 1440, 2160. Использую 720."
+    3
+}
 
 # F12/-LiteralPath: каталог установки может содержать [ ] ? * (типично для
 # распакованных архивов — video[1]). Без -LiteralPath Test-Path трактует их как
@@ -300,21 +371,30 @@ function Limit-OutputTemplate {
 
     # Присутствие длинных полей и уже заданные пользователем лимиты. Пользовательский
     # лимит уважаем, но только в сторону уменьшения — иначе ini снова вернёт нас в MAX_PATH.
+    # Поле распознаётся и в форме альтернатив: yt-dlp допускает %(title|Без имени)s
+    # и %(uploader,channel)s. Точный поиск '%(title)' их не видел вовсе — лимит не
+    # ставился, и как раз на таких шаблонах путь и переполнялся. Граница после
+    # имени: ')' , '|' , ',' или '.' (уже заданный лимит). Паритет с .sh.
     $t = 0; $p = 0; $u = 0
-    if ($Template -match '%\(title\)') {
+    if ($Template -match '%\(title[|,).]') {
         $t = $defTitle
         $m = [regex]::Match($Template, '%\(title\)\.(\d+)')
         if ($m.Success -and [int]$m.Groups[1].Value -lt $t) { $t = [int]$m.Groups[1].Value }
     }
-    if ($Template -match '%\(playlist\)') {
+    if ($Template -match '%\(playlist[|,).]') {
         $p = $defPlaylist
         $m = [regex]::Match($Template, '%\(playlist\)\.(\d+)')
         if ($m.Success -and [int]$m.Groups[1].Value -lt $p) { $p = [int]$m.Groups[1].Value }
     }
-    if ($Template -match '%\((uploader|channel)\)') {
+    if ($Template -match '%\((uploader|channel)[|,).]') {
         $u = $defUploader
-        $m = [regex]::Match($Template, '%\(uploader\)\.(\d+)')
-        if ($m.Success -and [int]$m.Groups[1].Value -lt $u) { $u = [int]$m.Groups[1].Value }
+        # Пользовательский лимит читаем у ОБОИХ полей и берём меньший: раньше
+        # смотрели только на uploader, поэтому '%(channel).10s' переписывался в
+        # '.30s' — лимит УВЕЛИЧИВАЛСЯ вопреки правилу «только на уменьшение».
+        foreach ($fn in @('uploader', 'channel')) {
+            $m = [regex]::Match($Template, '%\(' + $fn + '\)\.(\d+)')
+            if ($m.Success -and [int]$m.Groups[1].Value -lt $u) { $u = [int]$m.Groups[1].Value }
+        }
     }
 
     # Ужимаем по приоритету: сперва название ролика, потом плейлист, потом автор —
@@ -363,13 +443,13 @@ $formatPresets = @{
         "bestaudio[ext!=webm]+bestvideo[height<=2160][vcodec^=avc1]/bestaudio+bestvideo[height<=2160]"
     )
     "avc1_https" = @(
-        "140", "140+134", "140+135/134", "140+136/135/134",
-        "140+137/136/135/134",
+        "140", "140+134", "140+135/140+134", "140+136/140+135/140+134",
+        "140+137/140+136/140+135/140+134",
         "140+264/bestvideo[height<=1440][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=1440]",
         "140+266/bestvideo[height<=2160][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=2160]"
     )
     "avc1_m3u8" = @(
-        "234", "234+230", "234+231/230", "234+232/231/230",
+        "234", "234+230", "234+231/234+230", "234+232/234+231/234+230",
         "270+234/bestvideo[protocol*=m3u8][height<=1080]+bestaudio[protocol*=m3u8]/best[height<=1080]",
         "bestvideo[protocol*=m3u8][height<=1440]+bestaudio[protocol*=m3u8]/best[height<=1440]",
         "bestvideo[protocol*=m3u8][height<=2160]+bestaudio[protocol*=m3u8]/best[height<=2160]"
@@ -379,27 +459,27 @@ $formatPresets = @{
         "140+134/best[height<=360]",
         "140+135/best[height<=480]",
         "140+298/best[height<=720]",
-        "140+299/298/best[height<=1080]",
+        "140+299/140+298/best[height<=1080]",
         "bestvideo[height<=1440][fps>=50]+bestaudio[ext=m4a]/140+299/best[height<=1440]",
         "bestvideo[height<=2160][fps>=50]+bestaudio[ext=m4a]/140+299/best[height<=2160]"
     )
     "avc1_m3u8_60fps" = @(
         "234",
         "234+309/bestvideo[height<=360][fps>=50]+bestaudio/best[height<=360]",
-        "234+310/309/bestvideo[height<=480][fps>=50]+bestaudio/best[height<=480]",
-        "234+311/310/309/bestvideo[height<=720][fps>=50]+bestaudio/best[height<=720]",
-        "234+312/311/310/309/bestvideo[height<=1080][fps>=50]+bestaudio/best[height<=1080]",
-        "234+313/312/311/310/309/bestvideo[height<=1440][fps>=50]+bestaudio/best[height<=1440]",
-        "234+314/313/312/311/310/309/bestvideo[height<=2160][fps>=50]+bestaudio/best[height<=2160]"
+        "234+310/234+309/bestvideo[height<=480][fps>=50]+bestaudio/best[height<=480]",
+        "234+311/234+310/234+309/bestvideo[height<=720][fps>=50]+bestaudio/best[height<=720]",
+        "234+312/234+311/234+310/234+309/bestvideo[height<=1080][fps>=50]+bestaudio/best[height<=1080]",
+        "234+313/234+312/234+311/234+310/234+309/bestvideo[height<=1440][fps>=50]+bestaudio/best[height<=1440]",
+        "234+314/234+313/234+312/234+311/234+310/234+309/bestvideo[height<=2160][fps>=50]+bestaudio/best[height<=2160]"
     )
     "avc1_https_60fps_hdr" = @(
         "234",
         "234+696/bestvideo[height<=360][fps>=50]+bestaudio/best[height<=360]",
-        "234+697/696/bestvideo[height<=480][fps>=50]+bestaudio/best[height<=480]",
-        "234+698/697/696/bestvideo[height<=720][fps>=50]+bestaudio/best[height<=720]",
-        "234+699/698/697/696/bestvideo[height<=1080][fps>=50]+bestaudio/best[height<=1080]",
-        "234+700/699/698/697/696/bestvideo[height<=1440][fps>=50]+bestaudio/best[height<=1440]",
-        "234+701/700/699/698/697/696/bestvideo[height<=2160][fps>=50]+bestaudio/best[height<=2160]"
+        "234+697/234+696/bestvideo[height<=480][fps>=50]+bestaudio/best[height<=480]",
+        "234+698/234+697/234+696/bestvideo[height<=720][fps>=50]+bestaudio/best[height<=720]",
+        "234+699/234+698/234+697/234+696/bestvideo[height<=1080][fps>=50]+bestaudio/best[height<=1080]",
+        "234+700/234+699/234+698/234+697/234+696/bestvideo[height<=1440][fps>=50]+bestaudio/best[height<=1440]",
+        "234+701/234+700/234+699/234+698/234+697/234+696/bestvideo[height<=2160][fps>=50]+bestaudio/best[height<=2160]"
     )
     "old_combo" = @(
         "140", "18", "59/22/18", "22/18",
@@ -524,7 +604,10 @@ $lnkUpdateResult.Size      = [System.Drawing.Size]::new(190, 18)
 $lnkUpdateResult.Text      = ""
 $lnkUpdateResult.Font      = [System.Drawing.Font]::new("Microsoft Sans Serif", 9)
 $lnkUpdateResult.Add_LinkClicked({
-    if (-not [string]::IsNullOrEmpty($script:updateUrl)) {
+    # Process.Start открывает значение оболочкой: не-http схема (file:, ms-*) или
+    # путь к исполняемому файлу запустились бы как есть. Значение приходит из
+    # ответа GitHub API — доверять ему на слово незачем.
+    if ($script:updateUrl -match '^https://') {
         [System.Diagnostics.Process]::Start($script:updateUrl) | Out-Null
     }
 })
@@ -687,7 +770,10 @@ $comboFormat.Items.AddRange(@(
 ))
 $cfg_format = Read-Config "format_preset" "download" "auto"
 $fmtIdx = $comboFormat.Items.IndexOf($cfg_format)
-$comboFormat.SelectedIndex = if ($fmtIdx -ge 0) { $fmtIdx } else { 0 }
+$comboFormat.SelectedIndex = if ($fmtIdx -ge 0) { $fmtIdx } else {
+    $script:startupWarnings += "[download] format_preset = «$cfg_format» — допустимо: $($comboFormat.Items -join ', '). Использую auto."
+    0
+}
 $_fc.Add($comboFormat)
 
 # ── 4b. Аудио-формат / SponsorBlock / субтитры с видео ────────────────────
@@ -847,7 +933,7 @@ $comboProxyType = [System.Windows.Forms.ComboBox]::new()
 $comboProxyType.Location      = [System.Drawing.Point]::new($xPos, $yPos)
 $comboProxyType.Size          = [System.Drawing.Size]::new(75, 25)
 $comboProxyType.DropDownStyle = "DropDownList"
-$comboProxyType.Items.AddRange(@("нет", "https", "http", "socks5", "socks4"))
+$comboProxyType.Items.AddRange(@("нет", "https", "http", "socks5", "socks5h", "socks4", "socks4a"))
 if ([string]::IsNullOrWhiteSpace($cfg_proxy_raw) -or [string]::IsNullOrWhiteSpace($cfg_proxyHost)) {
     $comboProxyType.SelectedIndex = 0
 } else {
@@ -1107,8 +1193,16 @@ function Append-Output {
 }
 
 # Прогресс/статус/заголовок — та же защита. -1 означает «не трогать».
+# Последнее состояние помним всегда: в свёрнутом окне значения раньше просто
+# отбрасывались, и после разворачивания заголовок, статус и прогресс были
+# устаревшими — а финальное «Готово», если очередь закончилась свёрнутой,
+# терялось совсем. Flush-PendingOutput применяет сохранённое.
+$script:lastUi = @{ Percent = -1; Status = $null; Title = $null }
 function Set-UiProgress {
     param([int]$Percent = -1, [string]$Status = $null, [string]$Title = $null)
+    if ($Percent -ge 0) { $script:lastUi.Percent = $Percent }
+    if ($Status)        { $script:lastUi.Status  = $Status }
+    if ($Title)         { $script:lastUi.Title   = $Title }
     if (Test-WindowMinimized) { return }
     if ($Percent -ge 0) { $progressBar.Value = [Math]::Min($Percent, 100) }
     if ($Status)        { $lblStatus.Text = $Status }
@@ -1117,6 +1211,13 @@ function Set-UiProgress {
 
 # Выливает накопленное после разворачивания окна.
 function Flush-PendingOutput {
+    # Сначала восстанавливаем прогресс/статус/заголовок — иначе окно после
+    # разворачивания показывает состояние на момент сворачивания.
+    try {
+        if ($script:lastUi.Percent -ge 0) { $progressBar.Value = [Math]::Min($script:lastUi.Percent, 100) }
+        if ($script:lastUi.Status)        { $lblStatus.Text = $script:lastUi.Status }
+        if ($script:lastUi.Title)         { $form.Text = $script:lastUi.Title }
+    } catch {}
     if ($global:pendingOutput.Count -eq 0) { return }
     $items = $global:pendingOutput.ToArray()
     $global:pendingOutput.Clear()
@@ -1227,6 +1328,32 @@ $btnStart.Add_Click({
         }
     }
 
+    # Preflight ДО очереди. Раньше отсутствие yt-dlp.exe всплывало сырым
+    # Win32Exception из Process.Start уже внутри цикла: MessageBox с текстом
+    # «The system cannot find the file specified» и остановленная очередь.
+    $_pfErrors = @()
+    if (-not (Test-Path -LiteralPath $dlp) -and -not (Get-Command $dlp -ErrorAction SilentlyContinue)) {
+        $_pfErrors += "yt-dlp не найден: положите yt-dlp.exe рядом со скриптом или добавьте его в PATH."
+    }
+    if ($chkTranslate.Checked) {
+        $_votExe = Join-Path $scriptDir "vot-cli-live.exe"
+        if (-not (Test-Path -LiteralPath $_votExe) -and -not (Get-Command "vot-cli-live.exe" -ErrorAction SilentlyContinue)) {
+            $_pfErrors += "AI-перевод включён, но vot-cli-live.exe не найден рядом со скриптом и в PATH."
+        }
+        if (-not (Test-FfmpegAvailable)) {
+            $_pfErrors += "AI-перевод включён, но ffmpeg не найден (нужен для мержа дорожек)."
+        }
+        if ($comboTransMode.SelectedIndex -eq 0) {
+            $_ffprobeOk = (Test-Path -LiteralPath $ffprobeLocal) -or [bool](Get-Command "ffprobe" -ErrorAction SilentlyContinue)
+            if (-not $_ffprobeOk) { $_pfErrors += "Режим «2 дорожки» требует ffprobe (подсчёт аудиодорожек)." }
+        }
+    }
+    if ($_pfErrors.Count -gt 0) {
+        [System.Windows.Forms.MessageBox]::Show(($_pfErrors -join "`n"), "Проверка окружения",
+            [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+        return
+    }
+
     $btnStart.Enabled = $false
     $btnStop.Enabled  = $true
     # Очередь нельзя менять во время загрузки — иначе индексы съезжают.
@@ -1262,7 +1389,14 @@ $btnStart.Add_Click({
             Append-Output ""
             Append-Output "═══ [$itemNum/$totalItems] [$platform]  $currentUrl" ([System.Drawing.Color]::Cyan)
 
+            # Относительный путь резолвим от каталога скрипта. GUI считал его от
+            # $PWD процесса, а дочерний yt-dlp запускается с WorkingDirectory =
+            # $scriptDir: при запуске из корня репозитория (как в README) GUI
+            # создавал одну папку, а файлы уезжали в другую.
             $folder = $textBoxFolder.Text
+            if ($folder -and -not [System.IO.Path]::IsPathRooted($folder)) {
+                $folder = [System.IO.Path]::Combine($scriptDir, $folder)
+            }
             # F12. -LiteralPath: путь с [ ] ? * иначе трактуется как wildcard —
             # Test-Path «не находит» существующий каталог, а создание целит не туда.
             if (-not (Test-Path -LiteralPath $folder)) {
@@ -1431,7 +1565,10 @@ $btnStart.Add_Click({
 
             # Строку для показа и для Arguments собираем ЕДИНЫМ квотером (Join-WinArgs).
             $cmdLine = Join-WinArgs $command
-            $textCommand.Text = "$dlp $cmdLine"
+            # Запись в контрол свёрнутого окна вытаскивает форму из свёрнутого
+            # состояния, после чего WinForms и панель задач расходятся во мнении
+            # о ней и кнопка на панели перестаёт разворачивать окно.
+            if (-not (Test-WindowMinimized)) { $textCommand.Text = "$dlp $cmdLine" }
             Append-Output "Команда: $dlp $cmdLine" ([System.Drawing.Color]::DimGray)
 
             # Запуск процесса
@@ -1443,6 +1580,9 @@ $btnStart.Add_Click({
             $psi.UseShellExecute        = $false
             $psi.CreateNoWindow         = $true
             $psi.WorkingDirectory       = $scriptDir
+            $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+            $psi.StandardErrorEncoding  = [System.Text.Encoding]::UTF8
+            $psi.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8"
             if ($proxyEnvVal) {
                 $psi.EnvironmentVariables["HTTP_PROXY"]  = $proxyEnvVal
                 $psi.EnvironmentVariables["HTTPS_PROXY"] = $proxyEnvVal
@@ -1541,7 +1681,7 @@ $btnStart.Add_Click({
                 # перевод не запускается, потому что переводить нечего.
                 $archiveSkipped = $false
                 if ($dlManifest -and $cfg_useArchive -eq "true" -and $qi -lt 7 -and (Test-Path -LiteralPath $dlManifest)) {
-                    $archiveSkipped = (@(Get-Content -LiteralPath $dlManifest -ErrorAction SilentlyContinue |
+                    $archiveSkipped = (@(Get-ManifestLines $dlManifest |
                                          Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -eq 0)
                 }
 
@@ -1585,13 +1725,26 @@ $btnStart.Add_Click({
                     $transMode      = $transModeNames[$comboTransMode.SelectedIndex]
 
                     $hasDeps = $true
+                    $votBin  = $null
                     $votExe  = Join-Path $scriptDir "vot-cli-live.exe"
+                    # Ищем именно .exe. Get-Command "vot-cli-live" находит и .cmd-шим,
+                    # который кладёт npm, но CreateProcess при UseShellExecute=$false
+                    # дописывает к имени только .exe — запуск падал Win32Exception,
+                    # исключение вылетало из цикла по URL, остаток очереди не
+                    # обрабатывался, а провал перевода не попадал в failCount.
                     if (Test-Path -LiteralPath $votExe) {
                         $votBin = $votExe
-                    } elseif (Get-Command "vot-cli-live" -ErrorAction SilentlyContinue) {
-                        $votBin = "vot-cli-live"
                     } else {
-                        Append-Output "vot-cli-live не найден. Положите vot-cli-live.exe рядом со скриптом или: npm install -g vot-cli-live" ([System.Drawing.Color]::Red)
+                        $votCmd = Get-Command "vot-cli-live.exe" -ErrorAction SilentlyContinue
+                        if ($votCmd) { $votBin = $votCmd.Source }
+                    }
+                    if (-not $votBin) {
+                        $votAny = Get-Command "vot-cli-live" -ErrorAction SilentlyContinue
+                        if ($votAny) {
+                            Append-Output "vot-cli-live найден как $($votAny.Source), но это не .exe — запустить его напрямую нельзя. Положите vot-cli-live.exe рядом со скриптом." ([System.Drawing.Color]::Red)
+                        } else {
+                            Append-Output "vot-cli-live не найден. Положите vot-cli-live.exe рядом со скриптом." ([System.Drawing.Color]::Red)
+                        }
                         $hasDeps = $false
                     }
                     if (-not (Test-FfmpegAvailable)) {
@@ -1624,6 +1777,8 @@ $btnStart.Add_Click({
                         $votPsi.RedirectStandardError  = $true
                         $votPsi.UseShellExecute        = $false
                         $votPsi.CreateNoWindow         = $true
+                        $votPsi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+                        $votPsi.StandardErrorEncoding  = [System.Text.Encoding]::UTF8
                         Append-Output "WARN: TLS-проверка отключена для AI-перевода (vot-cli-live) — риск MITM." ([System.Drawing.Color]::Yellow)
                         $votPsi.EnvironmentVariables["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
                         # Перевод тоже должен ходить через proxy (как и загрузка), иначе
@@ -1637,7 +1792,21 @@ $btnStart.Add_Click({
                         # с пробелами в пути, URL со спецсимволами) — CommandLineToArgvW-корректно.
                         $votArgs = @("--output=$tempDir", "--voice-style=$transVoice", "--reslang=$transLang", $currentUrl)
                         $votPsi.Arguments = Join-WinArgs $votArgs
-                        $votProc = [System.Diagnostics.Process]::Start($votPsi)
+                        # try/catch: сбой ЗАПУСКА vot — это провал перевода одного
+                        # URL, а не авария всей очереди. Раньше Win32Exception вылетал
+                        # из цикла, остаток URL не обрабатывался, а $tempDir и манифест
+                        # оставались в %TEMP%.
+                        $votProc = $null
+                        try {
+                            $votProc = [System.Diagnostics.Process]::Start($votPsi)
+                        } catch {
+                            Append-Output "AI-перевод: не удалось запустить $votBin — $($_.Exception.Message)" ([System.Drawing.Color]::Red)
+                        }
+                        if ($null -eq $votProc) {
+                            Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+                            $hasDeps = $false
+                        }
+                        if ($votProc) {
                         $global:translateProcess = $votProc
                         # Оба потока читаем асинхронно: последовательный ReadToEnd по одному
                         # пайпу блокирует до его закрытия (т.е. до выхода vot), а при сетевом
@@ -1647,19 +1816,24 @@ $btnStart.Add_Click({
                         # Ждём с прокачкой message-loop (DoEvents), чтобы окно не висело и Stop
                         # оставался кликабельным. Отмена (processRunning=false) и потолок времени
                         # убивают vot — иначе зависший перевод держал бы GUI бессрочно.
-                        $_votTimeoutMs = 900000
+                        $_votTimeoutMs = [long]$cfg_transTimeout * 1000
                         $_votSw = [System.Diagnostics.Stopwatch]::StartNew()
                         $_votAborted = $false   # F8: отмена (Stop) или таймаут — vot не завершился сам
                         while (-not $votProc.HasExited) {
                             [System.Windows.Forms.Application]::DoEvents()
                             if (-not $global:processRunning) { Stop-ProcessTree $votProc; $_votAborted = $true; break }
-                            if ($_votSw.ElapsedMilliseconds -gt $_votTimeoutMs) {
+                            if ($_votTimeoutMs -gt 0 -and $_votSw.ElapsedMilliseconds -gt $_votTimeoutMs) {
                                 Stop-ProcessTree $votProc
                                 $_votAborted = $true
                                 Append-Output "AI-перевод: превышен таймаут vot-cli-live — прервано." ([System.Drawing.Color]::Red)
                                 break
                             }
-                            Start-Sleep -Milliseconds 150
+                            # DoEvents, а не голый Start-Sleep: иначе окно на время
+                            # перевода (минуты) не отвечает и Stop некликабелен.
+                            for ($_pump = 0; $_pump -lt 15; $_pump++) {
+                                [System.Windows.Forms.Application]::DoEvents()
+                                Start-Sleep -Milliseconds 10
+                            }
                         }
                         $votProc.WaitForExit()
                         $null = $outTask.Result; $null = $errTask.Result
@@ -1687,14 +1861,8 @@ $btnStart.Add_Click({
                             # файл в дереве»: тот мог принадлежать параллельному процессу.
                             # Манифест может содержать и не-медиа результаты (sidecar-субтитры).
                             $latestVideo = $null
-                            if ($dlManifest -and (Test-Path -LiteralPath $dlManifest)) {
-                                $reported = @(Get-Content -LiteralPath $dlManifest -ErrorAction SilentlyContinue |
-                                    Where-Object { $_ -and ([System.IO.Path]::GetExtension($_) -in @('.mp4','.mkv','.webm')) } |
-                                    Select-Object -Unique)
-                                foreach ($p in $reported) {
-                                    if (Test-Path -LiteralPath $p) { $latestVideo = Get-Item -LiteralPath $p; break }
-                                }
-                            }
+                            $reported = Get-ManifestMedia $dlManifest
+                            if ($reported.Count -gt 0) { $latestVideo = Get-Item -LiteralPath $reported[0] }
                             if ($latestVideo) {
                                 # Сохраняем исходное расширение: -c:v copy VP9/AV1 в mp4 может упасть.
                                 $outputFile = $latestVideo.FullName -replace ([regex]::Escape($latestVideo.Extension) + '$'), ('_translated' + $latestVideo.Extension)
@@ -1714,21 +1882,26 @@ $btnStart.Add_Click({
                                 } catch { $origACount = 1 }
                                 # F4: -map 0:s? -map 0:t? + -c:s copy сохраняют субтитры/вложения
                                 # исходника — иначе встроенные субтитры исчезают после мержа перевода.
+                                $origLang3  = ConvertTo-Iso6392 $cfg_transOrigLang
+                                $transLang3 = ConvertTo-Iso6392 $transLang
                                 $ffArgs = switch ($transMode) {
                                     "dual_track" { @("-y", "-i", $latestVideo.FullName, "-i", $transFile.FullName,
                                                      "-map", "0:v", "-map", "0:a", "-map", "1:a", "-map", "0:s?", "-map", "0:t?",
                                                      "-c:v", "copy", "-c:a", "copy",
                                                      "-c:a:$origACount", $mergeACodec, "-b:a:$origACount", "192k", "-c:s", "copy",
-                                                     "-metadata:s:a:0", "language=$cfg_transOrigLang",
+                                                     "-metadata:s:a:0", "language=$origLang3",
                                                      "-metadata:s:a:0", "title=Original",
-                                                     "-metadata:s:a:$origACount", "language=$transLang",
+                                                     "-metadata:s:a:0", "handler_name=Original",
+                                                     "-metadata:s:a:$origACount", "language=$transLang3",
                                                      "-metadata:s:a:$origACount", "title=AI Translation",
+                                                     "-metadata:s:a:$origACount", "handler_name=AI Translation",
                                                      "-disposition:a:0", "default", $outputFile) }
                                     "replace"    { @("-y", "-i", $latestVideo.FullName, "-i", $transFile.FullName,
                                                      "-map", "0:v", "-map", "1:a", "-map", "0:s?", "-map", "0:t?",
                                                      "-c:v", "copy", "-c:a", $mergeACodec, "-b:a", "192k", "-c:s", "copy",
-                                                     "-metadata:s:a:0", "language=$transLang",
-                                                     "-metadata:s:a:0", "title=AI Translation", $outputFile) }
+                                                     "-metadata:s:a:0", "language=$transLang3",
+                                                     "-metadata:s:a:0", "title=AI Translation",
+                                                     "-metadata:s:a:0", "handler_name=AI Translation", $outputFile) }
                                     "mix"        { @("-y", "-i", $latestVideo.FullName, "-i", $transFile.FullName,
                                                      "-filter_complex", "[0:a]volume=$cfg_transOrigVol[a0];[1:a]volume=$cfg_transTransVol[a1];[a0][a1]amix=inputs=2:duration=longest:normalize=0[aout]",
                                                      "-map", "0:v", "-map", "[aout]", "-map", "0:s?", "-map", "0:t?",
@@ -1770,18 +1943,25 @@ $btnStart.Add_Click({
                     # Перевод был запрошен и применим, но результата нет → это ошибка (nonzero-
                     # семантика .sh: COUNT_FAIL++). Загрузка уже засчитана в successCount, поэтому
                     # элемент отражается как «скачан, но перевод не выполнен».
-                    if (-not $translateOk) {
+                    # Остановка пользователем — не ошибка перевода: раньше Stop во
+                    # время vot печатал «AI-перевод не выполнен — засчитано как
+                    # ошибка» и портил сводку прерванного прогона.
+                    if (-not $translateOk -and $global:processRunning) {
                         $failCount++
                         Append-Output "AI-перевод не выполнен — засчитано как ошибка." ([System.Drawing.Color]::Red)
                     }
+                    } # конец ветки «vot запустился»
                 }
                 } # конец ветки «реальная загрузка» (не archive-skip)
-                # Очистка манифеста — общая для обеих веток.
-                if ($dlManifest) { Remove-Item -LiteralPath $dlManifest -Force -ErrorAction SilentlyContinue }
             } elseif ($global:processRunning) {
                 $failCount++
                 Append-Output "Ошибка: [$platform]  $currentUrl" ([System.Drawing.Color]::Red)
             }
+            # Очистка манифеста — на ЛЮБОМ исходе итерации, а не только при
+            # exitCode = 0: на каждом ненулевом коде (плейлист с одним битым
+            # элементом под -i, Stop, исключение) в %TEMP% оставался файл
+            # ytdlp_manifest_<guid>.txt.
+            if ($dlManifest) { Remove-Item -LiteralPath $dlManifest -Force -ErrorAction SilentlyContinue }
             $itemIdx++
         } # конец while
 
@@ -1843,6 +2023,41 @@ $btnClear.Add_Click({
     $form.Text         = "Video Downloader (yt-dlp) v18"
 })
 $_fc.Add($btnClear)
+
+$xPos += 195
+# Тот же отчёт, что у --doctor в CLI.
+$btnDoctor = [System.Windows.Forms.Button]::new()
+$btnDoctor.Location = [System.Drawing.Point]::new($xPos, $yPos)
+$btnDoctor.Size     = [System.Drawing.Size]::new(185, 35)
+$btnDoctor.Text     = "Проверить окружение"
+$btnDoctor.Add_Click({
+    $rows = @()
+    $rows += "Каталог: $scriptDir"
+    $rows += ""
+    $found = $null
+    try { $found = (Get-Command $dlp -ErrorAction SilentlyContinue).Source } catch {}
+    if (-not $found -and (Test-Path -LiteralPath $dlp)) { $found = $dlp }
+    if ($found) { $rows += "yt-dlp:       есть — $found" }
+    else { $rows += "yt-dlp:       НЕТ — загрузка невозможна" }
+    if (Test-FfmpegAvailable) { $rows += "ffmpeg:       есть" }
+    else { $rows += "ffmpeg:       НЕТ — не будет склейки video+audio и мержа перевода" }
+    $probeOk = (Test-Path -LiteralPath $ffprobeLocal) -or [bool](Get-Command "ffprobe" -ErrorAction SilentlyContinue)
+    if ($probeOk) { $rows += "ffprobe:      есть" }
+    else { $rows += "ffprobe:      НЕТ — не работает режим перевода «2 дорожки»" }
+    if (Test-Path -LiteralPath (Join-Path $scriptDir "deno.exe")) { $rows += "deno:         есть" }
+    else { $rows += "deno:         НЕТ — YouTube требует JS-рантайм: загрузки деградируют" }
+    $votExe = Join-Path $scriptDir "vot-cli-live.exe"
+    if ((Test-Path -LiteralPath $votExe) -or (Get-Command "vot-cli-live.exe" -ErrorAction SilentlyContinue)) {
+        $rows += "vot-cli-live: есть"
+    } else { $rows += "vot-cli-live: НЕТ (.exe) — нет AI-перевода" }
+    $rows += ""
+    $pr = if ($comboProxyType.SelectedIndex -eq 0) { "нет" } else { "$($comboProxyType.SelectedItem)://$($textProxyHost.Text)" }
+    $rows += "Прокси: $pr"
+    $rows += "Папка:  $($textBoxFolder.Text)"
+    [System.Windows.Forms.MessageBox]::Show(($rows -join "`n"), "Проверка окружения",
+        [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+})
+$_fc.Add($btnDoctor)
 
 $xPos += 195
 $btnExit = [System.Windows.Forms.Button]::new()
@@ -1913,6 +2128,10 @@ if ($form.Width -gt $wa.Width) { $form.Width = $wa.Width }
 # ── Версия yt-dlp — после отрисовки формы (через отложенный вызов) ────
 $script:dlpPath = "$dlp"
 $form.Add_Shown({
+    # Накопленные при чтении config.ini предупреждения — одним окном при старте.
+    if ($script:startupWarnings.Count -gt 0) {
+        foreach ($w in $script:startupWarnings) { Append-Output $w ([System.Drawing.Color]::Yellow) }
+    }
     $t = [System.Windows.Forms.Timer]::new()
     $t.Interval = 50
     $t.Add_Tick({

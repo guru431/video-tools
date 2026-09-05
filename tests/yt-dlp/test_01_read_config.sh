@@ -179,8 +179,14 @@ CMDF="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v18.cmd"
 PS1F="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v18.ps1"
 sh_src="$(cat "$SH")"; cmd_src="$(cat "$CMDF")"; ps1_src="$(cat "$PS1F")"
 
-# deno.exe детект (SH)
-assert_contains "SH: deno.exe детект"  'deno:$script_dir/deno.exe'  "$sh_src"
+# JS-рантайм: одна функция на оба места вызова (download_url и download_batch).
+# .exe проверяется ПЕРВЫМ (в Git Bash `test -x dir/deno` истинно и при одном
+# deno.exe), а путь конвертируется cygpath: MSYS переписывает POSIX-пути только у
+# аргументов, начинающихся с '/', и `deno:/d/…` уезжал нативному yt-dlp как есть.
+assert_contains "SH: единая функция JS-рантайма"  'build_js_runtime_args() {'  "$sh_src"
+assert_contains "SH: deno.exe проверяется первым" '[ -f "$dir/deno.exe" ]'     "$sh_src"
+assert_contains "SH: путь конвертируется cygpath" 'deno="$(cygpath -w "$deno"' "$sh_src"
+assert_not_contains "SH: нет старой копии детекта в download_batch" 'deno:$sdir/deno' "$sh_src"
 # env_prefix bash<4.4 safe expansion
 assert_contains "SH: env_prefix bash<4.4"  '${env_prefix[@]+"${env_prefix[@]}"}'  "$sh_src"
 # translate только при rc=0

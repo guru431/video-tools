@@ -1,6 +1,11 @@
-# Large third-party binaries (download separately — see README)
+# Large third-party binaries (download separately — see README).
+# ffmpeg/ffprobe нужны ОБЕИМ сторонам и ищутся рядом со СВОИМ скриптом:
+# yt-dlp/ffmpeg.exe и yt-dlp/ffprobe.exe (100+ МБ) без этих строк уходили
+# в `git add -A` — хук блокирует по содержимому, а не по расширению.
 ffmpeg/ffmpeg.exe
 ffmpeg/ffprobe.exe
+yt-dlp/ffmpeg.exe
+yt-dlp/ffprobe.exe
 yt-dlp/yt-dlp.exe
 yt-dlp/deno.exe
 yt-dlp/vot-cli-live.exe
@@ -19,15 +24,12 @@ yt-dlp/channels.txt
 
 # ps2exe build artifacts
 _build_tmp.ps1
-ps2exe_tool.ps1
 
 # Claude Code / agent-side files
 .claude/
 AGENTS.md
 CLAUDE.md
 FINDINGS.md
-PLAN.md
-tests/PLAN_TESTS.md
 
 # local-only secret denylist for pre-commit hook (never commit)
 .sanitize-patterns

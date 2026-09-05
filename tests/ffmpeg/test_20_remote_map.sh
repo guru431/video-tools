@@ -41,8 +41,8 @@ _setup_cfg() {
     video_number_frames_status="+"; video_number_frames_value="30"
     video_rotation_status="-";     video_rotation_value="2"
     video_subtitles_status="-";    video_subtitles_value="burn"
-    keep_aspect_ratio_value="yes"
-    output_container_value="mp4"
+    keep_aspect_ratio_status="+"; keep_aspect_ratio_value="yes"
+    output_container_status="+";  output_container_value="mp4"
     audio_codec_status="+";           audio_codec_value="aac"
     audio_number_channels_status="+"; audio_number_channels_value="2"
     audio_bitrate_status="+";         audio_bitrate_value="128"
@@ -108,8 +108,40 @@ suite "remote: субтитры и стиль"
 _setup_cfg
 video_subtitles_status="+"; video_subtitles_value="burn"
 subtitles_style="FontName=Arial,FontSize=24"
-params="$(remote_op_for_config 0 0 | tail -1)"
+# Третий аргумент — «sidecar найден». Без файла титров поле subtitles уезжать не
+# имеет права: локально это означает «кодируем без титров», а служба получала
+# "subtitles":"burn" без subtitle_upload_id и отвечала 400 ПОСЛЕ полной загрузки.
+params="$(remote_op_for_config 0 0 1 | tail -1)"
 assert_contains "режим субтитров" '"subtitles":"burn"' "$params"
 assert_contains "стиль"           '"subtitle_style":"FontName=Arial,FontSize=24"' "$params"
+
+params="$(remote_op_for_config 0 0 0 | tail -1)"
+assert_not_contains "без sidecar поле subtitles не уезжает"     '"subtitles"'      "$params"
+assert_not_contains "без sidecar стиль субтитров не уезжает"    '"subtitle_style"' "$params"
+
+# ══════════════════════════════════════════════════════════════
+suite "remote: статус ключа значим так же, как значение"
+# ══════════════════════════════════════════════════════════════
+# Один config.ini обязан давать один результат локально и удалённо. Три поля
+# читались ТОЛЬКО по значению, игнорируя '-': `container = -mkv` локально давал
+# movie.mp4, а службе уходило "container":"mkv" — публиковался mp4 с MKV внутри.
+_setup_cfg
+output_container_status="-"; output_container_value="mkv"
+params="$(remote_op_for_config 0 0 | tail -1)"
+assert_contains     "выключенный container → mp4, как локально" '"container":"mp4"' "$params"
+assert_not_contains "выключенное значение container не уехало"  '"container":"mkv"' "$params"
+
+_setup_cfg
+keep_aspect_ratio_status="-"; keep_aspect_ratio_value="yes"
+params="$(remote_op_for_config 0 0 | tail -1)"
+assert_contains "выключенный keep_aspect_ratio → false" '"keep_aspect":false' "$params"
+
+_setup_cfg
+audio_codec_status="-"
+params="$(remote_op_for_config 0 0 | tail -1)"
+assert_contains     "выключенный аудиокодек → copy" '"audio":{"codec":"copy"}' "$params"
+assert_not_contains "при copy битрейт не уезжает"   '"bitrate":128'  "$params"
+assert_not_contains "при copy каналы не уезжают"    '"channels"'     "$params"
+assert_not_contains "при copy частота не уезжает"   '"rate"'         "$params"
 
 summary

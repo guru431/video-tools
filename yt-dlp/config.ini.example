@@ -1,6 +1,7 @@
 [proxy]
 # Оставить пустым если прокси не нужен
-# Формат: [scheme]://[user:pass@]host[:port]
+# Формат: схема://[user:pass@]host[:port]. Схему указывать ОБЯЗАТЕЛЬНО:
+# http, https, socks4, socks4a, socks5, socks5h.
 # Пример: https://username:password@proxy.example.com:443
 # Поддерживается подстановка из окружения: url = ${PROXY_URL}
 # (несколько вхождений ок; не заданная переменная -> пустая строка + WARN)
@@ -39,11 +40,17 @@ format_preset = auto
 continue_on_error = true
 # Пропускать уже скачанные видео (download archive)
 use_archive = true
+# Путь относителен base_dir выше; абсолютный путь берётся как есть.
 archive_file = download_archive.txt
-# Формат аудио при выборе "только аудио": best (как отдаёт сервер), mp3, m4a, opus
+# Формат аудио при выборе «только аудио»: best (как отдаёт сервер), mp3, m4a,
+# opus, flac, wav. При best дорожка извлекается без перекодирования.
 audio_format = best
 # SponsorBlock: off (выкл), mark (отметить главами), remove (вырезать сегменты)
-sponsorblock = off
+sponsorblock = off
+# Ссылка с &list=… : auto — как решит yt-dlp (плейлист), single — только указанное
+# видео (--no-playlist), full — всегда весь плейлист. single спасает от ссылок
+# вида watch?v=X&list=RD… (бесконечный авто-микс YouTube).
+playlist = auto
 
 [network]
 # Профиль устойчивости загрузки. Влияет на число параллельных фрагментов,
@@ -58,13 +65,20 @@ speed_profile = normal
 limit_rate =
 
 [subtitles]
-# Язык субтитров
+# Язык субтитров для режима «только субтитры» и для download_with_video.
+# На пункты меню CMD-загрузчика «Субтитры (RU)/(EN)» НЕ влияет: тот интерактивный
+# CLI config.ini не читает вовсе (санкционированное исключение, см. CLAUDE.md).
 lang = ru
-# Формат: vtt, srt
+# Формат субтитров. У YouTube нативно доступен только vtt: srt пришлось бы
+# конвертировать (--convert-subs), а этого флага скрипт не передаёт — значение
+# srt для YouTube просто не сработает. Ключ действует на режим «только субтитры»
+# и НЕ действует на download_with_video ниже (там формат выбирает yt-dlp).
 format = vtt
 # Скачивать субтитры вместе с видео: off, sidecar (отдельный файл), embed (встроить в контейнер)
 download_with_video = off
 
+# ВСЯ СЕКЦИЯ [batch] — только для .sh (флаг --batch). CMD и GUI режима batch не
+# имеют вовсе, и эти ключи там не читаются.
 [batch]
 # Период для batch-загрузки: now-1month, now-3months, now-6months, now-1year
 date_range = now-6months
@@ -100,5 +114,11 @@ mode = mix
 original_volume = 0.3
 # Громкость перевода при mode=mix (0.0-2.0)
 translation_volume = 1.0
-# Язык оригинала (для метаданных дорожки)
+# Обе громкости: неотрицательное число с ТОЧКОЙ как разделителем. Запятая («0,3»)
+# рвёт filter_complex ffmpeg — проверяется до запуска и отклоняется с сообщением.
+# Язык оригинала. Для mp4 код приводится к трёхбуквенному (ISO 639-2): ru → rus.
 original_lang = en
+# Потолок времени на один вызов vot-cli-live, секунды (0 = без ограничения).
+# Без него зависший перевод держал прогон бессрочно; двухчасовому ролику
+# 900 с может не хватить — тогда увеличьте.
+timeout_sec = 900

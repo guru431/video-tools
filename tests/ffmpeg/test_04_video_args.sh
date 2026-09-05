@@ -101,5 +101,52 @@ assert_eq "framerate +60" "-r 60" "$(getv "$OUT" video_frames)"
 OUT=$(run_script 'video_number_frames=":-:25"')
 assert_empty "framerate -25"  "$(getv "$OUT" video_frames)"
 
+
+# ══════════════════════════════════════════════════════════════
+suite "Видео: имена контейнеров, у которых нет своего muxer'а"
+# ══════════════════════════════════════════════════════════════
+# ffmpeg выбирает muxer ПО РАСШИРЕНИЮ выходного файла, а расширение и имя muxer'а
+# совпадают не всегда. `container = +m4v` давал сырой elementary-stream — файл,
+# который не открывает ни один плеер, при коде возврата 0; `mpg`/`wmv`/`mts`/`m2ts`
+# либо брали не тот muxer, либо не находились вовсе. Отображаем известные случаи
+# и говорим об этом вслух: молча отдать неоткрываемый файл хуже, чем сменить
+# расширение с объяснением.
+OUT=$(run_script 'output_container=":+:m4v"')
+assert_eq "container +m4v → mp4"   "mp4"    "$(getv "$OUT" format_files_out)"
+OUT=$(run_script 'output_container=":+:mpg"')
+assert_eq "container +mpg → mpeg"  "mpeg"   "$(getv "$OUT" format_files_out)"
+OUT=$(run_script 'output_container=":+:wmv"')
+assert_eq "container +wmv → asf"   "asf"    "$(getv "$OUT" format_files_out)"
+OUT=$(run_script 'output_container=":+:mts"')
+assert_eq "container +mts → mpegts"  "mpegts" "$(getv "$OUT" format_files_out)"
+OUT=$(run_script 'output_container=":+:m2ts"')
+assert_eq "container +m2ts → mpegts" "mpegts" "$(getv "$OUT" format_files_out)"
+# Нормальные имена не трогаем: подмена должна быть узким списком, а не фильтром.
+OUT=$(run_script 'output_container=":+:mkv"')
+assert_eq "container +mkv не трогаем" "mkv" "$(getv "$OUT" format_files_out)"
+
+# Подмена молчаливой быть не должна — пользователь получит файл с другим
+# расширением, чем просил в config.ini.
+OUT_TXT=$( (
+    export PATH="$TESTS_DIR/mocks:$PATH"; export MOCK_FFMPEG_ENCODERS=""
+    default_vars; output_container=":+:m4v"
+    source "$SCRIPT" 2>&1
+) < /dev/null )
+assert_contains "SH: подмена m4v объяснена вслух" "container = m4v" "$OUT_TXT"
+
+# Паритет: то же отображение обязано быть в PS1 и CMD — иначе один config.ini
+# даёт три разных расширения выхода.
+PS1_SRC=$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1")
+CMD_SRC=$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.cmd")
+assert_contains "PS1: m4v → mp4"   'container = m4v'  "$PS1_SRC"
+assert_contains "PS1: mpg → mpeg"  'container = mpg'  "$PS1_SRC"
+assert_contains "PS1: wmv → asf"   'container = wmv'  "$PS1_SRC"
+assert_contains "PS1: mts/m2ts → mpegts" '(mts|m2ts)' "$PS1_SRC"
+assert_contains "CMD: m4v → mp4"   'format_files_out!"=="m4v"'  "$CMD_SRC"
+assert_contains "CMD: mpg → mpeg"  'format_files_out!"=="mpg"'  "$CMD_SRC"
+assert_contains "CMD: wmv → asf"   'format_files_out!"=="wmv"'  "$CMD_SRC"
+assert_contains "CMD: mts → mpegts"  'format_files_out!"=="mts"'  "$CMD_SRC"
+assert_contains "CMD: m2ts → mpegts" 'format_files_out!"=="m2ts"' "$CMD_SRC"
+
 rm -rf "$EMPTY_DIR"
 summary

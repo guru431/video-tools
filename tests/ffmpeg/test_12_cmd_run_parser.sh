@@ -50,6 +50,15 @@ codec =
 [other]
 subtitles_style = FontSize=20,PrimaryColour=&HFFFFFF&
 log_file = my#file.log
+
+[remote]
+enabled = yes
+endpoint = https://svc.example.com/v1
+api_key = s3cr3t-value
+prefer = gpu
+wait_timeout = 60
+stall_timeout = 120
+on_failure = local
 INIEOF
 # CRLF для cmd
 sed -i 's/$/\r/' "$TMP_DIR/config.ini"
@@ -98,6 +107,33 @@ assert_eq "абсолютный source не префиксован" \
     "folder_sources=C:\\abs\\src" "$(get_line folder_sources)"
 assert_contains "относительный destination префиксован папкой скрипта" \
     "$WIN_TMP" "$(get_line folder_destination)"
+
+# ══════════════════════════════════════════════════════════════
+suite "CMD: ключи [remote] действительно разбираются"
+# ══════════════════════════════════════════════════════════════
+# Раньше «ключи [remote] в .cmd читаются» подтверждалось только `grep -w` по
+# исходнику: --print-config о них не знал, и опечатка в имени ключа прошла бы
+# незамеченной. Теперь они печатаются, и значения из тестового конфига видны.
+assert_eq "remote_enabled разобран"       "remote_enabled=yes"                          "$(get_line remote_enabled)"
+assert_eq "remote_endpoint разобран"      "remote_endpoint=https://svc.example.com/v1"  "$(get_line remote_endpoint)"
+assert_eq "remote_prefer разобран"        "remote_prefer=gpu"                           "$(get_line remote_prefer)"
+assert_eq "remote_wait_timeout разобран"  "remote_wait_timeout=60"                      "$(get_line remote_wait_timeout)"
+assert_eq "remote_stall_timeout разобран" "remote_stall_timeout=120"                    "$(get_line remote_stall_timeout)"
+assert_eq "remote_on_failure разобран"    "remote_on_failure=local"                     "$(get_line remote_on_failure)"
+# Ключ службы наружу не печатаем: вывод --print-config попадает в логи CI.
+assert_eq "ключ службы под маской"        "remote_api_key=***"                          "$(get_line remote_api_key)"
+assert_not_contains "значение ключа не печатается" "s3cr3t-value" "$output"
+
+# ══════════════════════════════════════════════════════════════
+suite "CMD: дубликат ключа — побеждает ПЕРВОЕ вхождение"
+# ══════════════════════════════════════════════════════════════
+# Контракт всех платформ. Раньше в .cmd каждое присваивание перезаписывало
+# переменную, то есть побеждало ПОСЛЕДНЕЕ: один config.ini давал libx264 в
+# SH/PS1 и libx265 в CMD — молча.
+printf '[video]\r\ncodec = +libx264\r\ncodec = +libx265\r\n' > "$TMP_DIR/config.ini"
+dup_out=$(cmd //c "$WIN_RUN --print-config" < /dev/null 2>&1)
+dup_line=$(printf '%s\n' "$dup_out" | tr -d '\r' | grep '^video_codec=' | head -1)
+assert_eq "дубликат: победило первое вхождение" "video_codec=:+:libx264" "$dup_line"
 
 rm -rf "$TMP_DIR"
 

@@ -56,7 +56,10 @@ suite "CMD yt-dlp: avc1_https (исправленные itag)"
 # ══════════════════════════════════════════════════════════════
 
 assert_contains "audio → 140"               "save_settings=-f 140\""  "$CMD_SRC"
-assert_contains "720p → 140+136/135/134"    "140+136/135/134"  "$CMD_SRC"
+# Аудио повторяется в КАЖДОЙ альтернативе: в yt-dlp «+» связывает сильнее «/»,
+# поэтому 140+136/135/134 = (140+136)/135/134 — без 136 качалось ТОЛЬКО 135,
+# то есть видео без звука с кодом возврата 0.
+assert_contains "720p → 140+136/140+135/140+134"    "140+136/140+135/140+134"  "$CMD_SRC"
 assert_contains "1440p → 140+264 (не битый 140+138)"  "140+264"  "$CMD_SRC"
 assert_contains "2160p → 140+266 (не битый 140+139)"  "140+266"  "$CMD_SRC"
 assert_not_contains "нет битого аудио-itag 138"  "140+138"  "$CMD_SRC"
@@ -66,7 +69,7 @@ assert_not_contains "нет битого аудио-itag 139"  "140+139"  "$CMD_
 suite "CMD yt-dlp: avc1_m3u8 (исправленные itag)"
 # ══════════════════════════════════════════════════════════════
 
-assert_contains "720p → 234+232/231/230"  "234+232/231/230"  "$CMD_SRC"
+assert_contains "720p → 234+232/234+231/234+230"  "234+232/234+231/234+230"  "$CMD_SRC"
 assert_contains "1080p → 270+234 (не битый 234+233)"  "270+234"  "$CMD_SRC"
 assert_not_contains "нет битого 234+233"  "234+233"  "$CMD_SRC"
 
@@ -248,7 +251,13 @@ assert_eq "vot_rc сохранён ДО сброса NODE_TLS"  "ok"  "$order"
 assert_contains "merge: ff_rc проверяется"  'set "ff_rc=!errorlevel!"'  "$src"
 assert_contains "merge: битый выход удаляется"  'del /q "!output_file!"'  "$src"
 # Выходная папка от папки скрипта
-assert_contains "folder от %~dp0"  'set "folder=%~dp0_video_"'  "$src"
+# %~dp0 снимается ДО setlocal EnableDelayedExpansion: под ним путь скрипта с «!»
+# (C:\...\bang!dir\) терял эти символы, и бинарники рядом со скриптом молча
+# игнорировались. Дальше по файлу используется !SCRIPT_DIR!.
+assert_contains "путь скрипта снят до setlocal"  'set "SCRIPT_DIR=%~dp0"'  "$src"
+assert_contains "folder от !SCRIPT_DIR!"  'set "folder=!SCRIPT_DIR!_video_"'  "$src"
+_dp0_after=$(awk '/^setlocal EnableDelayedExpansion/{f=1; next} f && /%~dp0/{print NR": "$0}' "$DLP_CMD")
+assert_empty "после setlocal %~dp0 не используется" "$_dp0_after"
 # Убран безусловный --no-check-certificate (паритет с SH)
 assert_not_contains "нет --no-check-certificate"  "--no-check-certificate"  "$src"
 

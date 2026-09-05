@@ -17,6 +17,7 @@ video/
 │   ├── FFmpeg_Converter_script.*        # Основная логика (.sh/.cmd/.ps1)
 │   ├── build_exe.ps1                    # Сборка -> _VideoConverter_v18.exe
 │   ├── ffmpeg.exe                       # Портативный ffmpeg (нужно скачать, см. ниже)
+│   ├── remote_client.*                  # Клиент удалённого бэкенда (.sh/.ps1)
 │   └── _VideoConverter_v18.exe          # Скомпилированный GUI
 │
 ├── yt-dlp/                              # Загрузчик видео с YouTube и 1000+ сайтов
@@ -26,16 +27,17 @@ video/
 │   ├── Downloading_from_YouTube_v18.ps1 # GUI (WinForms)
 │   ├── build_exe.ps1                    # Сборка -> _VideoDownloader_v18.exe
 │   ├── yt-dlp.exe                       # Загрузчик видео (нужно скачать, см. ниже)
-│   ├── deno.exe                         # JS-runtime для vot-cli (опционально)
+│   ├── ffmpeg.exe / ffprobe.exe         # Нужны для мержа дорожек и AI-перевода
+│   ├── deno.exe                         # JS-рантайм ДЛЯ yt-dlp (YouTube), не для vot
 │   ├── vot-cli-live.exe                 # AI-перевод аудио через Яндекс (опционально)
 │   └── _VideoDownloader_v18.exe         # Скомпилированный GUI
 │
 ├── tests/                               # Автоматические тесты
 │   ├── run_tests.sh                     # Точка входа
 │   ├── lib/framework.sh                 # Assert-функции, форматированный вывод
-│   ├── mocks/{ffmpeg,ffprobe,yt-dlp}    # Mock-бинарники
-│   ├── ffmpeg/test_01..23*.sh           # 23 тест-файла
-│   ├── yt-dlp/test_01..14*.sh           # 14 тест-файлов
+│   ├── mocks/                           # ffmpeg, ffmpeg.cmd, ffprobe, yt-dlp, curl, vot-cli-live
+│   ├── ffmpeg/test_01..24*.sh           # 24 тест-файла
+│   ├── yt-dlp/test_01..15*.sh           # 15 тест-файлов
 │   └── common/test_*.sh                 # 10 файлов: кодировки, паритет, guardrail'ы, ссылки в документации, pre-commit, privacy-scan
 │
 └── README.md
@@ -43,12 +45,29 @@ video/
 
 ### Бинарники (не входят в репо)
 
-Скачать и положить рядом со скриптами:
+Каждая сторона ищет инструменты **рядом со своим скриптом**, затем в `PATH`. Поэтому
+раскладка разная, и «положить всё в одну папку» не работает:
 
-- **ffmpeg.exe / ffprobe.exe** — https://www.gyan.dev/ffmpeg/builds/ (full build), распаковать `bin/ffmpeg.exe` и `bin/ffprobe.exe` в `ffmpeg/`
-- **yt-dlp.exe** — https://github.com/yt-dlp/yt-dlp/releases (последний `yt-dlp.exe`), положить в `yt-dlp/`
-- **deno.exe** (опционально, для AI-перевода) — https://github.com/denoland/deno/releases (`deno-x86_64-pc-windows-msvc.zip`), положить в `yt-dlp/`
-- **vot-cli-live.exe** (опционально, AI-перевод) — собирается из https://github.com/FOSWLY/vot-cli, положить в `yt-dlp/`
+| Инструмент | Куда класть | Зачем он там | Что без него не работает |
+|---|---|---|---|
+| `ffmpeg.exe` | `ffmpeg/` | конвертация | ffmpeg-сторона не работает вовсе (кроме тонкого клиента с `[remote] enabled = yes`) |
+| `ffmpeg.exe` | `yt-dlp/` | склейка `video+audio` и мерж дорожки перевода | все `+`-пресеты отдают немерженные потоки; AI-перевод невозможен |
+| `ffprobe.exe` | `yt-dlp/` | подсчёт аудиодорожек | режим перевода «2 дорожки» (`dual_track`) |
+| `yt-dlp.exe` | `yt-dlp/` | загрузка | загрузка невозможна |
+| `deno.exe` | `yt-dlp/` | **JS-рантайм для самого yt-dlp** | YouTube с 2025.11 требует внешний JS-рантайм: загрузки деградируют или падают. Нужен всем, а не только тем, кто пользуется переводом |
+| `vot-cli-live.exe` | `yt-dlp/` | AI-перевод | нет AI-перевода. Нужен именно `.exe`: npm-шим (`.cmd`) запустить напрямую нельзя |
+
+В `ffmpeg/` **`ffprobe.exe` не нужен** — эта сторона его не вызывает.
+Проверить раскладку одной командой:
+`bash yt-dlp/Downloading_from_YouTube_v18.sh --doctor` и
+`bash ffmpeg/FFmpeg_Converter_run_v18.sh --doctor`.
+
+Ссылки:
+
+- **ffmpeg / ffprobe** — https://www.gyan.dev/ffmpeg/builds/ (full build), из архива нужны `bin/ffmpeg.exe` и `bin/ffprobe.exe`
+- **yt-dlp** — https://github.com/yt-dlp/yt-dlp/releases (последний `yt-dlp.exe`)
+- **deno** — https://github.com/denoland/deno/releases (`deno-x86_64-pc-windows-msvc.zip`)
+- **vot-cli-live** — собирается из https://github.com/FOSWLY/vot-cli
 
 Перед первым запуском скопировать шаблоны конфигов и отредактировать под себя:
 
@@ -140,10 +159,12 @@ ffmpeg). Откат при `local` не молчаливый: печатаетс
 
 - **Качество:** 360p-4K, 7 пресетов формата: `avc1_best`, `avc1_https`, `avc1_m3u8`, `avc1_https_60fps`, `avc1_m3u8_60fps`, `avc1_https_60fps_hdr`, `old_combo` (актуальный список печатает `--help`)
 - **Cookies:** без / из браузера (Chrome, Firefox, Edge) / из файла
-- **Прокси:** HTTPS с авторизацией
+- **Прокси:** `http`, `https`, `socks4`, `socks4a`, `socks5`, `socks5h`; с авторизацией и без. Формат: `[схема]://[user:pass@]host[:port]`
 - **AI-перевод аудио:** 3 режима — dual_track, replace, mix
+- **Плейлисты:** `[download] playlist = auto|single|full` либо флаги `--no-playlist` / `--yes-playlist`
+- **Диагностика:** `--doctor` — какие инструменты найдены, где и что без каждого не работает
 - **Batch:** загрузка каналов из channels.txt с задержками и архивом скачанного — **только SH** (`Downloading_from_YouTube_v18.sh`, флаг `--batch`); в CMD и GUI (PS1) batch-режима нет
-- **Субтитры:** автоматическое скачивание (VTT)
+- **Субтитры:** авторские и автоматические (`--write-subs --write-auto-subs`); формат из `[subtitles] format` — у YouTube нативно доступен `vtt`
 
 **Формат channels.txt:** одна строка на канал, `category|handle|mode` (где `mode` = `videos` либо `playlists`, `handle` — без ведущего `@`). `category` задаёт подпапку для сохранения, строки с `#` игнорируются. Шаблон для копирования — [`yt-dlp/channels.txt.example`](yt-dlp/channels.txt.example) (скопировать в `yt-dlp/channels.txt`).
 
@@ -198,12 +219,12 @@ yt-dlp/_VideoDownloader_v18.exe
 
 ```bash
 bash tests/run_tests.sh           # все тесты
-bash tests/run_tests.sh ffmpeg    # ffmpeg (23 файла)
-bash tests/run_tests.sh yt-dlp    # yt-dlp (14 файлов)
+bash tests/run_tests.sh ffmpeg    # ffmpeg (24 файла)
+bash tests/run_tests.sh yt-dlp    # yt-dlp (15 файлов)
 bash tests/run_tests.sh common    # кросс-платформенные инварианты (10 файлов)
 ```
 
-### Тест-модули FFmpeg (23 файла)
+### Тест-модули FFmpeg (24 файла)
 
 | Файл | Что тестирует |
 |------|---------------|
@@ -229,9 +250,10 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 | `test_20_remote_map` | Удалённый бэкенд: отображение config.ini на операции службы (.sh) |
 | `test_21_remote_client` | Удалённый бэкенд: HTTP-слой, preflight, загрузка кусками, задача и отмена (мок curl) |
 | `test_22_remote_ps1` | Удалённый бэкенд: PS1-модуль клиента, загрузка через подменённый HTTP-слой |
-| `test_23_remote_parity` | Удалённый бэкенд: SH и PS1 собирают побайтово одинаковый JSON |
+| `test_23_remote_parity` | Удалённый бэкенд: SH и PS1 собирают побайтово одинаковый JSON |
+| `test_24_gui_worker_runspace` | Воркер запускается ТАК ЖЕ, как из GUI (AddScript-строка): `$PSScriptRoot` пуст, stderr не оседает в `Streams.Error` |
 
-### Тест-модули YT-DLP (14 файлов)
+### Тест-модули YT-DLP (15 файлов)
 
 | Файл | Что тестирует |
 |------|---------------|
@@ -249,8 +271,9 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 | `test_12_findings_cli` | `$qi` до манифеста, preflight AI-перевода, URL-валидация и громкости mix в CMD |
 | `test_13_path_limit` | Лимит длины пути (MAX_PATH): бюджет от базовой папки, одинаковый результат в SH/PS1/CMD |
 | `test_14_stop_and_window` | «Остановить» снимает дерево процессов; свёрнутое окно не трогаем |
+| `test_15_cmd_smoke` | Сквозной прогон интерактивного `.cmd` целиком: меню, argv дочерних процессов, коды возврата (моки — настоящие EXE) |
 
-### Тест-модули Common (9 файлов)
+### Тест-модули Common (10 файлов)
 
 | Файл | Что тестирует |
 |------|---------------|
@@ -262,7 +285,8 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 | `test_path_matrix` | Adversarial имена/пути: Quote-WinArg + CMD `!`-детект |
 | `test_ytdlp_preset_parity` | Паритет таблиц форматов yt-dlp SH ↔ PS1 |
 | `test_pre_commit_hook` | pre-commit на реальном temp-репо: блок секрета, разрешение удаления утечки |
-| `test_privacy_scan` | privacy-scan на реальном temp-репо: RFC1918 IP / e-mail, файлы с пробелами, `*.example` |
+| `test_privacy_scan` | privacy-scan на реальном temp-репо: RFC1918 IP / e-mail, файлы с пробелами и кириллицей, `*.example` |
+| `test_docs_links` | Ссылки и пути в документации ведут на существующие файлы; имена EXE в CI ↔ файлы на диске |
 
 Подробное описание: [tests/TESTING.md](tests/TESTING.md)
 

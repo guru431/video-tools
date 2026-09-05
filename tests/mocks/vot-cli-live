@@ -19,8 +19,17 @@ echo "$@" >> "${MOCK_VOT_LOG:-/tmp/mock_vot_calls.txt}"
 
 if [ "${MOCK_VOT_ALLOW:-0}" = "1" ]; then
     # Разрешённый режим: ведём себя как успешный перевод — создаём выходной файл.
+    # `--output=` у настоящего vot-cli-live — это КАТАЛОГ, и скрипт ищет в нём *.mp3
+    # (`find "$temp_dir" -name "*.mp3"`). Мок писал по этому пути ФАЙЛ, поэтому
+    # каталог не создавался, find не находил ничего, и «успешный» режим guard'а на
+    # самом деле воспроизводил провал перевода.
     for a in "$@"; do
-        case "$a" in --output=*) printf 'MOCK-VOT-AUDIO' > "${a#--output=}" ;; esac
+        case "$a" in
+            --output=*)
+                _o="${a#--output=}"
+                mkdir -p "$_o" 2>/dev/null && printf 'MOCK-VOT-AUDIO' > "$_o/translated.mp3"
+                ;;
+        esac
     done
     exit 0
 fi

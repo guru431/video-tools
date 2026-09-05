@@ -123,7 +123,11 @@ if "!start_coding_status!"=="+" (
 		pause
 		exit /b 1
 	)
-	for /f "tokens=1,2,3 delims=-" %%i in ("!start_coding_value!") do set "x=1%%i" & set "y=1%%j" & set "z=1%%k"
+	rem Поля дополняем до ДВУХ цифр перед префиксом "1": трюк "1%%i - 100" снимает
+	rem октальную трактовку ведущего нуля, но верен только для ровно двух цифр —
+	rem однозначное поле ("0-5-0", валидное по check_hms) давало 1+"0"=10 и −90 часов.
+	for /f "tokens=1,2,3 delims=-" %%i in ("!start_coding_value!") do set "x=0%%i" & set "y=0%%j" & set "z=0%%k"
+	set "x=1!x:~-2!" & set "y=1!y:~-2!" & set "z=1!z:~-2!"
 	set /a "start_coding_value=(x-100)*3600+(y-100)*60+(z-100)"
 	set "set_start_coding=-ss !start_coding_value!"
 ) else (
@@ -140,14 +144,28 @@ set "part_suffix_known="
 if "!start_coding_status!"=="+" if not "!start_coding_value!"=="0" set "part_suffix_known= (part.1)"
 
 for /f "tokens=1,2 delims=:" %%a in ("%length_coding%") do (set "length_coding_status=%%a" & set "length_coding_value=%%b")
+set "length_coding_value_raw=!length_coding_value!"
 if "!length_coding_status!"=="+" (
 	call :check_hms "[split] length" "!length_coding_value!"
 	if errorlevel 1 (
 		pause
 		exit /b 1
 	)
-	for /f "tokens=1,2,3 delims=-" %%i in ("!length_coding_value!") do set "x=1%%i" & set "y=1%%j" & set "z=1%%k"
+	rem Поля дополняем до ДВУХ цифр перед префиксом "1": трюк "1%%i - 100" снимает
+	rem октальную трактовку ведущего нуля, но верен только для ровно двух цифр —
+	rem однозначное поле ("0-5-0", валидное по check_hms) давало 1+"0"=10 и −90 часов.
+	for /f "tokens=1,2,3 delims=-" %%i in ("!length_coding_value!") do set "x=0%%i" & set "y=0%%j" & set "z=0%%k"
+	set "x=1!x:~-2!" & set "y=1!y:~-2!" & set "z=1!z:~-2!"
 	set /a "length_coding_value=(x-100)*3600+(y-100)*60+(z-100)"
+	rem Нулевая длительность (`length = +00-00-00`) проходила валидацию и давала
+	rem -t 0: ffmpeg честно создавал пустые файлы и отчитывался успехом.
+	if !length_coding_value! leq 0 (
+		echo.
+		echo [ОШИБКА] [split] length: длительность должна быть больше нуля, получено: "!length_coding_value_raw!"
+		echo.
+		pause
+		exit /b 1
+	)
 	set "set_length_coding=-t !length_coding_value!"
 ) else (
 	set "set_length_coding="
@@ -175,7 +193,15 @@ if "%audio_only%"=="yes" (
 	if /i "!audio_codec_value!"=="vorbis" (set "format_files_out=ogg" & set "set_audio_codec=-c:a libvorbis")
 	set "video_settings=-vn"
 ) else (
+	rem D3. Выходной контейнер: расширение выхода и имя muxer'а — разные вещи,
+	rem а ffmpeg выводит muxer из расширения. m4v даёт сырой elementary-stream,
+	rem mpg/wmv/mts — не те имена. Отображаем известные случаи вслух (docs).
 	if "!output_container_status!"=="+" (set "format_files_out=!output_container_value!") else (set "format_files_out=mp4")
+	if /i "!format_files_out!"=="m4v"  (echo [ПРЕДУПРЕЖДЕНИЕ] [video] container = m4v: ffmpeg выберет по расширению raw-muxer вместо MP4. Использую mp4. & set "format_files_out=mp4")
+	if /i "!format_files_out!"=="mpg"  (echo [ПРЕДУПРЕЖДЕНИЕ] [video] container = mpg: корректное имя контейнера — mpeg. Использую mpeg. & set "format_files_out=mpeg")
+	if /i "!format_files_out!"=="wmv"  (echo [ПРЕДУПРЕЖДЕНИЕ] [video] container = wmv: контейнер называется asf. Использую asf. & set "format_files_out=asf")
+	if /i "!format_files_out!"=="mts"  (echo [ПРЕДУПРЕЖДЕНИЕ] [video] container = mts: контейнер называется mpegts. Использую mpegts. & set "format_files_out=mpegts")
+	if /i "!format_files_out!"=="m2ts" (echo [ПРЕДУПРЕЖДЕНИЕ] [video] container = m2ts: контейнер называется mpegts. Использую mpegts. & set "format_files_out=mpegts")
 	rem E5. Сборка цепочки видео-фильтров
 	rem rotation+GPU: CUDA-варианта фильтра поворота нет → при повороте на GPU вся
 	rem цепочка на CPU (иначе несовместимая смесь transpose + scale_cuda/scale_qsv).
@@ -204,7 +230,7 @@ if "%audio_only%"=="yes" (
 		if "!keep_aspect_ratio_status!"=="+" if "!keep_aspect_ratio_value!"=="yes" set "keep_ar=yes"
 		if "!keep_ar!"=="yes" (
 			if "!scale_filter!"=="scale" (
-				if defined vf_chain (set "vf_chain=!vf_chain!,scale=!res_w!:!res_h!:force_original_aspect_ratio=decrease,pad=!res_w!:!res_h!:(ow-iw)/2:(oh-ih)/2") else (set "vf_chain=scale=!res_w!:!res_h!:force_original_aspect_ratio=decrease,pad=!res_w!:!res_h!:(ow-iw)/2:(oh-ih)/2")
+				if defined vf_chain (set "vf_chain=!vf_chain!,scale=!res_w!:!res_h!:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=!res_w!:!res_h!:(ow-iw)/2:(oh-ih)/2") else (set "vf_chain=scale=!res_w!:!res_h!:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=!res_w!:!res_h!:(ow-iw)/2:(oh-ih)/2")
 			) else (
 				if defined vf_chain (set "vf_chain=!vf_chain!,!scale_filter!=!res_w!:!res_h!:force_original_aspect_ratio=decrease") else (set "vf_chain=!scale_filter!=!res_w!:!res_h!:force_original_aspect_ratio=decrease")
 			)
@@ -285,7 +311,21 @@ if "!audio_normalize_status!"=="+" (
 
 set "audio_settings=!set_audio_codec! !set_audio_number_channels! !set_audio_bitrate! !set_audio_sampling_rate!"
 set "thread_args=-threads !threads!"
-set "format_files_in_pattern=*.%format_files_in:,= *.%"
+rem Пробелы вокруг элементов снимаются ДО сборки маски: `format_files_in = mp4, avi` —
+rem обычная запись через запятую с пробелом, и без этого маска становилась
+rem "*.mp4 *. avi": шаблон "*. avi" в for /r захватывает файлы БЕЗ расширения, а avi
+rem не подхватывается вовсе. PS1 триммил, SH и CMD — нет; один config.ini обрабатывал
+rem разные наборы файлов на разных платформах. Схлопываем ", " и " ," в ",".
+set "_ffi=%format_files_in%"
+:_ffi_trim
+if not "!_ffi: ,=,!"=="!_ffi!" (set "_ffi=!_ffi: ,=,!" & goto :_ffi_trim)
+if not "!_ffi:, =,!"=="!_ffi!" (set "_ffi=!_ffi:, =,!" & goto :_ffi_trim)
+if not "!_ffi:~0,1!"==" " goto :_ffi_trimmed
+set "_ffi=!_ffi:~1!"
+goto :_ffi_trim
+:_ffi_trimmed
+if "!_ffi:~-1!"==" " (set "_ffi=!_ffi:~0,-1!" & goto :_ffi_trimmed)
+set "format_files_in_pattern=*.!_ffi:,= *.!"
 
 rem --- F8. Кодек субтитров для режима meta зависит от контейнера ---
 rem mov_text живёт только в mp4/mov; mkv -> srt, webm -> webvtt. Раньше всегда mov_text.
@@ -302,7 +342,11 @@ rem то, каким он получится. Состав полей — пар
 rem строки между платформами не требуется: чужая подпись просто вызовет перекодирование.
 rem Разделитель '|' безопасен: подпись всегда раскрывается через !var! (отложенное
 rem раскрытие идёт ПОСЛЕ разбора строки, поэтому '|' не станет оператором конвейера).
-set "settings_sig=!video_settings!|!audio_settings!|!vf_chain!|!af_chain!|!format_files_out!|!sub_meta_codec!|!video_subtitles!|!subtitles_style!|!start_coding!|!length_coding!|!split_by_silence!"
+rem [video] bitrate входит в подпись ОТДЕЛЬНО: он собирается per-file (потолок по
+rem исходному битрейту), поэтому в video_settings его нет. Без него смена
+rem bitrate = +3000 на +1500 не устаревала manifest, и весь пакет отвечал
+rem "Обработано: 0, Пропущено: N" без единого вызова ffmpeg.
+set "settings_sig=!video_settings!|!audio_settings!|!vf_chain!|!af_chain!|!format_files_out!|!sub_meta_codec!|!video_subtitles!|!subtitles_style!|!start_coding!|!length_coding!|!split_by_silence!|!video_bitrate!"
 
 rem --- F8. Предпусковая проверка совместимости контейнера и кодеков ---
 rem Несовместимую пару (webm + libx264/aac) отклоняем ДО пакета с понятной причиной.
@@ -393,7 +437,7 @@ rem значения config.ini. Передаём через переменны�
 rem данные, разбора кавычек не происходит вовсе.
 set "FFCONV_SRC=%folder_sources%"
 set "FFCONV_DST=%folder_destination%"
-set "FFCONV_EXTS=%format_files_in%"
+set "FFCONV_EXTS=!_ffi!"
 set "FFCONV_FMT_OUT=%format_files_out%"
 set "FFCONV_SAVE_OLD=%save_old_extension%"
 set "FFCONV_COPY_CODECS=%copy_codecs%"
@@ -447,10 +491,17 @@ if "%merge_files%"=="yes" (
 			echo [WARN] Нет файлов для объединения в "%folder_sources%"
 		)
 	) else (
+		set "_any_input=1"
 		rem F7. overwrite_existing=yes → сливаем даже при существующем выходе.
 		set "_do_merge="
 		if "%overwrite_existing%"=="yes" set "_do_merge=1"
 		if not exist "%folder_destination%\!fname!" set "_do_merge=1"
+		rem Цель существует, а перезапись выключена — это ПРОПУСК, и он обязан быть
+		rem назван: раньше ветки не было вовсе и сводка показывала 0/0/0 без причины.
+		if not defined _do_merge (
+			echo [SKIP] Объединение пропущено: "%folder_destination%\!fname!" уже существует ^(overwrite_existing = no^)& call :log_msg "SKIP" "Объединение пропущено: цель уже существует"
+			set /a "total_skip+=1"
+		)
 		if defined _do_merge (
 			set "full_path=%temp%\%random%.tmp"
 			rem Шаг 1: сырые пути в UTF-16 (Unicode-имена). Шаг 2: PowerShell оборачивает в
@@ -523,6 +574,9 @@ if "%merge_files%"=="yes" (
 	)
 ) else (
 	for /r "%folder_sources%" %%a in (%format_files_in_pattern%) do (
+		rem Флаг «вход был» — про НАЛИЧИЕ входов, а не про счётчики: при dry_run те
+		rem остаются нулевыми, и сообщение о пустом прогоне срабатывало бы ложно.
+		set "_any_input=1"
 		set "pf_full=%%~fa" & set "pf_dp=%%~dpa" & set "pf_n=%%~na" & set "pf_nx=%%~nxa" & set "pf_x=%%~xa"
 		call :process_file
 	)
@@ -588,6 +642,20 @@ rem а goto из тела for обрывал бы перечисление фа�
 				if not "!audio_line:Audio: pcm_=!"=="!audio_line!" set "audio_ext=wav"
 			)
 			set "out_audio=%folder_destination%!file_path!!file_name!.!audio_ext!"
+			rem F12 для extract. Расширение выхода выбирается по кодеку ИСХОДНИКА, поэтому
+			rem при in-place (destination == source) вход song.m4a/song.mp3/song.ogg/song.flac
+			rem даёт выход, равный входу. Дальше overwrite_existing=yes удалял этот файл ДО
+			rem запуска ffmpeg, ffmpeg падал на несуществующем входе, а исходник был потерян.
+			rem Проверка стоит ДО overwrite-блока и до любой мутации.
+			set "_ea_out="
+			set "_ea_in="
+			for %%p in ("!out_audio!") do set "_ea_out=%%~fp"
+			for %%p in ("!full_path!") do set "_ea_in=%%~fp"
+			if /i "!_ea_out!"=="!_ea_in!" (
+				echo [FAIL] !file_name!: выход совпадает с входом ^(извлечение аудио в тот же файл^)& call :log_msg "FAIL" "!file_name!: выход совпадает с входом"
+				set /a "total_fail+=1"
+				exit /b
+			)
 			rem Единый overwrite-контракт: overwrite_existing=yes перезаписывает готовый выход,
 			rem а не пропускает молча (раньше пропуск был безусловным).
 			rem D7. Удаление — мутация; при dry_run её делать нельзя, иначе режим, обещающий лишь
@@ -595,10 +663,10 @@ rem а goto из тела for обрывал бы перечисление фа�
 			if exist "!out_audio!" if "%overwrite_existing%"=="yes" if not "%dry_run%"=="yes" del "!out_audio!"
 			if not exist "!out_audio!" (
 				if "%dry_run%"=="yes" (
-					echo [DRY-RUN] "%ffmpeg%" -hide_banner -strict -2 -i "!full_path!" -vn -c:a copy "!out_audio!" -y
+					echo [DRY-RUN] "%ffmpeg%" -hide_banner -nostdin -strict -2 -i "!full_path!" -vn -c:a copy "!out_audio!" -y
 				) else (
 					echo [INFO] Извлечение аудио: !file_name!& call :log_msg "INFO" "Извлечение аудио: !file_name!"
-					"%ffmpeg%" -hide_banner -strict -2 -i "!full_path!" -vn -c:a copy "!out_audio!" -y
+					"%ffmpeg%" -hide_banner -nostdin -strict -2 -i "!full_path!" -vn -c:a copy "!out_audio!" -y
 					if errorlevel 1 (
 						echo [FAIL] !file_name!& call :log_msg "FAIL" "!file_name!"
 						if exist "!out_audio!" del "!out_audio!"
@@ -625,12 +693,12 @@ rem а goto из тела for обрывал бы перечисление фа�
 				set /a "total_skip+=1"
 			) else (
 				if "%dry_run%"=="yes" (
-					echo [DRY-RUN] "%ffmpeg%" -hide_banner -strict -2 -i "!full_path!" -r 1/1 "!frame_dir!\!file_name!_%%05d.png"
+					echo [DRY-RUN] "%ffmpeg%" -hide_banner -nostdin -strict -2 -i "!full_path!" -r 1/1 "!frame_dir!\!file_name!_%%05d.png"
 				) else (
 					if exist "!frame_dir!\" rd /s /q "!frame_dir!"
 					md "!frame_dir!"
 					echo [INFO] Извлечение кадров: !full_path!& call :log_msg "INFO" "Извлечение кадров: !full_path!"
-					"%ffmpeg%" -hide_banner -strict -2 -i "!full_path!" -r 1/1 "!frame_dir!\!file_name!_%%05d.png"
+					"%ffmpeg%" -hide_banner -nostdin -strict -2 -i "!full_path!" -r 1/1 "!frame_dir!\!file_name!_%%05d.png"
 					if errorlevel 1 (
 						echo [FAIL] !full_path!& call :log_msg "FAIL" "!full_path!"
 						if exist "!frame_dir!\" rd /s /q "!frame_dir!"
@@ -693,12 +761,18 @@ rem а goto из тела for обрывал бы перечисление фа�
 
 		rem E3. Валидность существующего выхода (паритет с SH/PS1): битый файл удаляем,
 		rem чтобы перекодировать заново, а не пропустить как готовый.
+		rem D7. Удаление — мутация; при dry_run её быть не должно (SH/PS1 файл сохраняют,
+		rem CMD удалял его при ЛЮБОМ значении overwrite_existing — расхождение паритета).
 		set "_existing_out=%folder_destination%!file_path!!file_name!!part_suffix_known!.!current_format_out!"
 		if exist "!_existing_out!" (
-			"%ffmpeg%" -v error -i "!_existing_out!" -f null - >nul 2>&1
+			"%ffmpeg%" -nostdin -v error -i "!_existing_out!" -f null - >nul 2>&1
 			if errorlevel 1 (
-				echo [WARN] Удаление битого файла: !_existing_out!& call :log_msg "WARN" "Удаление битого файла: !_existing_out!"
-				del "!_existing_out!"
+				if "%dry_run%"=="yes" (
+					echo [WARN] [DRY-RUN] битый файл был бы удалён: !_existing_out!& call :log_msg "WARN" "[DRY-RUN] битый файл был бы удалён: !_existing_out!"
+				) else (
+					echo [WARN] Удаление битого файла: !_existing_out!& call :log_msg "WARN" "Удаление битого файла: !_existing_out!"
+					del "!_existing_out!"
+				)
 			)
 		)
 
@@ -719,7 +793,7 @@ rem а goto из тела for обрывал бы перечисление фа�
 				rem P3. Один вызов ffmpeg -i на файл — раньше было 2: bitrate + Duration.
 				rem ffmpeg печатает metadata в stderr → перенаправляем в файл, stdout → nul.
 				set "_ff_info_tmp=%temp%\ffinfo_!random!.txt"
-				"%ffmpeg%" -i "!full_path!" 1>nul 2>"!_ff_info_tmp!"
+				"%ffmpeg%" -nostdin -i "!full_path!" 1>nul 2>"!_ff_info_tmp!"
 				rem E4. Получение битрейта.
 				rem Берём подстроку после "bitrate: " и первый токен — число кб/с; надёжнее
 				rem позиционного tokens=6, который ломался при смене формата строки. Если ffmpeg
@@ -744,6 +818,10 @@ rem а goto из тела for обрывал бы перечисление фа�
 							for /f "delims=0123456789" %%n in ("!_br_raw!a") do set "_br_digits=%%n"
 							if "!_br_digits!"=="a" set "_src_cap=!_br_raw!"
 						)
+						rem WARN печатается и в консоль: SH/PS1 делают это через log_msg, который
+						rem пишет и на экран, а тут он уходил ТОЛЬКО в лог-файл — при enable_log=no
+						rem предупреждения не видел никто.
+						if defined _src_cap echo [WARN] !file_name!: битрейт видеопотока не сообщён, используется битрейт контейнера ^(!_src_cap!k^) — верхняя оценка
 						if defined _src_cap call :log_msg "WARN" "!file_name!: битрейт видеопотока не сообщён, используется битрейт контейнера (!_src_cap!k) — верхняя оценка"
 					)
 					if defined _src_cap (
@@ -790,6 +868,7 @@ rem а goto из тела for обрывал бы перечисление фа�
 					rem Разбиение всегда идёт по времени. Реализация — в SH/PS1.
 					set "num="
 					set "d="
+					set "_length_disabled="
 					rem Граница считается в ОДНУ переменную _lcv: прежний вариант заводил
 					rem отдельную lcv0..lcv999 на итерацию, и они оставались в окружении до
 					rem конца прогона (у длинного файла — сотни имён). Значение нужно только
@@ -811,7 +890,16 @@ rem а goto из тела for обрывал бы перечисление фа�
 						call :log_msg "WARN" "Достигнут предел 1000 частей - хвост файла не обработан: !full_path!"
 					)
 					rem Duration N/A или 0 → num пуст → файл молча пропускался. Обрабатываем целиком.
-					if not defined num set "num=0"
+					rem «Целиком» обязано означать целиком: раньше сбрасывался только список
+					rem границ, а current_set_length ниже оставался равным -t L — выход без
+					rem суффикса (part.N) содержал ПЕРВЫЕ L секунд, статус OK, manifest записан,
+					rem и следующий прогон пропускал файл навсегда.
+					if not defined num (
+						set "num=0"
+						set "_length_disabled=1"
+						echo [WARN] Длительность неизвестна: ограничение длительности снято, файл обрабатывается целиком: !full_path!
+						call :log_msg "WARN" "Длительность неизвестна - ограничение длительности снято: !full_path!"
+					)
 				) else (set "num=0")
 				if "!start_coding_status!"=="+" (set "num=!start_coding_value!")
 
@@ -840,6 +928,8 @@ rem а goto из тела for обрывал бы перечисление фа�
 					set "current_af=!_af_base!" & set "sub_burned="
 
 					set "current_set_length=!set_length_coding!"
+					rem Длительность неизвестна → -t снят вместе с разбиением (см. выше).
+					if defined _length_disabled set "current_set_length="
 
 					rem B2. Субтитры с subtitles_style
 					set "subtitles_params="
@@ -855,8 +945,14 @@ rem а goto из тела for обрывал бы перечисление фа�
 										rem Экранирование пути для subtitles= (схема едина с .sh/.ps1):
 										rem backslash → forward slash (Windows-пути), затем ' : —
 										rem спецсимволы значения; [ ] ; — graph-синтаксис; % — timecode.
+										rem Апостроф требует ДВУХ уровней экранирования: внутри '…'
+										rem backslash копируется буквально, а первая же ' закрывает
+										rem строку. Уровень опций даёт \' , уровень графа — '\'' ;
+										rem вместе \'\'' . Проверено на ffmpeg 8.1.2: одиночное \'
+										rem даёт «Unable to open …/its video» на каждом файле в
+										rem папке вроде «John's videos».
 										set "sub_escaped=!sub_file:\=/!" & set "sub_burned=1"
-										set "sub_escaped=!sub_escaped:'=\'!"
+										set "sub_escaped=!sub_escaped:'=\'\''!"
 										set "sub_escaped=!sub_escaped::=\:!"
 										set "sub_escaped=!sub_escaped:[=\[!"
 										set "sub_escaped=!sub_escaped:]=\]!"
@@ -906,10 +1002,10 @@ rem а goto из тела for обрывал бы перечисление фа�
 					rem -ss располагается ДО -i: fast seek по контейнеру вместо декодирования от 0.
 					if %%b==0 (set "in_seek=" & set "out_seek=") else (if "!sub_burned!"=="1" (set "in_seek=" & set "out_seek=-ss %%b") else (set "in_seek=-ss %%b" & set "out_seek="))
 					if "%dry_run%"=="yes" (
-						echo [DRY-RUN] "%ffmpeg%" -hide_banner -strict -2 !hw_decode_args! !in_seek! -i "!full_path!" !subtitles_params! !convert_settings! !thread_args! !vf_args! !af_args! !current_set_length! !out_seek! "!out_file!"
+						echo [DRY-RUN] "%ffmpeg%" -hide_banner -nostdin -strict -2 !hw_decode_args! !in_seek! -i "!full_path!" !subtitles_params! !convert_settings! !thread_args! !vf_args! !af_args! !current_set_length! !out_seek! "!out_file!"
 					) else (
 						echo [INFO] Кодирование: !full_path!& call :log_msg "INFO" "Кодирование: !full_path!"
-						"%ffmpeg%" -hide_banner -strict -2 !hw_decode_args! !in_seek! -i "!full_path!" !subtitles_params! !convert_settings! !thread_args! !vf_args! !af_args! !current_set_length! !out_seek! "!out_tmp!" -y
+						"%ffmpeg%" -hide_banner -nostdin -strict -2 !hw_decode_args! !in_seek! -i "!full_path!" !subtitles_params! !convert_settings! !thread_args! !vf_args! !af_args! !current_set_length! !out_seek! "!out_tmp!" -y
 						if errorlevel 1 (
 							echo [FAIL] !full_path!
 							if exist "!out_tmp!" del "!out_tmp!"
@@ -977,6 +1073,9 @@ set /a "elapsed_sec_rem=elapsed_sec%%60"
 
 echo.
 echo ============================================
+rem Пустой прогон обязан объяснять себя: сводка 0/0/0 без единой строки
+rem неотличима от "отработало и ничего не нашло по ошибке в пути".
+if not defined _any_input echo   Входных файлов не найдено: в "%folder_sources%" нет файлов с расширениями из [files] format_files_in ^(%format_files_in%^).
 echo   Обработано:  !total_ok! файлов
 echo   Пропущено:   !total_skip! (уже существуют)
 echo   Ошибки:      !total_fail!
@@ -1016,6 +1115,8 @@ rem     -hwaccel_output_format cuda уже включался -> софт пол
 set "hw_suffix=" & set "hw_label=" & set "hw_try_type=" & set "hw_try_args="
 if "%hw_accel_value%"=="nvidia" (set "hw_suffix=_nvenc" & set "hw_label=NVENC" & set "hw_try_type=nvidia" & set "hw_try_args=-hwaccel cuda -hwaccel_output_format cuda")
 if "%hw_accel_value%"=="intel"  (set "hw_suffix=_qsv"   & set "hw_label=QSV"   & set "hw_try_type=intel"  & set "hw_try_args=-hwaccel qsv -hwaccel_output_format qsv")
+rem Опечатка в значении (+nvida, +amd) означала «считаем на процессоре» — молча.
+if not defined hw_suffix echo [ПРЕДУПРЕЖДЕНИЕ] Неизвестное значение [performance] hw_accel = "%hw_accel_value%" ^(ожидается nvidia или intel^). Кодирование идёт на процессоре.
 if not defined hw_suffix exit /b 0
 
 rem Кандидат: маппинг software->GPU либо уже готовое GPU-имя от пользователя.
@@ -1053,7 +1154,13 @@ rem --- Проверка метки времени "чч-мм-сс" (парит�
 rem %1 = что проверяем, %2 = значение. Без проверки "1:00:00" и любой другой текст
 rem уходил в set /a, который молча даёт 0: разбиение работало не по тем границам.
 :check_hms
+rem Ровно 1-2 цифры на поле — как регэксп [0-9]{1,2} в .sh и \d{1,2} в .ps1.
+rem Прежний [0-9][0-9]* принимал любое число цифр: `start = +100-00-00` в SH и PS1
+rem отвергался с явной ошибкой, а CMD кодировал файл с -ss 3600000 и именем
+rem "(part.1)", отчитываясь «Обработано: 1». findstr не умеет {1,2}, поэтому
+rem перечисляем обе формы явно.
 echo %~2| findstr /r /c:"^[0-9][0-9]*-[0-9][0-9]*-[0-9][0-9]*$" >nul
+if not errorlevel 1 echo %~2| findstr /r /c:"^[0-9][0-9]-[0-9][0-9]-[0-9][0-9]$" /c:"^[0-9]-[0-9][0-9]-[0-9][0-9]$" /c:"^[0-9][0-9]-[0-9]-[0-9][0-9]$" /c:"^[0-9][0-9]-[0-9][0-9]-[0-9]$" /c:"^[0-9]-[0-9]-[0-9][0-9]$" /c:"^[0-9]-[0-9][0-9]-[0-9]$" /c:"^[0-9][0-9]-[0-9]-[0-9]$" /c:"^[0-9]-[0-9]-[0-9]$" >nul
 if errorlevel 1 (
 	echo.
 	echo [ОШИБКА] %~1: ожидается чч-мм-сс ^(например 00-01-30^), получено: "%~2"
@@ -1066,6 +1173,12 @@ rem --- D6. Построение каскада atempo (milli-арифметик
 rem %1 = playback_speed (например 3.0, 0.25, 1.5). Результат -> af_chain.
 :build_atempo
 set "_spd=%~1"
+rem Знак и нечисло отсекаем ДО арифметики. set /a молча трактует "-0" как 0, и
+rem `playback_speed = +-0.5` давал _bmilli=500 — CMD принимал скорость, которую
+rem SH и PS1 отвергают с явной ошибкой (и при этом молча не ставил ни setpts,
+rem ни atempo, отчитываясь успехом).
+echo !_spd!| findstr /r /c:"^[0-9][0-9]*$" /c:"^[0-9][0-9]*\.[0-9][0-9]*$" >nul
+if errorlevel 1 exit /b 1
 for /f "tokens=1,2 delims=." %%a in ("%_spd%") do (set "_bi=%%a" & set "_bf=%%b")
 if not defined _bf set "_bf=0"
 rem Дробную часть нормализуем до 3 знаков (milli). Префикс "1" + вычет 1000 убирает

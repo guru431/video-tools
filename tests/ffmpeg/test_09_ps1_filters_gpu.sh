@@ -58,7 +58,7 @@ if (\$set_video_resolution) {
         switch (\$scale_backend) {
             'nvidia' { \$vf_parts += \"scale_cuda=\${res_w}:\${res_h}:force_original_aspect_ratio=decrease\" }
             'intel'  { \$vf_parts += \"scale_qsv=\${res_w}:\${res_h}:force_original_aspect_ratio=decrease\" }
-            default  { \$vf_parts += \"scale=\${res_w}:\${res_h}:force_original_aspect_ratio=decrease,pad=\${res_w}:\${res_h}:(ow-iw)/2:(oh-ih)/2\" }
+            default  { \$vf_parts += \"scale=\${res_w}:\${res_h}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=\${res_w}:\${res_h}:(ow-iw)/2:(oh-ih)/2\" }
         }
     } else {
         switch (\$scale_backend) {

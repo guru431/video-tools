@@ -76,4 +76,50 @@ while IFS= read -r sk; do
     else fail "sh_only '$sk' есть в config.ini.example" "присутствует" "нет такого ключа (опечатка в контракте)"; fi
 done < <(printf '%s\n' "$sh_only_keys")
 
+# ══════════════════════════════════════════════════════════════
+suite "contract: ffmpeg-исключения читаются, а не декоративны"
+# ══════════════════════════════════════════════════════════════
+# Списки sh_only_behavior / sh_ps1_only_behavior в ffmpeg-секции контракта не
+# парсил никто: они были комментарием в YAML-обёртке. Правило простое и
+# проверяемое — ключ, у которого поведение расходится между платформами, обязан
+# в «обделённой» платформе печатать [ПРЕДУПРЕЖДЕНИЕ] рядом с чтением. Иначе один
+# config.ini молча значит разное, что правило паритета и запрещает.
+FF_CMD_RUN="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v18.cmd"
+FF_CMD_SCRIPT="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.cmd"
+FF_PS1_SCRIPT="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1"
+
+ff_sh_only=$(yaml_list_after '    sh_only_behavior:')
+ff_sh_ps1_only=$(yaml_list_after '    sh_ps1_only_behavior:')
+
+assert_not_empty "контракт: список sh_only_behavior (ffmpeg) не пуст"     "$ff_sh_only"
+assert_not_empty "контракт: список sh_ps1_only_behavior (ffmpeg) не пуст" "$ff_sh_ps1_only"
+
+# sh_only_behavior: ключ читается везде, но работает только в .sh — значит и PS1,
+# и CMD обязаны предупреждать.
+while IFS= read -r k; do
+    [ -z "$k" ] && continue
+    if grep -q "ПРЕДУПРЕЖДЕНИЕ.*$k" "$FF_PS1_SCRIPT"; then
+        pass "sh_only '$k': PS1 предупреждает"
+    else
+        fail "sh_only '$k': PS1 предупреждает" "строка с [ПРЕДУПРЕЖДЕНИЕ] и именем ключа" "нет"
+    fi
+    if grep -q "ПРЕДУПРЕЖДЕНИЕ.*$k" "$FF_CMD_SCRIPT"; then
+        pass "sh_only '$k': CMD предупреждает"
+    else
+        fail "sh_only '$k': CMD предупреждает" "строка с [ПРЕДУПРЕЖДЕНИЕ] и именем ключа" "нет"
+    fi
+done < <(printf '%s
+' "$ff_sh_only")
+
+# sh_ps1_only_behavior: ключи секции [remote]. В .cmd они ЧИТАЮТСЯ (иначе
+# --print-config о них не знал бы) и сопровождаются одним общим предупреждением
+# о недоступности удалённого бэкенда — по ключу на строку тут не требуется.
+_cmd_run_src="$(cat "$FF_CMD_RUN")"
+while IFS= read -r k; do
+    [ -z "$k" ] && continue
+    assert_contains "remote-ключ '$k' читается в run_v18.cmd" "\"$k\"" "$_cmd_run_src"
+done < <(printf '%s
+' "$ff_sh_ps1_only")
+assert_contains "CMD предупреждает о недоступности удалённого бэкенда"     "Удалённый бэкенд" "$_cmd_run_src"
+
 summary

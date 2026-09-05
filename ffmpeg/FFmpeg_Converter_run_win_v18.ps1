@@ -188,7 +188,7 @@ if (-not [System.IO.Path]::IsPathRooted($_cfg_log_file)) { $_cfg_log_file = Join
 # Main Form
 $form = [System.Windows.Forms.Form]::new()
 $form.Text = "Video Converter (ffmpeg) v18"
-$form.Size = [System.Drawing.Size]::new(820, 850)
+$form.Size = [System.Drawing.Size]::new(820, 946)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
@@ -205,7 +205,7 @@ $_mc = [System.Collections.Generic.List[System.Windows.Forms.Control]]::new()
 # Main container
 $mainContainer = [System.Windows.Forms.Panel]::new()
 $mainContainer.Location = [System.Drawing.Point]::new(10, 36)
-$mainContainer.Size = [System.Drawing.Size]::new(790, 780)
+$mainContainer.Size = [System.Drawing.Size]::new(790, 876)
 $mainContainer.AutoScroll = $true
 $mainContainer.Anchor = [System.Windows.Forms.AnchorStyles]'Top,Bottom,Left,Right'
 $_fc.Add($mainContainer)
@@ -1119,17 +1119,97 @@ $groupSplit.Font = [System.Drawing.Font]::new($_regFont, [System.Drawing.FontSty
 foreach ($c in $groupSplit.Controls) { $c.Font = $_regFont }
 $_mc.Add($groupSplit)
 
-# ========== Other Settings (collapsible) ==========
+# ========== Сервер конвертации ==========
+# Группа стоит в ОСНОВНЫХ настройках, а не в спойлере: адрес и ключ нужно видеть
+# и проверять до запуска, а спрятанная за «нажмите, чтобы развернуть» галка
+# «Считать на сервере» неотличима от выключенной. Всё, что ниже (кнопки,
+# прогресс), сдвинуто на высоту этой группы — Y там заданы абсолютными числами.
 $yPos = 530
+# Адрес и ключ берутся из config.ini (он gitignored — та же схема, что у yt-dlp,
+# поэтому приватное значение лежит там открытым текстом и в репозиторий не уедет).
+# Правка в полях действует на текущий запуск: GUI конфиг не переписывает, как и
+# GUI yt-dlp. Постоянное значение задаётся в самом config.ini.
+$grpRemote = [System.Windows.Forms.GroupBox]::new()
+$grpRemote.Location = [System.Drawing.Point]::new($xPos0, $yPos)
+$grpRemote.Size = [System.Drawing.Size]::new(770, 92)
+$grpRemote.Text = "Сервер конвертации"
+
+$chkRemote = [System.Windows.Forms.CheckBox]::new()
+$chkRemote.Location = [System.Drawing.Point]::new(8, 18)
+$chkRemote.Size = [System.Drawing.Size]::new(300, 18)
+$chkRemote.Text = "Считать на сервере"
+$chkRemote.Checked = ($_cfg_remote_on -eq "yes")
+
+$lblRemotePrefer = [System.Windows.Forms.Label]::new()
+$lblRemotePrefer.Location = [System.Drawing.Point]::new(320, 20)
+$lblRemotePrefer.Size = [System.Drawing.Size]::new(60, 16)
+$lblRemotePrefer.Text = "Считать:"
+
+$cmbRemotePrefer = [System.Windows.Forms.ComboBox]::new()
+$cmbRemotePrefer.Location = [System.Drawing.Point]::new(382, 17)
+$cmbRemotePrefer.Size = [System.Drawing.Size]::new(90, 20)
+$cmbRemotePrefer.DropDownStyle = 'DropDownList'
+[void]$cmbRemotePrefer.Items.AddRange(@("auto", "gpu", "cpu"))
+$cmbRemotePrefer.SelectedItem = $_cfg_remote_pref
+if ($null -eq $cmbRemotePrefer.SelectedItem) { $cmbRemotePrefer.SelectedIndex = 0 }
+
+$lblRemoteWait = [System.Windows.Forms.Label]::new()
+$lblRemoteWait.Location = [System.Drawing.Point]::new(488, 20)
+$lblRemoteWait.Size = [System.Drawing.Size]::new(126, 16)
+$lblRemoteWait.Text = "Ждать карту, сек:"
+
+$txtRemoteWait = [System.Windows.Forms.TextBox]::new()
+$txtRemoteWait.Location = [System.Drawing.Point]::new(616, 17)
+$txtRemoteWait.Size = [System.Drawing.Size]::new(70, 20)
+$txtRemoteWait.Text = $_cfg_remote_wait
+
+$lblRemoteEndpoint = [System.Windows.Forms.Label]::new()
+$lblRemoteEndpoint.Location = [System.Drawing.Point]::new(8, 49)
+$lblRemoteEndpoint.Size = [System.Drawing.Size]::new(52, 16)
+$lblRemoteEndpoint.Text = "Адрес:"
+
+$txtRemoteEndpoint = [System.Windows.Forms.TextBox]::new()
+$txtRemoteEndpoint.Location = [System.Drawing.Point]::new(62, 46)
+$txtRemoteEndpoint.Size = [System.Drawing.Size]::new(400, 20)
+$txtRemoteEndpoint.Text = $_cfg_remote_ep
+
+$lblRemoteApiKey = [System.Windows.Forms.Label]::new()
+$lblRemoteApiKey.Location = [System.Drawing.Point]::new(470, 49)
+$lblRemoteApiKey.Size = [System.Drawing.Size]::new(44, 16)
+$lblRemoteApiKey.Text = "Ключ:"
+
+$txtRemoteApiKey = [System.Windows.Forms.TextBox]::new()
+$txtRemoteApiKey.Location = [System.Drawing.Point]::new(518, 46)
+$txtRemoteApiKey.Size = [System.Drawing.Size]::new(200, 20)
+# Ключ не должен читаться через плечо и попадать на скриншоты окна.
+$txtRemoteApiKey.UseSystemPasswordChar = $true
+$txtRemoteApiKey.Text = $_cfg_remote_key
+
+$grpRemote.Controls.AddRange(@($chkRemote, $lblRemotePrefer, $cmbRemotePrefer, $lblRemoteWait, $txtRemoteWait,
+	$lblRemoteEndpoint, $txtRemoteEndpoint, $lblRemoteApiKey, $txtRemoteApiKey))
+$_regFont = $grpRemote.Font
+$grpRemote.Font = [System.Drawing.Font]::new($_regFont, [System.Drawing.FontStyle]::Bold)
+foreach ($c in $grpRemote.Controls) { $c.Font = $_regFont }
+$_mc.Add($grpRemote)
+
+# ========== Other Settings (collapsible) ==========
+$yPos = 626
 $groupOther = [System.Windows.Forms.GroupBox]::new()
 $groupOther.Location = [System.Drawing.Point]::new($xPos0, $yPos)
 $groupOther.Size = [System.Drawing.Size]::new(770, 18)
 $groupOther.Text = "Дополнительные настройки (нажмите, чтобы развернуть)"
+# Развернувшись, группа СДВИГАЕТ то, что под ней, а не накрывает собой. Раньше
+# накрывала: Y кнопок и прогресса заданы абсолютными числами, а группа добавлена
+# в контейнер раньше них и потому рисуется поверх — после разворачивания кнопка
+# «Начать перекодирование» просто исчезала под панелью. Контейнер с AutoScroll
+# сам добавит полосу прокрутки, если сдвинутое не влезло в окно.
 $groupOther.Add_Click({
-    if ($groupOther.Height -eq 18) {
-        $groupOther.Height = 190
-    } else {
-        $groupOther.Height = 18
+    $_collapsed = 18
+    $_expanded  = 98
+    $_delta = if ($groupOther.Height -eq $_collapsed) { $_expanded - $_collapsed } else { $_collapsed - $_expanded }
+    $groupOther.Height = $groupOther.Height + $_delta
+    foreach ($c in @($buttonRun, $buttonStop, $buttonDoctor, $groupProgress)) {
+        if ($c) { $c.Top = $c.Top + $_delta }
     }
     $form.Refresh()
 })
@@ -1174,71 +1254,6 @@ $textSubtitlesStyle.Text = $_cfg_sub_style
 $_goth.Add($textSubtitlesStyle)
 
 
-# Группа «Сервер». Вложена в «Дополнительные настройки», чтобы не сдвигать кнопки
-# и прогресс ниже — их Y задан абсолютными числами.
-# Адрес и ключ берутся из config.ini (он gitignored — та же схема, что у yt-dlp,
-# поэтому приватное значение лежит там открытым текстом и в репозиторий не уедет).
-# Правка в полях действует на текущий запуск: GUI конфиг не переписывает, как и
-# GUI yt-dlp. Постоянное значение задаётся в самом config.ini.
-$grpRemote = [System.Windows.Forms.GroupBox]::new()
-$grpRemote.Location = [System.Drawing.Point]::new(8, 92)
-$grpRemote.Size = [System.Drawing.Size]::new(750, 92)
-$grpRemote.Text = "Сервер конвертации"
-
-$chkRemote = [System.Windows.Forms.CheckBox]::new()
-$chkRemote.Location = [System.Drawing.Point]::new(8, 18)
-$chkRemote.Size = [System.Drawing.Size]::new(300, 18)
-$chkRemote.Text = "Считать на сервере"
-$chkRemote.Checked = ($_cfg_remote_on -eq "yes")
-
-$lblRemotePrefer = [System.Windows.Forms.Label]::new()
-$lblRemotePrefer.Location = [System.Drawing.Point]::new(320, 20)
-$lblRemotePrefer.Size = [System.Drawing.Size]::new(60, 16)
-$lblRemotePrefer.Text = "Считать:"
-
-$cmbRemotePrefer = [System.Windows.Forms.ComboBox]::new()
-$cmbRemotePrefer.Location = [System.Drawing.Point]::new(382, 17)
-$cmbRemotePrefer.Size = [System.Drawing.Size]::new(90, 20)
-$cmbRemotePrefer.DropDownStyle = 'DropDownList'
-[void]$cmbRemotePrefer.Items.AddRange(@("auto", "gpu", "cpu"))
-$cmbRemotePrefer.SelectedItem = $_cfg_remote_pref
-if ($null -eq $cmbRemotePrefer.SelectedItem) { $cmbRemotePrefer.SelectedIndex = 0 }
-
-$lblRemoteWait = [System.Windows.Forms.Label]::new()
-$lblRemoteWait.Location = [System.Drawing.Point]::new(488, 20)
-$lblRemoteWait.Size = [System.Drawing.Size]::new(126, 16)
-$lblRemoteWait.Text = "Ждать карту, сек:"
-
-$txtRemoteWait = [System.Windows.Forms.TextBox]::new()
-$txtRemoteWait.Location = [System.Drawing.Point]::new(616, 17)
-$txtRemoteWait.Size = [System.Drawing.Size]::new(70, 20)
-$txtRemoteWait.Text = $_cfg_remote_wait
-
-$lblRemoteEndpoint = [System.Windows.Forms.Label]::new()
-$lblRemoteEndpoint.Location = [System.Drawing.Point]::new(8, 49)
-$lblRemoteEndpoint.Size = [System.Drawing.Size]::new(52, 16)
-$lblRemoteEndpoint.Text = "Адрес:"
-
-$txtRemoteEndpoint = [System.Windows.Forms.TextBox]::new()
-$txtRemoteEndpoint.Location = [System.Drawing.Point]::new(62, 46)
-$txtRemoteEndpoint.Size = [System.Drawing.Size]::new(380, 20)
-$txtRemoteEndpoint.Text = $_cfg_remote_ep
-
-$lblRemoteApiKey = [System.Windows.Forms.Label]::new()
-$lblRemoteApiKey.Location = [System.Drawing.Point]::new(450, 49)
-$lblRemoteApiKey.Size = [System.Drawing.Size]::new(44, 16)
-$lblRemoteApiKey.Text = "Ключ:"
-
-$txtRemoteApiKey = [System.Windows.Forms.TextBox]::new()
-$txtRemoteApiKey.Location = [System.Drawing.Point]::new(498, 46)
-$txtRemoteApiKey.Size = [System.Drawing.Size]::new(188, 20)
-# Ключ не должен читаться через плечо и попадать на скриншоты окна.
-$txtRemoteApiKey.UseSystemPasswordChar = $true
-$txtRemoteApiKey.Text = $_cfg_remote_key
-
-$grpRemote.Controls.AddRange(@($chkRemote, $lblRemotePrefer, $cmbRemotePrefer, $lblRemoteWait, $txtRemoteWait,
-	$lblRemoteEndpoint, $txtRemoteEndpoint, $lblRemoteApiKey, $txtRemoteApiKey))
-$_goth.Add($grpRemote)
 $groupOther.Controls.AddRange($_goth.ToArray())
 $_regFont = $groupOther.Font
 $groupOther.Font = [System.Drawing.Font]::new($_regFont, [System.Drawing.FontStyle]::Bold)
@@ -1247,7 +1262,7 @@ $_mc.Add($groupOther)
 
 # ========== Buttons Row ==========
 # Centered: Run(260) + gap(12) + Stop(170) = 442 total in 770px → left = (770-442)/2 = 164 → absolute x = xPos0+164 = 174
-$yPos = 552
+$yPos = 648
 
 $buttonRun = [System.Windows.Forms.Button]::new()
 $buttonRun.Location = [System.Drawing.Point]::new(174, $yPos)
@@ -1326,7 +1341,7 @@ $buttonDoctor.Add_Click({
 $_mc.Add($buttonDoctor)
 
 # ========== Progress Section ==========
-$yPos = 586
+$yPos = 682
 $groupProgress = [System.Windows.Forms.GroupBox]::new()
 $groupProgress.Location = [System.Drawing.Point]::new($xPos0, $yPos)
 $groupProgress.Size = [System.Drawing.Size]::new(770, 168)

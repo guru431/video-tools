@@ -520,7 +520,7 @@ $yPos  = 15
 $xPos = $xPos0
 $lblVersion = [System.Windows.Forms.Label]::new()
 $lblVersion.Location = [System.Drawing.Point]::new($xPos, ($yPos + 3))
-$lblVersion.Size     = [System.Drawing.Size]::new(400, 20)
+$lblVersion.Size     = [System.Drawing.Size]::new(200, 20)
 $lblVersion.Text     = "yt-dlp: ..."
 $lblVersion.ForeColor = [System.Drawing.Color]::DimGray
 $_fc.Add($lblVersion)
@@ -599,7 +599,7 @@ $_fc.Add($btnCheckUpdate)
 
 $script:updateUrl    = ""
 $lnkUpdateResult     = [System.Windows.Forms.LinkLabel]::new()
-$lnkUpdateResult.Location  = [System.Drawing.Point]::new(425, ($yPos + 5))
+$lnkUpdateResult.Location  = [System.Drawing.Point]::new(228, ($yPos + 5))
 $lnkUpdateResult.Size      = [System.Drawing.Size]::new(190, 18)
 $lnkUpdateResult.Text      = ""
 $lnkUpdateResult.Font      = [System.Drawing.Font]::new("Microsoft Sans Serif", 9)
@@ -1284,7 +1284,7 @@ $yPos += 25; $xPos = $xPos0
 
 $btnStart = [System.Windows.Forms.Button]::new()
 $btnStart.Location  = [System.Drawing.Point]::new($xPos, $yPos)
-$btnStart.Size      = [System.Drawing.Size]::new(185, 35)
+$btnStart.Size      = [System.Drawing.Size]::new(186, 35)
 $btnStart.Text      = "Начать загрузку"
 $btnStart.BackColor = [System.Drawing.Color]::LightGreen
 $btnStart.Font      = [System.Drawing.Font]::new("Microsoft Sans Serif", 10, [System.Drawing.FontStyle]::Bold)
@@ -2002,19 +2002,19 @@ $btnStart.Add_Click({
 })
 $_fc.Add($btnStart)
 
-$xPos += 195
+$xPos += 198
 $btnStop = [System.Windows.Forms.Button]::new()
 $btnStop.Location = [System.Drawing.Point]::new($xPos, $yPos)
-$btnStop.Size     = [System.Drawing.Size]::new(185, 35)
+$btnStop.Size     = [System.Drawing.Size]::new(186, 35)
 $btnStop.Text     = "Остановить"
 $btnStop.Enabled  = $false
 $btnStop.Add_Click({ Stop-Download })
 $_fc.Add($btnStop)
 
-$xPos += 195
+$xPos += 198
 $btnClear = [System.Windows.Forms.Button]::new()
 $btnClear.Location = [System.Drawing.Point]::new($xPos, $yPos)
-$btnClear.Size     = [System.Drawing.Size]::new(185, 35)
+$btnClear.Size     = [System.Drawing.Size]::new(186, 35)
 $btnClear.Text     = "Очистить лог"
 $btnClear.Add_Click({
     $richOutput.Clear()
@@ -2059,10 +2059,10 @@ $btnDoctor.Add_Click({
 })
 $_fc.Add($btnDoctor)
 
-$xPos += 195
+$xPos += 198
 $btnExit = [System.Windows.Forms.Button]::new()
 $btnExit.Location = [System.Drawing.Point]::new($xPos, $yPos)
-$btnExit.Size     = [System.Drawing.Size]::new(185, 35)
+$btnExit.Size     = [System.Drawing.Size]::new(186, 35)
 $btnExit.Text     = "Выход"
 $btnExit.Add_Click({
     if ($global:processRunning) {

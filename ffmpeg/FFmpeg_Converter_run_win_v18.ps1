@@ -205,15 +205,15 @@ $_mc = [System.Collections.Generic.List[System.Windows.Forms.Control]]::new()
 # Main container
 $mainContainer = [System.Windows.Forms.Panel]::new()
 $mainContainer.Location = [System.Drawing.Point]::new(10, 36)
-$mainContainer.Size = [System.Drawing.Size]::new(790, 876)
+$mainContainer.Size = [System.Drawing.Size]::new(790, 871)
 $mainContainer.AutoScroll = $true
 $mainContainer.Anchor = [System.Windows.Forms.AnchorStyles]'Top,Bottom,Left,Right'
 $_fc.Add($mainContainer)
 
 # ========== Version strip (directly on form, above mainContainer) ==========
 $lblFfmpegVersion = [System.Windows.Forms.Label]::new()
-$lblFfmpegVersion.Location  = [System.Drawing.Point]::new(10, 13)
-$lblFfmpegVersion.Size      = [System.Drawing.Size]::new(400, 18)
+$lblFfmpegVersion.Location  = [System.Drawing.Point]::new(20, 13)
+$lblFfmpegVersion.Size      = [System.Drawing.Size]::new(390, 18)
 $lblFfmpegVersion.Text      = "ffmpeg: определяется..."
 $lblFfmpegVersion.ForeColor = [System.Drawing.Color]::DimGray
 $lblFfmpegVersion.Font      = [System.Drawing.Font]::new("Segoe UI", 9)
@@ -234,7 +234,7 @@ $lnkFfmpegUpdate.Add_LinkClicked({
 $_fc.Add($lnkFfmpegUpdate)
 
 $btnCheckFfmpeg = [System.Windows.Forms.Button]::new()
-$btnCheckFfmpeg.Location = [System.Drawing.Point]::new(552, 10)
+$btnCheckFfmpeg.Location = [System.Drawing.Point]::new(550, 10)
 $btnCheckFfmpeg.Size     = [System.Drawing.Size]::new(240, 22)
 $btnCheckFfmpeg.Text     = "Проверить обновления"
 $btnCheckFfmpeg.Font     = [System.Drawing.Font]::new("Segoe UI", 8)
@@ -441,8 +441,8 @@ $_go.Add($checkKeepAspect)
 # уходило в runspace. Пользователь GUI не видел его состояния и не мог перекодировать
 # файл с новыми настройками — готовый выход просто пропускался без объяснения причины.
 $checkOverwrite = [System.Windows.Forms.CheckBox]::new()
-$checkOverwrite.Location = [System.Drawing.Point]::new(575, 62)
-$checkOverwrite.Size = [System.Drawing.Size]::new(190, 20)
+$checkOverwrite.Location = [System.Drawing.Point]::new(568, 62)
+$checkOverwrite.Size = [System.Drawing.Size]::new(197, 20)
 $checkOverwrite.Text = "Перезаписывать существующие"
 $checkOverwrite.Checked = ($_cfg_overwrite_existing -eq "yes")
 $_go.Add($checkOverwrite)
@@ -1095,12 +1095,12 @@ $_gspl.Add($textSilenceDuration)
 # Silence Threshold
 $labelSilenceThreshold = [System.Windows.Forms.Label]::new()
 $labelSilenceThreshold.Location = [System.Drawing.Point]::new(330, 44)
-$labelSilenceThreshold.Size = [System.Drawing.Size]::new(80, 16)
+$labelSilenceThreshold.Size = [System.Drawing.Size]::new(86, 16)
 $labelSilenceThreshold.Text = "Порог тишины:"
 $_gspl.Add($labelSilenceThreshold)
 
 $textSilenceThreshold = [System.Windows.Forms.TextBox]::new()
-$textSilenceThreshold.Location = [System.Drawing.Point]::new(413, 42)
+$textSilenceThreshold.Location = [System.Drawing.Point]::new(416, 42)
 $textSilenceThreshold.Size = [System.Drawing.Size]::new(55, 20)
 $textSilenceThreshold.Text = $_cfg_silence_thresh
 $_gspl.Add($textSilenceThreshold)
@@ -1206,10 +1206,28 @@ $groupOther.Text = "Дополнительные настройки (нажми�
 $groupOther.Add_Click({
     $_collapsed = 18
     $_expanded  = 98
-    $_delta = if ($groupOther.Height -eq $_collapsed) { $_expanded - $_collapsed } else { $_collapsed - $_expanded }
+    $_expanding = ($groupOther.Height -eq $_collapsed)
+    $_delta = if ($_expanding) { $_expanded - $_collapsed } else { $_collapsed - $_expanded }
     $groupOther.Height = $groupOther.Height + $_delta
+    $groupOther.Text = if ($_expanding) { "Дополнительные настройки (нажмите, чтобы свернуть)" } else { "Дополнительные настройки (нажмите, чтобы развернуть)" }
     foreach ($c in @($buttonRun, $buttonStop, $buttonDoctor, $groupProgress)) {
         if ($c) { $c.Top = $c.Top + $_delta }
+    }
+    # Окно растёт вместе с группой, иначе у контейнера появлялись ОБЕ полосы прокрутки:
+    # вертикальная отнимает 17 px, и группы шириной 770 перестают влезать по ширине.
+    # Упёрлось в рабочую область — прокрутка остаётся, но окно расширяется на ширину
+    # полосы, как при старте на маленьком экране. Свернули — вернули прежний размер.
+    if ($_expanding) {
+        $script:_formSizeCollapsed = $form.Size
+        $wa = [System.Windows.Forms.Screen]::FromControl($form).WorkingArea
+        $form.Height = [Math]::Min($form.Height + $_delta, $wa.Height)
+        if ($form.Bottom -gt $wa.Bottom) { $form.Top = [Math]::Max($wa.Top, $wa.Bottom - $form.Height) }
+        $form.PerformLayout()
+        if ($mainContainer.HorizontalScroll.Visible) {
+            $form.Width = [Math]::Min($form.Width + [System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth, $wa.Width)
+        }
+    } elseif ($script:_formSizeCollapsed) {
+        $form.Size = $script:_formSizeCollapsed
     }
     $form.Refresh()
 })
@@ -1292,7 +1310,7 @@ $_mc.Add($buttonStop)
 # него не работает. До него пользователь GUI узнавал об отсутствии ffmpeg или
 # curl только по невнятному отказу воркера на первом же файле.
 $buttonDoctor = [System.Windows.Forms.Button]::new()
-$buttonDoctor.Location = [System.Drawing.Point]::new(628, $yPos)
+$buttonDoctor.Location = [System.Drawing.Point]::new(630, $yPos)
 $buttonDoctor.Size = [System.Drawing.Size]::new(150, 30)
 $buttonDoctor.Text = "Проверить окружение"
 $buttonDoctor.Font = [System.Drawing.Font]::new($buttonDoctor.Font.FontFamily, 8)

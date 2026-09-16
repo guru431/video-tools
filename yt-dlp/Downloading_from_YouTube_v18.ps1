@@ -2024,11 +2024,11 @@ $btnClear.Add_Click({
 })
 $_fc.Add($btnClear)
 
-$xPos += 195
-# Тот же отчёт, что у --doctor в CLI.
+# Тот же отчёт, что у --doctor в CLI. Стоит в верхней строке слева от «Проверить обновления»:
+# пятой кнопкой в нижнем ряду он выталкивал «Выход» за край окна.
 $btnDoctor = [System.Windows.Forms.Button]::new()
-$btnDoctor.Location = [System.Drawing.Point]::new($xPos, $yPos)
-$btnDoctor.Size     = [System.Drawing.Size]::new(185, 35)
+$btnDoctor.Location = [System.Drawing.Point]::new(($btnCheckUpdate.Left - 192), $btnCheckUpdate.Top)
+$btnDoctor.Size     = [System.Drawing.Size]::new(182, 25)
 $btnDoctor.Text     = "Проверить окружение"
 $btnDoctor.Add_Click({
     $rows = @()

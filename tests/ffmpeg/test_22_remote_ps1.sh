@@ -146,7 +146,16 @@ suite "remote PS1: контракт службы args_version 2"
 # единице, поэтому проверка «список пуст» не срабатывала, а сверка кодека
 # приводила объект к строке и не находила ничего: служба «не умела» ни одного
 # кодека. Сводим обе формы к плоскому перечню — как это делает .sh.
-assert_eq "объект {gpu,cpu} разворачивается" "h264_nvenc hevc_nvenc libx264"     "$(run_ps "(Get-RemoteCapsEncoders ([pscustomobject]@{gpu=@('h264_nvenc','hevc_nvenc');cpu=@('libx264')})) -join ' '")"
+# Выражение уходит в переменную, а подстановка вызывается ВНЕ внешних кавычек —
+# и то, и другое обязательно. В bash 3.2 (системный на macOS) внутри `"$( … )"`
+# вложенные двойные кавычки не образуют строку, содержимое оказывается голым, и
+# `@{gpu=…,…}` попадает под BRACE EXPANSION: фигурные скобки исчезают, PowerShell
+# получает «[pscustomobject]@gpu=@('h264_nvenc')» и падает с ParserError. Видно это
+# только у шаблонов С ЗАПЯТОЙ внутри скобок — соседние строки без запятой проходят,
+# поэтому дефект жил в macOS-линии CI незамеченным.
+_caps_obj="(Get-RemoteCapsEncoders ([pscustomobject]@{gpu=@('h264_nvenc','hevc_nvenc');cpu=@('libx264')})) -join ' '"
+_caps_out=$(run_ps "$_caps_obj")
+assert_eq "объект {gpu,cpu} разворачивается" "h264_nvenc hevc_nvenc libx264" "$_caps_out"
 assert_eq "плоский список остаётся собой" "h264_nvenc libx264"     "$(run_ps "(Get-RemoteCapsEncoders @('h264_nvenc','libx264')) -join ' '")"
 assert_eq "пустые группы дают пустой перечень" "0"     "$(run_ps "@(Get-RemoteCapsEncoders ([pscustomobject]@{gpu=@();cpu=@()})).Count")"
 assert_eq "отсутствие поля даёт пустой перечень" "0"     "$(run_ps "@(Get-RemoteCapsEncoders \$null).Count")"

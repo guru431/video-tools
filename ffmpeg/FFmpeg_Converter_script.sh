@@ -1172,7 +1172,14 @@ encode_file() {
 				if [[ "$line" == *"silence_end"* ]]; then
 					local silence_end_val; silence_end_val=$(echo "$line" | grep -oE 'silence_end: -?[0-9.]+' | sed 's/silence_end: //')
 					if [ -n "$silence_start_val" ] && [ -n "$silence_end_val" ]; then
-						split_points+=("$(awk "BEGIN {printf \"%d\", ($silence_start_val+$silence_end_val)/2}")")
+						# Подстановка НЕ закавычена намеренно (SC2207 здесь игнорируется директивой
+						# ниже): awk печатает одно целое, делить нечего, а `"$(awk "…")"` — это
+						# вложенные двойные кавычки внутри command substitution внутри кавычек,
+						# и bash 3.2 (системный на macOS) разбирает их иначе. Проверено CI:
+						# с закавыченной формой silencedetect переставал давать точки вовсе и
+						# разбиение молча откатывалось на временное (-ss 10/20 вместо -ss 12).
+						# shellcheck disable=SC2207
+						split_points+=($(awk "BEGIN {printf \"%d\", ($silence_start_val+$silence_end_val)/2}"))
 					fi
 				fi
 			done <<< "$search_silence"

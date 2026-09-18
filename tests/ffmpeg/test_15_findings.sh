@@ -1,4 +1,9 @@
 #!/bin/bash
+# Тест дот-сорсит настоящий production-скрипт: переменные, которые здесь только
+# присваиваются, читает он (SC2034).
+# Путь к дот-сорсимому скрипту вычисляется в рантайме — следовать за `source`
+# статический анализатор не может по определению (SC1090).
+# shellcheck disable=SC1090,SC2034
 # ============================================================
 # test_15_findings.sh — Фиксы аудита F5/F6/F7/F8 (уровень SH):
 #   F5 — dry_run НЕ исполняет спецрежимы (extract/frame/merge), только печатает команды;
@@ -18,6 +23,11 @@ WORK=$(mktemp -d /tmp/test_ff_find_XXXXXX)
 IN="$WORK/in"; DST="$WORK/out"; FFMPEG_LOG="$WORK/mock.log"
 mkdir -p "$IN" "$DST"
 
+# Значения читает ДОТ-СОРСНУТЫЙ production-скрипт, а не сам тест: связи между
+# присваиванием здесь и чтением там shellcheck не видит и объявляет каждую
+# переменную неиспользуемой. Директива стоит на функции, а не на файле, чтобы
+# настоящая неиспользуемая переменная в остальном тесте по-прежнему ловилась.
+# shellcheck disable=SC2034
 default_vars() {
     folder_sources="$IN"; folder_destination="$DST"
     ffmpeg="$MOCKS_DIR/ffmpeg"
@@ -141,6 +151,9 @@ MEOF
 chmod +x "$MW/bin/ffmpeg"
 export MOCK_HANG_LOG="$HANG_LOG"
 
+# Обёртка прокидывает "$@" дальше; часть вызовов идёт без аргументов, и это
+# нормально — SC2120 здесь не о дефекте.
+# shellcheck disable=SC2120
 merge_run() {
     rm -f "$HANG_LOG"
     run_capture 'merge_files="yes"' 'overwrite_existing="yes"' "ffmpeg=\"$MW/bin/ffmpeg\"" "$@"
@@ -457,6 +470,9 @@ suite "F17: готовность многочастного выхода под�
 # Суть: наличие ОДНОЙ лишь `(part.1)` трактовалось как «файл целиком готов». Если
 # остальные части не создались (обрыв, падение, нехватка места), весь input молча
 # пропускался, и хвост исходника терялся навсегда.
+# Обёртка прокидывает "$@" дальше; часть вызовов идёт без аргументов, и это
+# нормально — SC2120 здесь не о дефекте.
+# shellcheck disable=SC2120
 split_run() {
     OUT_TEXT=$(
         export PATH="$MOCKS_DIR:$PATH"; export MOCK_FFMPEG_ENCODERS=""; export MOCK_FFMPEG_LOG="$FFMPEG_LOG"

@@ -49,10 +49,11 @@ FFPROBE="$(resolve_bin "${FFPROBE_BIN:-}" ffprobe)"
 
 # Абсолютный путь: POSIX (/x), Windows-диск (C:/x, C:\x) или UNC (\\host\share).
 # Без распознавания drive/UNC `C:/Downloads` считался относительным и превращался
-# в $SCRIPT_DIR/C:/Downloads.
+# в $SCRIPT_DIR/C:/Downloads. UNC в косой форме (//host/share) отдельного шаблона
+# не требует — его уже покрывает `/*`, и отдельный `//*` был мёртвым.
 is_abs_path() {
     case "$1" in
-        /*|//*|\\\\*|[A-Za-z]:/*|[A-Za-z]:\\*) return 0 ;;
+        /*|\\\\*|[A-Za-z]:/*|[A-Za-z]:\\*) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -62,6 +63,10 @@ is_abs_path() {
 # `$SCRIPT_DIR/~/Видео` — каталог с буквальной тильдой в имени.
 expand_tilde() {
     local p="$1"
+    # Тильда в шаблоне case — литерал по определению (раскрытия здесь нет), так что
+    # SC2088 «тильда не раскрывается в кавычках» тут мимо цели. Директива стоит перед
+    # всем `case`: перед отдельной веткой shellcheck её не принимает (SC1124).
+    # shellcheck disable=SC2088
     case "$p" in
         "~")   printf '%s' "${HOME:-$p}" ;;
         "~/"*) printf '%s' "${HOME:-~}/${p#\~/}" ;;

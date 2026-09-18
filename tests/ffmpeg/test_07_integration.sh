@@ -1,4 +1,7 @@
 #!/bin/bash
+# Путь к дот-сорсимому скрипту вычисляется в рантайме — следовать за `source`
+# статический анализатор не может по определению (SC1090).
+# shellcheck disable=SC1090
 # ============================================================
 # test_07_integration.sh — Интеграционный тест FFmpeg пайплайна
 # Создаёт реальный MP4, запускает script.sh с прямыми переменными,
@@ -33,6 +36,11 @@ if [ -n "$REAL_FFMPEG" ] && command -v ffmpeg &>/dev/null; then
 fi
 
 # Установить базовые переменные и запустить script.sh напрямую
+# Значения читает ДОТ-СОРСНУТЫЙ production-скрипт, а не сам тест: связи между
+# присваиванием здесь и чтением там shellcheck не видит и объявляет каждую
+# переменную неиспользуемой. Директива стоит на функции, а не на файле, чтобы
+# настоящая неиспользуемая переменная в остальном тесте по-прежнему ловилась.
+# shellcheck disable=SC2034
 default_vars() {
     folder_sources="$INPUT_DIR"
     folder_destination="$OUTPUT_DIR"
@@ -69,6 +77,7 @@ run_script() {
         # Путь дампа передаём АРГУМЕНТОМ через строку trap (раскрывается здесь и сейчас),
         # а не читаем $dump внутри хендлера: bash 3.2 (системный на macOS) сбрасывает
         # local-контекст вызывающей функции ДО запуска EXIT-трапа, и $dump там пуст.
+        # shellcheck disable=SC2064
         trap "_dump '$dump'" EXIT
         source "$SCRIPT" > /dev/null 2>&1
     ) < /dev/null
@@ -88,6 +97,7 @@ run_script_out() {
         default_vars
         for ov in "$@"; do eval "$ov"; done
         _dump() { echo "done" > "$1"; }
+        # shellcheck disable=SC2064
         trap "_dump '$dump'" EXIT
         source "$SCRIPT" 2>&1
     ) < /dev/null

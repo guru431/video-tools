@@ -1,4 +1,7 @@
 #!/bin/bash
+# Путь к дот-сорсимому скрипту вычисляется в рантайме — следовать за `source`
+# статический анализатор не может по определению (SC1090).
+# shellcheck disable=SC1090
 # ============================================================
 # test_ytdlp_preset_parity.sh — паритет таблиц форматов yt-dlp между SH и PS1.
 # Один набор inputs (preset × quality) → сравниваем итоговую format-строку:
@@ -83,7 +86,7 @@ for p in $PRESETS; do
     for i in 0 1 2 3 4 5 6; do
         sh_v=$(get_field "$sh_out" "sh_${p}_${i}")
         ps_v=$(get_field "$ps_out" "ps_${p}_${i}")
-        assert_eq "$p[${QNAMES[$i]}] SH==PS1"  "$sh_v"  "$ps_v"
+        assert_eq "${p}[${QNAMES[$i]}] SH==PS1"  "$sh_v"  "$ps_v"
     done
 done
 suite "yt-dlp preset parity: simpleBest (auto, не-YouTube)"

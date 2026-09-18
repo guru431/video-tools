@@ -1,4 +1,9 @@
 #!/bin/bash
+# Обратная сторона той же связки: значения настроек приходят из сорсящего файла
+# (FFmpeg_Converter_run_v18.sh) или из теста, который дот-сорсит этот скрипт.
+# Присваивания в этом файле нет, поэтому shellcheck считает их неопределёнными
+# (SC2154); часть переменных, наоборот, читает уже сорснутый remote_client.sh.
+# shellcheck disable=SC2034,SC2154
 
 # ============================================================
 # FFmpeg Converter Script (Bash)
@@ -536,7 +541,7 @@ find_inputs() {
 log_msg() {
 	local level="$1"
 	local msg="$2"
-	local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+	local timestamp; timestamp=$(date '+%Y-%m-%d %H:%M:%S')
 	echo "[$timestamp] [$level] $msg"
 	if [ "$enable_log" = "yes" ] && [ -n "$log_file" ]; then
 		echo "[$timestamp] [$level] $msg" >> "$log_file"
@@ -860,7 +865,7 @@ encode_file() {
 				return ;;
 		esac
 	fi
-	local file_path="$(dirname "$full_path")/"
+	local file_path; file_path="$(dirname "$full_path")/"
 	# F32. Два РАЗНЫХ имени, их нельзя смешивать:
 	#   input_stem — имя источника без расширения; по нему ищутся sidecar-субтитры;
 	#   file_name  — базовое имя ВЫХОДА (при save_old_extension=yes несёт расширение
@@ -868,7 +873,7 @@ encode_file() {
 	# Раньше переменная была одна: при save_old_extension=yes она становилась
 	# "movie.mp4", и sidecar искался как "movie.mp4.srt" вместо "movie.srt" —
 	# burn/meta молча пропускались.
-	local input_stem="$(basename "$full_path" | sed 's/\.[^.]*$//')"
+	local input_stem; input_stem="$(basename "$full_path" | sed 's/\.[^.]*$//')"
 	local file_name="$input_stem"
 	if [ "$save_old_extension" = "yes" ]; then file_name="$(basename "$full_path")"; fi
 	file_path="${file_path:$_src_prefix_len}"
@@ -1000,7 +1005,7 @@ encode_file() {
 	# число частей зависит от длительности и здесь ещё неизвестно, поэтому сверяем
 	# базовое имя — сознательный консерватизм: лучше отклонить файл, чем закодировать
 	# его поверх самого себя.
-	local canon_out="$(canon_path "${folder_destination}${file_path}${file_name}${part_suffix_known}.${current_format_out}")"
+	local canon_out; canon_out="$(canon_path "${folder_destination}${file_path}${file_name}${part_suffix_known}.${current_format_out}")"
 	if [ "$canon_out" = "$(canon_path "$full_path")" ]; then
 		log_msg "FAIL" "$(basename "$full_path"): выход совпадает с входом — файл пропущен (задайте другой destination, префикс или формат; при [split] length имя частей заранее неизвестно, поэтому in-place отклоняется)"
 		echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
@@ -1106,7 +1111,7 @@ encode_file() {
 	# Загрузка одна на исходный файл; блок в цикле по частям её не повторит.
 	local remote_upload_id="" remote_sub_id=""
 	local file_duration=0
-	local dur_str=$(echo "$ffmpeg_info" | grep -i Duration: | grep -o '[0-9][0-9]*:[0-9][0-9]*:[0-9][0-9]*')
+	local dur_str; dur_str=$(echo "$ffmpeg_info" | grep -i Duration: | grep -o '[0-9][0-9]*:[0-9][0-9]*:[0-9][0-9]*')
 	if [ -n "$dur_str" ]; then
 		IFS=':' read -r x y z <<< "$dur_str"
 		# 10#, а не ${x#0}: на однозначном поле срез ведущего нуля даёт пустую
@@ -1154,7 +1159,7 @@ encode_file() {
 		local -a split_points=()
 		if [ "$split_by_silence" = "yes" ]; then
 			echo -e "\n\nЖдите! Идёт поиск пауз в файле:\n$full_path\n"
-			local search_silence=$("$ffmpeg" -nostdin -i "$full_path" -nostats -af "silencedetect=n=${silence_threshold}:d=${silence_duration}" -f null - 2>&1 | grep -i silence_)
+			local search_silence; search_silence=$("$ffmpeg" -nostdin -i "$full_path" -nostats -af "silencedetect=n=${silence_threshold}:d=${silence_duration}" -f null - 2>&1 | grep -i silence_)
 			local silence_start_val=""
 			# Знак обязателен в шаблоне: ffmpeg печатает и отрицательный silence_start
 			# (например "silence_start: -0.0261224"), а шаблон без минуса давал ПУСТОЕ
@@ -1165,9 +1170,9 @@ encode_file() {
 					silence_start_val=$(echo "$line" | grep -oE 'silence_start: -?[0-9.]+' | sed 's/silence_start: //')
 				fi
 				if [[ "$line" == *"silence_end"* ]]; then
-					local silence_end_val=$(echo "$line" | grep -oE 'silence_end: -?[0-9.]+' | sed 's/silence_end: //')
+					local silence_end_val; silence_end_val=$(echo "$line" | grep -oE 'silence_end: -?[0-9.]+' | sed 's/silence_end: //')
 					if [ -n "$silence_start_val" ] && [ -n "$silence_end_val" ]; then
-						split_points+=($(awk "BEGIN {printf \"%d\", ($silence_start_val+$silence_end_val)/2}"))
+						split_points+=("$(awk "BEGIN {printf \"%d\", ($silence_start_val+$silence_end_val)/2}")")
 					fi
 				fi
 			done <<< "$search_silence"
@@ -1246,7 +1251,7 @@ encode_file() {
 		fi
 	fi
 
-	if [ "$start_coding_status" = "+" ]; then num=($start_coding_value); fi
+	if [ "$start_coding_status" = "+" ]; then num=("$start_coding_value"); fi
 
 	# Готовые выходы копим, чтобы записать manifest одной транзакцией после цикла.
 	local -a produced=()
@@ -1483,7 +1488,7 @@ encode_file() {
 				local out_tmp; out_tmp="$(partial_path "$out_file")"
 				rm -f "$out_tmp"
 				_current_out_tmp="$out_tmp"
-				local encode_start=$(date +%s)
+				local encode_start; encode_start=$(date +%s)
 				if remote_wait "$r_job" "$full_path" && remote_fetch "$r_job" "$out_tmp" "$full_path"; then
 					publish_result "$full_path" "$out_tmp" "$out_file" "$encode_start" "yes"
 					part_done="yes"
@@ -1513,7 +1518,7 @@ encode_file() {
 			echo "[DRY-RUN] $ffmpeg -nostdin -hide_banner -strict -2 $hw_decode_args $in_seek -i \"$full_path\" ${subtitles_params[*]} $convert_settings $thread_args ${vf_args[*]} ${af_args[*]} $current_set_length $out_seek \"$out_file\""
 		else
 			log_msg "INFO" "Кодирование: $(basename "$full_path") -> $(basename "$out_file")"
-			local encode_start=$(date +%s)
+			local encode_start; encode_start=$(date +%s)
 
 			# J1. Запуск ffmpeg в фоне с прогресс-файлом
 			local progress_file err_file
@@ -1571,7 +1576,7 @@ encode_file() {
 			printf "\n"
 			rm -f "$progress_file"
 
-			local encode_end=$(date +%s)
+			local encode_end; encode_end=$(date +%s)
 			local elapsed=$((encode_end - encode_start))
 			local elapsed_min=$((elapsed / 60))
 			local elapsed_sec=$((elapsed % 60))

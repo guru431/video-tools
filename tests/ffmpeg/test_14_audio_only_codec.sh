@@ -1,4 +1,7 @@
 #!/bin/bash
+# Путь к дот-сорсимому скрипту вычисляется в рантайме — следовать за `source`
+# статический анализатор не может по определению (SC1090).
+# shellcheck disable=SC1090
 # ============================================================
 # test_14_audio_only_codec.sh — F06: audio_only выводит контейнер+кодек
 # из настроенного [audio] codec (а не форсит mp3/libmp3lame всегда).
@@ -21,6 +24,11 @@ source "$TESTS_DIR/lib/framework.sh"
 
 EMPTY_DIR=$(mktemp -d /tmp/test_f06_XXXXXX)
 
+# Значения читает ДОТ-СОРСНУТЫЙ production-скрипт, а не сам тест: связи между
+# присваиванием здесь и чтением там shellcheck не видит и объявляет каждую
+# переменную неиспользуемой. Директива стоит на функции, а не на файле, чтобы
+# настоящая неиспользуемая переменная в остальном тесте по-прежнему ловилась.
+# shellcheck disable=SC2034
 default_vars() {
     folder_sources="$EMPTY_DIR"; folder_destination="$EMPTY_DIR"
     ffmpeg="$TESTS_DIR/mocks/ffmpeg"
@@ -60,6 +68,7 @@ run_script() {
         # Путь дампа передаём АРГУМЕНТОМ через строку trap (раскрывается здесь и сейчас),
         # а не читаем $dump внутри хендлера: bash 3.2 (системный на macOS) сбрасывает
         # local-контекст вызывающей функции ДО запуска EXIT-трапа, и $dump там пуст.
+        # shellcheck disable=SC2064
         trap "_dump '$dump'" EXIT
         source "$SCRIPT" > /dev/null 2>&1
     ) < /dev/null

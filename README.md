@@ -286,7 +286,7 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 | `test_ytdlp_preset_parity` | Паритет таблиц форматов yt-dlp SH ↔ PS1 |
 | `test_build_strip` | Комментарии не попадают в собранный EXE: сборка зовёт вырезание, вырезание не трогает код и строки |
 | `test_pre_commit_hook` | pre-commit на реальном temp-репо: блок секрета, разрешение удаления утечки |
-| `test_privacy_scan` | privacy-scan на реальном temp-репо: RFC1918 IP / e-mail, файлы с пробелами и кириллицей, `*.example` |
+| `test_privacy_scan` | privacy-scan на реальном temp-репо: RFC1918 IP / e-mail, файлы с пробелами и кириллицей, `*.example`; сломанный барьер падает, а не рапортует «чисто» |
 | `test_docs_links` | Ссылки и пути в документации ведут на существующие файлы; имена EXE в CI ↔ файлы на диске |
 
 Подробное описание: [tests/TESTING.md](tests/TESTING.md)

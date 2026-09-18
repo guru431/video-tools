@@ -24,22 +24,31 @@ if [ ! -f "$SCANNER" ]; then
 fi
 
 # Временный git-репозиторий с копией сканера в tools/.
+# Каждый шаг проверяется: молчаливый сбой подготовки давал НЕОТЛИЧИМЫЙ от
+# настоящего провал ассерта — репозиторий без индекса сканируется «чисто», и
+# однассертный suite показывает ровно «1 failure» без единого намёка на причину
+# (так и выглядела находка 2026-09-16: упало под нагрузкой полного прогона,
+# а какой именно assert и почему — установить было нечем).
 new_repo() {
-    local d; d=$(mktemp -d /tmp/test_pscan_XXXXXX)
-    git -C "$d" init -q
-    git -C "$d" config user.email "t@example.com"
-    git -C "$d" config user.name "t"
-    mkdir -p "$d/tools"
-    cp "$SCANNER" "$d/tools/privacy-scan.sh"
+    local d; d=$(mktemp -d /tmp/test_pscan_XXXXXX) || return 1
+    git -C "$d" init -q            || { echo "NEW_REPO_FAILED: git init" >&2; return 1; }
+    git -C "$d" config user.email "t@example.com" || return 1
+    git -C "$d" config user.name "t"              || return 1
+    mkdir -p "$d/tools"            || return 1
+    cp "$SCANNER" "$d/tools/privacy-scan.sh" || { echo "NEW_REPO_FAILED: cp" >&2; return 1; }
     printf '%s\n' "$d"
 }
 
-# Коммитит рабочее дерево (git ls-files видит только tracked) и запускает сканер.
+# Индексирует рабочее дерево (git ls-files видит только tracked) и запускает сканер.
+# Код возврата `git add` и список проиндексированных путей попадают в вывод: без них
+# сбой подготовки выглядел как «сканер не нашёл утечку», и различить эти два случая
+# по результату теста было невозможно.
 run_scan() {
-    local d="$1" out rc
-    git -C "$d" add -A >/dev/null 2>&1
+    local d="$1" out rc add_out add_rc tracked
+    add_out=$(git -C "$d" add -A 2>&1); add_rc=$?
+    tracked=$(git -C "$d" ls-files 2>&1 | tr '\n' ' ')
     out=$(cd "$d" && bash tools/privacy-scan.sh 2>&1); rc=$?
-    printf '%s\nEXIT=%s\n' "$out" "$rc"
+    printf '%s\nEXIT=%s\nGIT_ADD_RC=%s %s\nTRACKED=%s\n' "$out" "$rc" "$add_rc" "$add_out" "$tracked"
 }
 
 # ══════════════════════════════════════════════════════════════
@@ -137,6 +146,34 @@ printf 'git clone git@github.com:user/repo.git\n' > "$R/README.md"
 OUT=$(run_scan "$R")
 assert_not_contains "git@github.com не флагуется как e-mail" "PRIVACY: e-mail" "$OUT"
 assert_contains "SSH-clone URL → exit 0" "EXIT=0" "$OUT"
+rm -rf "$R"
+
+# ══════════════════════════════════════════════════════════════
+suite "privacy-scan: сломанный барьер падает, а не рапортует «чисто»"
+# ══════════════════════════════════════════════════════════════
+# Сканер жил на `cd "$(git rev-parse --show-toplevel)"`. При любом сбое git
+# подстановка отдавала пусто, `cd ""` завершался успешно, `git ls-files` падал
+# внутри process substitution (там set -e слеп) — и барьер печатал «чисто» с
+# exit 0 НА ДЕРЕВЕ С ПРИВАТНЫМ IP. Это хуже отсутствия проверки: CI не просто
+# пропускал утечку, а подтверждал её отсутствие. Здесь — оба сбоя подряд.
+NOREPO=$(mktemp -d /tmp/test_pscan_norepo_XXXXXX)
+mkdir -p "$NOREPO/tools"
+cp "$SCANNER" "$NOREPO/tools/privacy-scan.sh"
+printf 'server = 10.1.2.3\n' > "$NOREPO/leak.txt"
+OUT=$(cd "$NOREPO" && bash tools/privacy-scan.sh 2>&1; printf 'EXIT=%s\n' "$?")
+assert_not_contains "вне git-репозитория сканер НЕ печатает «чисто»" "privacy-scan: чисто" "$OUT"
+assert_not_contains "вне git-репозитория сканер НЕ возвращает 0" "EXIT=0" "$OUT"
+assert_contains "вне git-репозитория сказано, что проверка не выполнена" "ПРОВЕРКА НЕ ВЫПОЛНЕНА" "$OUT"
+rm -rf "$NOREPO"
+
+# Пустой индекс — это «не просканировано ничего». Ровно так выглядит молчаливо
+# сорвавшийся `git add`, и раньше он давал «чисто» с exit 0.
+R=$(new_repo)
+printf 'server = 10.1.2.3\n' > "$R/leak.txt"   # файл есть, но НЕ проиндексирован
+OUT=$(cd "$R" && bash tools/privacy-scan.sh 2>&1; printf 'EXIT=%s\n' "$?")
+assert_contains "пустой индекс → проверка не выполнена" "ПРОВЕРКА НЕ ВЫПОЛНЕНА" "$OUT"
+assert_not_contains "пустой индекс → НЕ «чисто»" "privacy-scan: чисто" "$OUT"
+assert_not_contains "пустой индекс → exit != 0" "EXIT=0" "$OUT"
 rm -rf "$R"
 
 summary

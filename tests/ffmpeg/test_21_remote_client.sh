@@ -583,9 +583,16 @@ assert_eq "часть 1 читает свою задачу" "job-71" "$(remote_u
 assert_eq "часть 2 читает свою задачу" "job-72" "$(remote_upload_sidecar_read_job "$_rsrc" 2 SIG-A)"
 assert_empty "части без записи — пусто"           "$(remote_upload_sidecar_read_job "$_rsrc" 3 SIG-A)"
 assert_empty "другая подпись настроек — пусто"    "$(remote_upload_sidecar_read_job "$_rsrc" 1 SIG-B)"
-# Отпечаток источника: подмена файла той же длины обязана отменить возобновление.
+# Отпечаток источника: подмена файла ТОЙ ЖЕ ДЛИНЫ обязана отменить возобновление —
+# проверяется вторая половина отпечатка, время изменения. Длина совпадает намеренно
+# (12 байт у обоих), а mtime выставляется ЯВНО: без touch оба файла создавались в
+# пределах одной секунды, получали одинаковый mtime, и на linux/macos ассерт падал,
+# тогда как на Windows проходил — тест зависел от того, попал ли он на границу
+# секунды. Политика набора это прямо запрещает (никакого реального времени).
 _other="$(mktemp "${TMPDIR:-/tmp}/remote_rs2_XXXXXX")"
 printf 'other-bytesX' > "$_other"
+touch -t 202001010101 "$_other"
+assert_eq "длина подменённого файла совпадает" "$(file_size "$_rsrc")" "$(file_size "$_other")"
 assert_empty "другой источник — пусто" "$(remote_upload_sidecar_read_job "$_other" 1 SIG-A)"
 rm -f "$_other"
 

@@ -151,7 +151,15 @@ set /p "trim_end=Конец  (Enter = до конца): "
 rem Валидация формата времени: разрешены только цифры, ':' и '.'. Иначе значение
 rem могло бы содержать '"' и сломать кавычки в --download-sections. Значение пишем
 rem в файл редиректом (НЕ pipe: pipe порождает дочерний cmd, который ре-парсит '&').
-set "_trimchk=%temp%\ytdlp_trimchk_%random%.txt"
+rem Дискриминатор имени — !random!!random!, как fallback у манифеста и temp_dir:
+rem одиночный %RANDOM% (0..32767) коллизию допускает, и два параллельных запуска
+rem скармливали бы друг другу чужой ввод валидации. GUID через powershell здесь
+rem НЕ берём, хотя у манифеста он основной: эта строка исполняется на КАЖДОМ
+rem запуске (даже когда обрезка не нужна) и стоит в середине цепочки set /p, где
+rem дочерний процесс на общем stdin — измеренная в этом проекте ловушка
+rem (см. CLAUDE.md про `for /f` и stdin). Файл транзитный: создан, прочитан
+rem findstr и удалён через несколько строк, поэтому 2^30 имён достаточно.
+set "_trimchk=%temp%\ytdlp_trimchk_!random!!random!.txt"
 if not "!trim_start!"=="" (
     >"!_trimchk!" echo(!trim_start!
     findstr /r /c:"^[0-9:.][0-9:.]*$" "!_trimchk!" >nul || (echo [WARN] Некорректное время начала - игнорируется & set "trim_start=")
@@ -648,13 +656,26 @@ if not "%translate_lang%"=="" (
         ren "!temp_dir!\*.mp3" "translated.mp3" >nul 2>&1
         if exist "!temp_dir!\translated.mp3" set "trans_file=!temp_dir!\translated.mp3"
         set "video_file="
-        rem `set /p` читает ПЕРВУЮ строку манифеста СЫРОЙ: "!", кириллица и "%" доезжают
+        rem `set /p` читает ПЕРВУЮ строку файла СЫРОЙ: "!", кириллица и "%" доезжают
         rem целыми. Через `for /f %%f` значение проходило подстановку и теряло "!":
         rem «Wow! Title.mp4» превращалось в «Wow Title.mp4», `if not exist` сбрасывал
         rem переменную, и перевод падал с «yt-dlp не сообщил ни одного медиафайла» при
         rem полностью исправном yt-dlp. Идиома `endlocal & set` здесь не работает.
+        rem
+        rem Но первая строка манифеста — не обязательно медиафайл: yt-dlp печатает
+        rem туда и sidecar-субтитры, и тогда «первая строка» = *.vtt, расширение не
+        rem опознаётся, video_file сбрасывается — и перевод падал с тем же самым
+        rem «не сообщил ни одного медиафайла», хотя медиафайл в манифесте есть, просто
+        rem второй строкой. Отбор медиастрок отдаём findstr (/e = совпадение в КОНЦЕ
+        rem строки, /c: — литерал, никакой регулярки): он читает файл сам, поэтому "!"
+        rem и "%" в именах не проходят ни одной фазы раскрытия cmd. `set /p` дальше
+        rem читает первую строку уже отфильтрованного списка. Набор расширений тот же,
+        rem что в .sh/.ps1 (mp4/mkv/webm).
         if defined _dl_manifest (
-            <"!_dl_manifest!" set /p "video_file=" || set "video_file="
+            set "_dl_media=%TEMP%\ytdlp_media_!random!!random!.txt"
+            findstr /i /e /c:".mp4" /c:".mkv" /c:".webm" "!_dl_manifest!" >"!_dl_media!" 2>nul
+            <"!_dl_media!" set /p "video_file=" || set "video_file="
+            del "!_dl_media!" 2>nul
         )
         rem Расширение — срезом с конца: вложенный `for %%E in (...)` вернул бы нас
         rem в ту же подстановку с потерей "!".

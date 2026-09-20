@@ -2,7 +2,7 @@
 # Dot-source из ffmpeg/build_exe.ps1 и yt-dlp/build_exe.ps1 — SHA-пин ps2exe и версия
 # определены здесь один раз (иначе при обновлении ps2exe/бампе версии легко забыть один файл).
 
-$script:Ps2ExeSha    = 'E180C1264C131CAEDDFA37130A2F0EB826A3FFCA701B808DA3337689721FF45A'  # PS2EXE @ MScholtes/PS2EXE d32d5ce + локальный патч (экранирование метаданных для C#-литералов: \ " CR LF TAB)
+$script:Ps2ExeSha    = '6AD15CBF4382B7F2F17A19F8723B2263D7202C4982BA9DA8DEF8E221E25F8B5F'  # PS2EXE @ MScholtes/PS2EXE d32d5ce + локальные патчи: экранирование метаданных для C#-литералов (\ " CR LF TAB); экранирование целевого пути -embedFiles в verbatim-литерале @"…" (там кавычка удваивается, а не гасится бэкслешем) и имени ресурса в обычном; STDERR в -conHost на OpenStandardError вместо OpenStandardOutput; удвоение апострофа при сериализации параметров в команду powershell.exe на PowerShell Core
 $script:Ps2ExeCommit = 'd32d5ce21c458696e860a7533943b1466d925be9'  # закреплённый commit ps2exe (провенанс)
 $script:BuildVersion = '18.0.0.0'
 

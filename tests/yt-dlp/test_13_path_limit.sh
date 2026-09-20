@@ -84,6 +84,35 @@ else
     out=$(limit_output_template 'C:\dl' '%(id)s.%(ext)s' "$WIN_LIMIT")
     assert_eq "шаблон без длинных полей не меняется" '%(id)s.%(ext)s' "$out"
 
+    # Альтернативные формы поля: yt-dlp допускает значение по умолчанию
+    # ('%(title|Без имени)s') и список альтернатив ('%(uploader,channel)s'). Бюджет
+    # под них считался и раньше, а лимит НЕ подставлялся — то есть на этих шаблонах
+    # защита отсутствовала ровно там, где путь и переполнялся. Лимит по грамматике
+    # yt-dlp идёт ПОСЛЕ ')', внутренняя часть обязана дойти нетронутой.
+    # Латиница в значении по умолчанию — не вкус: PS1-двойник ниже сверяет РОВНО эту
+    # строку, а его harness пишется без BOM (PowerShell 5.1 читает такой .ps1 в ANSI,
+    # и кириллица в нём разваливает разбор). То же правило уже записано в
+    # tests/common/test_build_strip.sh. Отдельный кейс с кириллицей — сразу за этим.
+    out=$(limit_output_template 'C:\dl' '%(title|no-name)s.%(ext)s' "$WIN_LIMIT")
+    assert_eq "форма со значением по умолчанию получает лимит" \
+        '%(title|no-name).100s.%(ext)s' "$out"
+    # Значение по умолчанию доезжает нетронутым, включая не-ASCII.
+    out=$(limit_output_template 'C:\dl' '%(title|Без имени)s.%(ext)s' "$WIN_LIMIT")
+    assert_eq "кириллица внутри поля не искажается" \
+        '%(title|Без имени).100s.%(ext)s' "$out"
+    out=$(limit_output_template 'C:\dl' '%(uploader,channel)s\%(title)s.%(ext)s' "$WIN_LIMIT")
+    assert_eq "форма со списком альтернатив получает лимит" \
+        '%(uploader,channel).30s\%(title).100s.%(ext)s' "$out"
+    # Пользовательский лимит у альтернативной формы уважается: иначе подстановка
+    # ПОВЫШАЛА бы его до дефолтных 100 — прямо против правила «только на уменьшение».
+    out=$(limit_output_template 'C:\dl' '%(title|x).50U.%(ext)s' "$WIN_LIMIT")
+    assert_eq "пользовательский лимит альтернативной формы не раздут" \
+        '%(title|x).50U.%(ext)s' "$out"
+    # playlist_index не должен приниматься за playlist: граница после имени поля —
+    # ')' , '|' , ',' или '.', и '_' в неё не входит.
+    out=$(limit_output_template 'C:\dl' '%(playlist_index)03d - %(title)s.%(ext)s' "$WIN_LIMIT")
+    assert_contains "playlist_index не получил лимит playlist" '%(playlist_index)03d' "$out"
+
     # Идемпотентность: повторный прогон ничего не меняет (важно, потому что
     # GUI пересобирает команду на каждый URL очереди).
     once=$(limit_output_template "$BASE45" "$TPL_PL" "$WIN_LIMIT")
@@ -225,6 +254,12 @@ $long = 'C:\' + ('x' * 235)
 Write-Output ("long="   + (Limit-OutputTemplate $long $tplPl $WIN))
 $once = Limit-OutputTemplate $base45 $tplPl $WIN
 Write-Output ("idem="   + ((Limit-OutputTemplate $base45 $once $WIN) -eq $once))
+# Альтернативные формы поля — те же строки, что проверены у .sh выше: результат
+# обязан совпасть до символа, иначе GUI и CLI ограничивают путь по-разному.
+Write-Output ("altdef=" + (Limit-OutputTemplate 'C:\dl' '%(title|no-name)s.%(ext)s' $WIN))
+Write-Output ("altlist="+ (Limit-OutputTemplate 'C:\dl' '%(uploader,channel)s\%(title)s.%(ext)s' $WIN))
+Write-Output ("altuser="+ (Limit-OutputTemplate 'C:\dl' '%(title|x).50U.%(ext)s' $WIN))
+Write-Output ("plidx="  + (Limit-OutputTemplate 'C:\dl' '%(playlist_index)03d - %(title)s.%(ext)s' $WIN))
 # Без третьего аргумента production обязан взять те же 259 — иначе GUI считает не то.
 Write-Output ("default="+ ((Limit-OutputTemplate $base45 $tplPl) -eq $once))
 PS1EOF
@@ -245,6 +280,14 @@ PS1EOF
     assert_contains "PS1 длинная база → минимум" '%(title).25U'   "$(get_field "$ps_out" long)"
     assert_eq "PS1 идемпотентно"                "True"            "$(get_field "$ps_out" idem)"
     assert_eq "PS1 без аргумента = 259"         "True"            "$(get_field "$ps_out" default)"
+    assert_eq "PS1 форма со значением по умолчанию = SH" \
+        '%(title|no-name).100s.%(ext)s' "$(get_field "$ps_out" altdef)"
+    assert_eq "PS1 форма со списком альтернатив = SH" \
+        '%(uploader,channel).30s\%(title).100s.%(ext)s' "$(get_field "$ps_out" altlist)"
+    assert_eq "PS1 пользовательский лимит альтернативной формы = SH" \
+        '%(title|x).50U.%(ext)s' "$(get_field "$ps_out" altuser)"
+    assert_contains "PS1 playlist_index не получил лимит playlist" \
+        '%(playlist_index)03d' "$(get_field "$ps_out" plidx)"
 fi
 
 summary

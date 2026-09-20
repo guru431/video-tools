@@ -122,6 +122,8 @@ target_lang = ru
 timeout_sec = abc
 [subtitles]
 format = badfmt
+[output]
+base_dir = "C:\video in quotes"
 INIEOF
 win_cfg=$(cygpath -w "$tmpcfg" 2>/dev/null || echo "$tmpcfg")
 
@@ -147,6 +149,11 @@ Write-Output ("rc_transen=" + (Read-Config 'enabled' 'translation' 'false'))
 # ffmpeg-парсера и у обоих .sh (там `break` на первом совпадении). Раньше здесь
 # побеждало последнее, и один config.ini читался компонентами по-разному.
 Write-Output ("rc_dup=" + (Read-Config 'default_quality' 'download' '720'))
+# Кавычки вокруг значения («Копировать как путь» в проводнике) обязаны сниматься —
+# как в трёх остальных ридерах проекта. Иначе создаётся каталог с литеральными
+# кавычками в имени, а cookie-файл по такому пути не находится вовсе.
+Write-Output ("rc_quoted=" + (Read-Config 'base_dir' 'output' '_video_'))
+Write-Output ("rc_unquote_fn=" + (Remove-ConfigQuotes '''C:\one quoted'''))
 
 # Валидация значений config.ini: неизвестный enum и нечисловой таймаут обязаны
 # скатываться к умолчанию И порождать предупреждение. Раньше они молча
@@ -229,6 +236,8 @@ assert_eq "default_quality"                            "1080"                   
 assert_eq "нет ключа → default"                        "my_default"                   "$(get_field "$out" rc_default)"
 assert_eq "translation enabled"                        "true"                         "$(get_field "$out" rc_transen)"
 assert_eq "дубль ключа: выигрывает первое вхождение"   "1080"                         "$(get_field "$out" rc_dup)"
+assert_eq "кавычки вокруг значения сняты"              'C:\video in quotes'           "$(get_field "$out" rc_quoted)"
+assert_eq "одинарные кавычки тоже снимаются"           'C:\one quoted'                "$(get_field "$out" rc_unquote_fn)"
 
 # ── Get-Platform ──────────────────────────────────────────────
 suite "PS1 yt-dlp: валидация значений config.ini (enum/bool/таймаут)"

@@ -1401,6 +1401,22 @@ function Encode-File {
 		# «кодирования» из одного config.ini.
 		$partRemote = ($remote_active -eq 'yes')
 		$partDone = $false
+		# Задача прошлой попытки: после падения клиента на ожидании или скачивании
+		# продолжаем её, а не отправляем гигабайты заново. Ключ в sidecar'е несёт
+		# номер части и подпись настроек, поэтому чужой отрезок и результат от
+		# прежнего config.ini сюда попасть не могут. Годность задачи проверяется
+		# одним запросом: мёртвая (404, failed, cancelled) отбрасывается, и путь
+		# идёт обычной дорогой через загрузку. Паритет с .sh.
+		$rJobSaved = ''
+		if ($partRemote -and $dry_run -ne 'yes') {
+			$script:RemoteUploadSidecar = "$manifest.upload"
+			$rJobSaved = Read-RemoteUploadSidecarJob -Source $full_path -Part $c -Signature $file_sig
+			$script:RemoteUploadSidecar = ''
+			if ($rJobSaved -and -not (Test-RemoteJobUsable $rJobSaved)) { $rJobSaved = '' }
+			if ($rJobSaved) {
+				Log-Msg "INFO" "Продолжаем прежнюю задачу службы: $($file.Name)$pref — исходник заново не отправляется"
+			}
+		}
 		if ($partRemote) {
 			$rLen = 0
 			if ($current_set_length -match '^-t\s+(\d+)') { $rLen = [int]$Matches[1] }
@@ -1415,6 +1431,8 @@ function Encode-File {
 				# dry_run НЕ загружает: «только показать команды» не имеет права
 				# стоить часов трафика и гигабайт в хранилище службы.
 				$script:remoteUploadId = '<pending>'
+			} elseif ($rJobSaved) {
+				# Исходник уже у службы, и задача по нему жива — загрузка не нужна.
 			} elseif (-not $script:remoteUploadId) {
 				Log-Msg "INFO" "Отправка на сервер: $($file.Name)"
 				$script:_remoteUploadName = $file.Name
@@ -1467,7 +1485,21 @@ function Encode-File {
 			Invoke-RemoteDryRun $script:remoteUploadId $rMap.Op $rMap.Params $script:remoteSubId | Out-Null
 			$partDone = $true
 		} elseif ($partRemote) {
-			$jobId = Submit-RemoteJob $script:remoteUploadId $rMap.Op $rMap.Params $script:remoteSubId
+			# job_id живёт в sidecar рядом с upload_id: после падения клиента на фазе
+			# ожидания или скачивания следующий запуск идёт сразу в GET /jobs/{id},
+			# вместо повторной отправки гигабайт. Дедупликация службы спасает саму
+			# задачу, но не трафик и не время.
+			$jobId = ''
+			if ($rJobSaved) {
+				$jobId = $rJobSaved
+			} else {
+				$jobId = Submit-RemoteJob $script:remoteUploadId $rMap.Op $rMap.Params $script:remoteSubId
+				if ($jobId) {
+					$script:RemoteUploadSidecar = "$manifest.upload"
+					Write-RemoteUploadSidecarJob -Source $full_path -Part $c -Signature $file_sig -JobId $jobId
+					$script:RemoteUploadSidecar = ''
+				}
+			}
 			if ($jobId) {
 				$startTime = Get-Date
 				$onProgress = {
@@ -1592,7 +1624,7 @@ function Encode-File {
 			try { $proc.CancelErrorRead() } catch {}
 			if ($errSub) { Unregister-Event -SourceIdentifier $errSub.Name -ErrorAction SilentlyContinue; Remove-Job $errSub -Force -ErrorAction SilentlyContinue }
 			$exitCode = $proc.ExitCode
-			Remove-Item $progressTempFile -Force -ErrorAction SilentlyContinue
+			Remove-Item -LiteralPath $progressTempFile -Force -ErrorAction SilentlyContinue
 			if (-not $guiProgressFile) { Write-Progress -Activity "Кодирование" -Completed }
 
 			$elapsed = (Get-Date) - $startTime
@@ -1632,6 +1664,16 @@ function Encode-File {
 	# готовый результат. Частичный успех manifest'а не получает намеренно.
 	if ($dry_run -ne "yes" -and -not $script:anyFail -and $script:produced.Count -gt 0) {
 		Write-Manifest $manifest $full_path $file_sig $script:produced
+		# Файл доделан — возобновлять нечего, и sidecar (upload_id, подпись, задачи
+		# частей) не имеет права переживать успешный прогон: иначе следующий заход по
+		# тому же файлу нашёл бы в нём идентификаторы уже опубликованных задач.
+		# Удаляет его вызывающий, потому что Send-RemoteUpload теперь оставляет файл
+		# жить до этой точки.
+		if ($remote_active -eq 'yes') {
+			$script:RemoteUploadSidecar = "$manifest.upload"
+			Clear-RemoteUploadSidecar
+			$script:RemoteUploadSidecar = ''
+		}
 	}
 }
 
@@ -1743,7 +1785,7 @@ if ($merge_files -eq "yes") {
 			Remove-Item -LiteralPath $tmpFile -Force -ErrorAction SilentlyContinue
 		} elseif ($dry_run -eq "yes") {
 			Write-Host "[DRY-RUN] $ffmpeg -hide_banner -nostdin -strict -2 -f concat -safe 0 -i `"$tmpFile`" -c copy -map 0 -y `"$mergeTmp`""
-			Remove-Item $tmpFile -Force
+			Remove-Item -LiteralPath $tmpFile -Force
 		} else {
 			Log-Msg "INFO" "Объединение файлов -> $mergeTarget"
 			if (Test-Path -LiteralPath $mergeTmp) { Remove-Item -LiteralPath $mergeTmp -Force -ErrorAction SilentlyContinue }
@@ -1777,7 +1819,7 @@ if ($merge_files -eq "yes") {
 				if (Test-Path -LiteralPath $mergeTmp) { Remove-Item -LiteralPath $mergeTmp -Force -ErrorAction SilentlyContinue }
 				$script:countFail++
 			}
-			Remove-Item $tmpFile -Force
+			Remove-Item -LiteralPath $tmpFile -Force
 		}
 	}
 	}

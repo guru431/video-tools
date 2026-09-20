@@ -375,7 +375,11 @@ MOCK_CURL_ROUTES="$(routes \
   'POST /v1/uploads/up-44/complete|200|{"ok":true}')"
 remote_upload "$_big" >/dev/null
 assert_eq "устаревший sidecar игнорируется" "up-44" "$REMOTE_UPLOAD_ID"
-if [ ! -f "$_sidecar" ]; then pass "успешная загрузка убирает sidecar"; else fail "успешная загрузка убирает sidecar" "файла нет" "файл на месте"; fi
+# Sidecar ПЕРЕЖИВАЕТ успешную загрузку и получает пометку complete=yes. Раньше он
+# здесь удалялся, и записывать в него job_id было уже некуда: функция записи молча
+# выходила по отсутствию файла, поэтому возобновление задачи не работало НИ РАЗУ.
+if [ -f "$_sidecar" ]; then pass "успешная загрузка оставляет sidecar"; else fail "успешная загрузка оставляет sidecar" "файл на месте" "файла нет"; fi
+assert_contains "загрузка помечена завершённой" "complete=yes" "$(cat "$_sidecar" 2>/dev/null)"
 REMOTE_UPLOAD_SIDECAR=""
 rm -f "$_sidecar"
 
@@ -447,6 +451,14 @@ suite "remote: субтитры уезжают отдельной загрузк
 : > "$MOCK_CURL_LOG"
 remote_submit up-42 transcode '{"codec":"h264"}' up-sub >/dev/null
 assert_contains "subtitle_upload_id" '"subtitle_upload_id":"up-sub"' "$(cat "$MOCK_CURL_LOG")"
+# Поле обязано лежать на ВЕРХНЕМ уровне params, а не внутри объекта audio. Проверяем
+# на реальной форме params: remote_op_for_config всегда заканчивает её объектом
+# "audio":{…}, и ревью читало `${p%\}}` как срез закрывающей скобки ЭТОГО объекта.
+# Срезается последняя скобка — своя у params, — поэтому поле встаёт рядом с audio;
+# тест закрепляет это структурно, а не по вхождению подстроки.
+assert_eq "поле на верхнем уровне, а не внутри audio" \
+	'{"upload_id":"up-42","op":"transcode","params":{"codec":"h264","audio":{"codec":"copy"},"subtitle_upload_id":"up-sub"},"prefer":"auto","wait_timeout":1800}' \
+	"$(remote_job_body up-42 transcode '{"codec":"h264","audio":{"codec":"copy"}}' up-sub)"
 
 suite "remote: холостой прогон"
 : > "$MOCK_CURL_LOG"
@@ -544,6 +556,124 @@ remote_cancel job-7
 _log="$(cat "$MOCK_CURL_LOG")"
 assert_contains "метод DELETE" "DELETE" "$_log"
 assert_contains "адрес задачи" "/v1/jobs/job-7" "$_log"
+
+# ══════════════════════════════════════════════════════════════
+suite "remote: возобновление задачи из sidecar"
+# ══════════════════════════════════════════════════════════════
+# Обещание «после падения клиента на ожидании или скачивании следующий запуск идёт
+# сразу в GET /jobs/{id} вместо повторной отправки гигабайт» было недостижимо:
+# sidecar удалялся сразу после complete, а запись job_id молча выходила по
+# отсутствию файла. Ключ несёт номер части и подпись настроек — иначе часть 2
+# читала бы задачу части 1, а смена config.ini публиковала бы результат от прежних
+# настроек.
+_rsrc="$(mktemp "${TMPDIR:-/tmp}/remote_rs_XXXXXX")"
+printf 'source-bytes' > "$_rsrc"
+_sidecar="$(mktemp "${TMPDIR:-/tmp}/remote_sc_XXXXXX")"
+REMOTE_UPLOAD_SIDECAR="$_sidecar"
+{
+	echo "upload_id=up-70"
+	echo "size=$(file_size "$_rsrc")"
+	echo "mtime=$(remote_file_mtime "$_rsrc")"
+	echo "endpoint=$remote_endpoint"
+	echo "sig=SIG-A"
+	echo "job.1=job-71"
+	echo "job.2=job-72"
+} > "$_sidecar"
+assert_eq "часть 1 читает свою задачу" "job-71" "$(remote_upload_sidecar_read_job "$_rsrc" 1 SIG-A)"
+assert_eq "часть 2 читает свою задачу" "job-72" "$(remote_upload_sidecar_read_job "$_rsrc" 2 SIG-A)"
+assert_empty "части без записи — пусто"           "$(remote_upload_sidecar_read_job "$_rsrc" 3 SIG-A)"
+assert_empty "другая подпись настроек — пусто"    "$(remote_upload_sidecar_read_job "$_rsrc" 1 SIG-B)"
+# Отпечаток источника: подмена файла той же длины обязана отменить возобновление.
+_other="$(mktemp "${TMPDIR:-/tmp}/remote_rs2_XXXXXX")"
+printf 'other-bytesX' > "$_other"
+assert_empty "другой источник — пусто" "$(remote_upload_sidecar_read_job "$_other" 1 SIG-A)"
+rm -f "$_other"
+
+# Смена настроек: прежние задачи обязаны исчезнуть вместе с подписью, иначе sidecar
+# навсегда остался бы с чужой подписью и возобновление молча не работало бы.
+remote_upload_sidecar_write_job "$_rsrc" 1 SIG-B job-80
+assert_eq "новая задача под новой подписью" "job-80" "$(remote_upload_sidecar_read_job "$_rsrc" 1 SIG-B)"
+assert_empty "задача прежней подписи удалена" "$(remote_upload_sidecar_read_job "$_rsrc" 2 SIG-B)"
+assert_not_contains "прежний job.2 вычищен" "job-72" "$(cat "$_sidecar")"
+assert_contains "upload_id пережил перезапись" "up-70" "$(cat "$_sidecar")"
+
+# Файла может не быть (ручная чистка, обрыв между complete и созданием задачи) —
+# запись обязана его создать. Прежняя версия здесь молча выходила, и именно поэтому
+# идентификатор задачи не попадал в sidecar НИ РАЗУ.
+rm -f "$_sidecar"
+remote_upload_sidecar_write_job "$_rsrc" 1 SIG-C job-90
+assert_file_exists "sidecar создан при записи задачи" "$_sidecar"
+assert_eq "задача читается из созданного sidecar" "job-90" "$(remote_upload_sidecar_read_job "$_rsrc" 1 SIG-C)"
+
+# Годность задачи проверяется ОДНИМ запросом: мёртвую нельзя отдавать в remote_wait —
+# тот получит 404 и отменит ФАЙЛ, то есть возобновление обойдётся дороже загрузки.
+MOCK_CURL_ROUTES="$(routes \
+  'GET /v1/jobs/job-live|200|{"job_id":"job-live","state":"running","progress":40}' \
+  'GET /v1/jobs/job-dead|404|{"error":"нет такой задачи"}' \
+  'GET /v1/jobs/job-bad|200|{"job_id":"job-bad","state":"failed","error":"упало"}')"
+if remote_job_usable job-live; then pass "живая задача годна"; else fail "живая задача годна" "код 0" "код 1"; fi
+if remote_job_usable job-dead; then fail "исчезнувшая задача негодна" "код 1" "код 0"; else pass "исчезнувшая задача негодна"; fi
+if remote_job_usable job-bad;  then fail "провалившаяся задача негодна" "код 1" "код 0"; else pass "провалившаяся задача негодна"; fi
+if remote_job_usable ""; then fail "пустой идентификатор негоден" "код 1" "код 0"; else pass "пустой идентификатор негоден"; fi
+
+# Подтверждённая загрузка не отправляется заново и НЕ подтверждается повторно:
+# ответ на второй complete контрактом не описан, а 409 здесь стоил бы перезалива.
+{
+	echo "upload_id=up-70"
+	echo "size=$(file_size "$_rsrc")"
+	echo "mtime=$(remote_file_mtime "$_rsrc")"
+	echo "endpoint=$remote_endpoint"
+	echo "complete=yes"
+} > "$_sidecar"
+: > "$MOCK_CURL_LOG"
+MOCK_CURL_ROUTES="$(routes \
+  "GET /v1/uploads/up-70|200|{\"upload_id\":\"up-70\",\"received\":$(file_size "$_rsrc")}" \
+  'GET /v1/uploads/up-70/probe|200|{"duration":42}')"
+remote_upload "$_rsrc" >/dev/null
+_log="$(cat "$MOCK_CURL_LOG")"
+assert_eq "идентификатор взят из sidecar" "up-70" "$REMOTE_UPLOAD_ID"
+assert_not_contains "байты заново не отправляются" "PATCH" "$_log"
+assert_not_contains "повторного complete нет"      "/complete" "$_log"
+assert_eq "длительность взята у probe" "42" "$REMOTE_UPLOAD_DURATION"
+REMOTE_UPLOAD_SIDECAR=""
+rm -f "$_sidecar" "$_rsrc"
+
+# ══════════════════════════════════════════════════════════════
+suite "remote: валидация числовых значений config.ini"
+# ══════════════════════════════════════════════════════════════
+# Всё, что уезжает в JSON без кавычек, обязано быть проверено ДО загрузки гигабайт:
+# «23 кбит» в quality давало тело {"quality":23 кбит}, и узнавалось это после полной
+# отправки файла. Проверялся здесь только bitrate.
+_saved_q="$video_quality_status"
+video_quality_status="+"; video_quality_value="23"
+video_number_frames_status="-"; audio_number_channels_status="-"
+audio_sampling_rate_status="-"; playback_speed_status="-"
+video_resolution_status="-"; video_bitrate_status="-"; audio_bitrate_status="-"
+remote_wait_timeout=1800; remote_stall_timeout=900; remote_prefer=auto; remote_on_failure=abort
+threads=4
+if remote_validate_config 2>/dev/null; then pass "числовой quality проходит"
+else fail "числовой quality проходит" "код 0" "код 1"; fi
+video_quality_value="23 кбит"
+_verr="$(remote_validate_config 2>&1 >/dev/null)"; _vrc=$?
+assert_eq "нечисловой quality отклонён" "1" "$_vrc"
+assert_contains "и назван по имени" "quality" "$_verr"
+video_quality_value="23"
+video_number_frames_status="+"; video_number_frames_value="30fps"
+_verr="$(remote_validate_config 2>&1 >/dev/null)"
+assert_contains "нечисловой fps отклонён" "number_frames" "$_verr"
+video_number_frames_status="-"
+playback_speed_status="+"; playback_speed_value="1.5"
+if remote_validate_config 2>/dev/null; then pass "дробная скорость проходит"
+else fail "дробная скорость проходит" "код 0" "код 1"; fi
+playback_speed_value="1,5"
+_verr="$(remote_validate_config 2>&1 >/dev/null)"
+assert_contains "запятая в скорости отклонена" "playback_speed" "$_verr"
+playback_speed_status="-"
+threads="много"
+_verr="$(remote_validate_config 2>&1 >/dev/null)"
+assert_contains "нечисловые threads отклонены" "threads" "$_verr"
+threads=4
+video_quality_status="$_saved_q"
 
 rm -f "$MOCK_CURL_LOG" "$_capture"
 summary

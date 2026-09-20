@@ -99,6 +99,31 @@ function Test-RemoteConfigValues {
 	if ($audio_bitrate_status -eq '+' -and "$audio_bitrate_value" -notmatch '^\d+$') {
 		Write-Host "[ОШИБКА] [audio] bitrate ожидается числом в кбит/с без суффикса (получено: '$audio_bitrate_value')."; $ok = $false
 	}
+	# Остальные поля того же класса: уезжают в JSON БЕЗ кавычек (quality, fps,
+	# threads, channels, rate — см. Get-RemoteOpForConfig), то есть «23 кбит» даёт
+	# невалидное тело {"quality":23 кбит}. Проверялся здесь только bitrate, хотя
+	# сам комментарий функции обещает проверку ВСЕГО, что идёт без кавычек, и
+	# обнаруживалась ошибка ровно тем способом, который он называет недопустимым —
+	# после полной отправки файла. Паритет с remote_validate_config в .sh.
+	if ($video_quality_status -eq '+' -and "$video_quality_value" -notmatch '^\d+$') {
+		Write-Host "[ОШИБКА] [video] quality (CRF/CQ) ожидается целым числом без суффикса (получено: '$video_quality_value')."; $ok = $false
+	}
+	if ($video_number_frames_status -eq '+' -and "$video_number_frames_value" -notmatch '^\d+$') {
+		Write-Host "[ОШИБКА] [video] number_frames (fps) ожидается целым числом без суффикса (получено: '$video_number_frames_value')."; $ok = $false
+	}
+	if ($audio_number_channels_status -eq '+' -and "$audio_number_channels_value" -notmatch '^\d+$') {
+		Write-Host "[ОШИБКА] [audio] number_channels ожидается целым числом без суффикса (получено: '$audio_number_channels_value')."; $ok = $false
+	}
+	if ($audio_sampling_rate_status -eq '+' -and "$audio_sampling_rate_value" -notmatch '^\d+$') {
+		Write-Host "[ОШИБКА] [audio] sampling_rate ожидается целым числом без суффикса (получено: '$audio_sampling_rate_value')."; $ok = $false
+	}
+	if ("$(if ($threads) { $threads } else { 4 })" -notmatch '^\d+$') {
+		Write-Host "[ОШИБКА] [performance] threads ожидается целым числом без суффикса (получено: '$threads')."; $ok = $false
+	}
+	# speed — дробное: «1.5» допустимо, «1,5» и «быстро» нет.
+	if ($playback_speed_status -eq '+' -and "$playback_speed_value" -notmatch '^\d+(\.\d+)?$') {
+		Write-Host "[ОШИБКА] [speed] playback_speed ожидается числом с точкой (получено: '$playback_speed_value')."; $ok = $false
+	}
 	return $ok
 }
 
@@ -459,49 +484,113 @@ function Invoke-RemotePreflight {
 # GET /uploads/<свежий id> честно отвечал received: 0. Путь задаёт вызывающий
 # ($script:RemoteUploadSidecar, рядом с manifest'ом).
 $script:RemoteUploadSidecar = ''
-function Read-RemoteUploadSidecar {
-	param([string]$Source, [int64]$Size)
-	$f = $script:RemoteUploadSidecar
-	if (-not $f -or -not (Test-Path -LiteralPath $f)) { return '' }
+
+function Get-RemoteUploadSidecarMap {
 	$map = @{}
-	foreach ($line in [System.IO.File]::ReadAllLines($f)) {
-		$i = $line.IndexOf('=')
-		if ($i -gt 0) { $map[$line.Substring(0, $i)] = $line.Substring($i + 1) }
+	$f = $script:RemoteUploadSidecar
+	if (-not $f -or -not (Test-Path -LiteralPath $f)) { return $map }
+	try {
+		foreach ($line in [System.IO.File]::ReadAllLines($f)) {
+			$i = $line.IndexOf('=')
+			if ($i -gt 0) { $map[$line.Substring(0, $i)] = $line.Substring($i + 1) }
+		}
+	} catch {}
+	return $map
+}
+
+# Отпечаток источника: размер, время изменения, адрес службы. Общая часть докачки
+# загрузки и возобновления задачи. Время изменения — вторая половина отпечатка: один
+# размер ничего не доказывает, и подмена файла другим той же длины заставляла
+# докачивать ЧУЖИЕ байты в старую загрузку (complete отвечал 409 на верно, по мнению
+# клиента, собранном файле). Старый sidecar без mtime не отвергаем: поле добавлено позже.
+function Test-RemoteUploadSidecar {
+	param([string]$Source, [int64]$Size = -1, $Map = $null)
+	$m = if ($null -ne $Map) { $Map } else { Get-RemoteUploadSidecarMap }
+	if ($m.Count -eq 0) { return $false }
+	if ($Size -lt 0) {
+		try { $Size = (Get-Item -LiteralPath $Source).Length } catch { return $false }
 	}
-	# Источник изменился или сменилась служба — прежние байты не наши.
-	if ($map['size'] -ne "$Size") { return '' }
-	if ($map['endpoint'] -ne $remote_endpoint) { return '' }
-	# Время изменения — вторая половина отпечатка: один размер ничего не доказывает,
-	# и подмена файла другим той же длины заставляла докачивать ЧУЖИЕ байты в старую
-	# загрузку (complete отвечал 409 на верно, по мнению клиента, собранном файле).
-	# Старый sidecar без mtime не отвергаем: поле добавлено позже.
-	if ($map.ContainsKey('mtime') -and $map['mtime']) {
+	if ($m['size'] -ne "$Size") { return $false }
+	if ($m['endpoint'] -ne $remote_endpoint) { return $false }
+	if ($m.ContainsKey('mtime') -and $m['mtime']) {
 		$mt = ''
 		try { $mt = "$([int64]((Get-Item -LiteralPath $Source).LastWriteTimeUtc - [datetime]'1970-01-01').TotalSeconds)" } catch {}
-		if ($mt -and $map['mtime'] -ne $mt) { return '' }
+		if ($mt -and $m['mtime'] -ne $mt) { return $false }
 	}
-	return [string]$map['upload_id']
+	return $true
+}
+
+function Read-RemoteUploadSidecar {
+	param([string]$Source, [int64]$Size)
+	$m = Get-RemoteUploadSidecarMap
+	if (-not (Test-RemoteUploadSidecar -Source $Source -Size $Size -Map $m)) { return '' }
+	return [string]$m['upload_id']
+}
+
+# Загрузка подтверждена службой. Без этой пометки следующий запуск, увидевший
+# received == size, звал complete ВТОРОЙ раз: ответ на повторный complete контрактом
+# не описан, а 409 здесь чистит sidecar и уводит файл в полный перезалив.
+function Test-RemoteUploadSidecarCompleted {
+	return ((Get-RemoteUploadSidecarMap)['complete'] -eq 'yes')
+}
+
+function Set-RemoteUploadSidecarCompleted {
+	$f = $script:RemoteUploadSidecar
+	if (-not $f -or -not (Test-Path -LiteralPath $f)) { return }
+	try {
+		foreach ($line in [System.IO.File]::ReadAllLines($f)) { if ($line -eq 'complete=yes') { return } }
+		[System.IO.File]::AppendAllText($f, "complete=yes`n")
+	} catch {}
 }
 
 # Идентификатор задачи живёт рядом с идентификатором загрузки: после падения клиента
 # на фазе ожидания или скачивания следующий запуск идёт сразу в GET /jobs/{id} вместо
 # повторной отправки гигабайт. Паритет с remote_upload_sidecar_read_job в .sh.
+#
+# Ключ несёт НОМЕР ЧАСТИ: задача создаётся на каждую часть, и с единственным ключом
+# многочастевой файл читал бы в части 2 идентификатор задачи части 1 — то есть
+# публиковал бы чужой отрезок. Подпись настроек обязательна по той же причине:
+# задача считалась по прежнему config.ini, и её результат не соответствует текущим
+# настройкам (ту же роль подпись играет в manifest'е).
 function Read-RemoteUploadSidecarJob {
-	$f = $script:RemoteUploadSidecar
-	if (-not $f -or -not (Test-Path -LiteralPath $f)) { return '' }
-	foreach ($line in [System.IO.File]::ReadAllLines($f)) {
-		if ($line -like 'job_id=*') { return $line.Substring(7) }
-	}
-	return ''
+	param([string]$Source, [int]$Part = 1, [string]$Signature = '')
+	$m = Get-RemoteUploadSidecarMap
+	if (-not (Test-RemoteUploadSidecar -Source $Source -Map $m)) { return '' }
+	if ("$($m['sig'])" -ne "$Signature") { return '' }
+	return [string]$m["job.$Part"]
 }
 
 function Write-RemoteUploadSidecarJob {
-	param([string]$JobId)
+	param([string]$Source, [int]$Part = 1, [string]$Signature = '', [string]$JobId)
 	$f = $script:RemoteUploadSidecar
-	if (-not $f -or -not $JobId -or -not (Test-Path -LiteralPath $f)) { return }
+	if (-not $f -or -not $JobId) { return }
 	try {
-		foreach ($line in [System.IO.File]::ReadAllLines($f)) { if ($line -like 'job_id=*') { return } }
-		[System.IO.File]::AppendAllText($f, "job_id=$JobId`n")
+		# Файла может не быть (ручная чистка, обрыв между complete и созданием
+		# задачи): создаём с отпечатком. Прежняя версия в этом случае молча
+		# выходила, а после успешного complete файла как раз НЕ БЫЛО — sidecar
+		# удалялся там же, — поэтому идентификатор задачи не попадал в него НИ РАЗУ
+		# и фича не работала вовсе.
+		if (-not (Test-Path -LiteralPath $f)) {
+			$sz = 0; $mt = '0'
+			try {
+				$it = Get-Item -LiteralPath $Source
+				$sz = $it.Length
+				$mt = "$([int64]($it.LastWriteTimeUtc - [datetime]'1970-01-01').TotalSeconds)"
+			} catch {}
+			[System.IO.File]::WriteAllLines($f, @("upload_id=", "size=$sz", "mtime=$mt", "endpoint=$remote_endpoint"))
+		}
+		$lines = @([System.IO.File]::ReadAllLines($f))
+		$stored = ''
+		foreach ($l in $lines) { if ($l -like 'sig=*') { $stored = $l.Substring(4); break } }
+		if ($stored -ne $Signature) {
+			# Настройки сменились — прежние задачи считались по другому config.ini.
+			# Без этой перезаписи sidecar навсегда остался бы с чужой подписью, и
+			# возобновление молча не работало бы до его удаления руками.
+			$lines = @($lines | Where-Object { $_ -notlike 'sig=*' -and $_ -notlike 'job.*' }) + @("sig=$Signature")
+			[System.IO.File]::WriteAllLines($f, $lines)
+		}
+		foreach ($l in [System.IO.File]::ReadAllLines($f)) { if ($l -like "job.$Part=*") { return } }
+		[System.IO.File]::AppendAllText($f, "job.$Part=$JobId`n")
 	} catch {}
 }
 
@@ -554,6 +643,18 @@ function Send-RemoteUpload {
 			try { $rec = [int64](($r.Body | ConvertFrom-Json).received) } catch { $rec = -1 }
 		}
 		if ($rec -ge 0 -and $rec -le $size) { $offset = $rec } else { $uid = ''; $offset = 0 }
+	}
+	# Загрузка уже подтверждена в прошлый раз, и служба её помнит: отправлять нечего.
+	# Повторный complete здесь не зовём — контракт его не описывает, а 409 на верно
+	# собранном файле стоил бы полного перезалива. Длительность берём отдельной
+	# ручкой: ответа complete у нас в этот раз нет вовсе.
+	if ($uid -and $offset -eq $size -and (Test-RemoteUploadSidecarCompleted)) {
+		Write-Host "[INFO] Исходник уже принят службой — отправка не нужна: $(Split-Path -Leaf $Path)"
+		$probe = Invoke-RemoteHttp GET "/uploads/$uid/probe"
+		if ($probe.Code -eq 200) {
+			try { $script:RemoteUploadDuration = ($probe.Body | ConvertFrom-Json).duration } catch {}
+		}
+		return $uid
 	}
 	if (-not $uid) {
 		$r = Invoke-RemoteHttpRetry POST '/uploads'
@@ -647,7 +748,14 @@ function Send-RemoteUpload {
 			try { $script:RemoteUploadDuration = ($probe.Body | ConvertFrom-Json).duration } catch {}
 		}
 	}
-	Clear-RemoteUploadSidecar
+	# Sidecar здесь НЕ удаляем, хотя загрузка и закончилась: в него сейчас ляжет
+	# идентификатор задачи, а раньше файл исчезал ровно в этой точке — и
+	# Write-RemoteUploadSidecarJob, вызванный следом, молча выходил по отсутствию
+	# файла. Обещанное «после падения на ожидании следующий запуск идёт в
+	# GET /jobs/{id}» было поэтому недостижимо: sidecar'а к тому моменту не
+	# существовало, и файл заново уезжал целиком. Удаляет его вызывающий, когда файл
+	# доделан (см. Write-Manifest в script.ps1).
+	Set-RemoteUploadSidecarCompleted
 	return $uid
 }
 
@@ -677,8 +785,24 @@ function Submit-RemoteJob {
 	if ($null -eq $j -or -not $j.job_id) { Write-Host "[ОШИБКА] Служба не вернула job_id."; return $null }
 	# Паритет с .sh: дедупликация службы — это сообщение пользователю, а не тишина.
 	if ($j.reused -eq $true) { Write-Host "[INFO] Служба вернула готовый результат прежней задачи (дедупликация)." }
-	Write-RemoteUploadSidecarJob ([string]$j.job_id)
+	# Запись job_id в sidecar делает ВЫЗЫВАЮЩИЙ (паритет с .sh): ключ несёт номер
+	# части и подпись настроек, а их знает только цикл по частям в script.ps1.
 	return [string]$j.job_id
+}
+
+# Годна ли сохранённая задача для продолжения. Проверка стоит ОДИН запрос и
+# обязательна: Wait-RemoteJob на задаче, которой у службы уже нет, получает 404,
+# считает его нефатальным один раз, а затем отменяет ФАЙЛ — то есть возобновление
+# обошлось бы дороже повторной загрузки. Ответ «нет» означает «делаем всё заново».
+function Test-RemoteJobUsable {
+	param([string]$JobId)
+	if (-not $JobId) { return $false }
+	$r = Invoke-RemoteHttp GET "/jobs/$JobId"
+	if ($r.Code -ne 200) { return $false }
+	$state = ''
+	try { $state = "$(($r.Body | ConvertFrom-Json).state)" } catch { return $false }
+	if (-not $state -or $state -eq 'failed' -or $state -eq 'cancelled') { return $false }
+	return $true
 }
 
 # Холостой прогон НЕ загружает исходник: «только показать команды» не имеет права

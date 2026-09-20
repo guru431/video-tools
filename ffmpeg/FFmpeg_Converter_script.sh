@@ -1408,6 +1408,24 @@ encode_file() {
 			r_op="$(printf '%s' "$r_out" | head -1)"
 			r_params="$(printf '%s' "$r_out" | tail -1)"
 
+			# Задача прошлой попытки: после падения клиента на ожидании или
+			# скачивании продолжаем её, а не отправляем гигабайты заново. Ключ в
+			# sidecar'е несёт номер части и подпись настроек, поэтому чужой отрезок
+			# и результат от прежнего config.ini сюда попасть не могут. Годность
+			# задачи проверяется одним запросом: мёртвая (404, failed, cancelled)
+			# отбрасывается, и путь идёт обычной дорогой через загрузку.
+			local r_job_saved=""
+			if [ "$part_remote" = "yes" ] && [ "$dry_run" != "yes" ]; then
+				REMOTE_UPLOAD_SIDECAR="${manifest}.upload"
+				r_job_saved="$(remote_upload_sidecar_read_job "$full_path" "$c" "$file_sig")"
+				REMOTE_UPLOAD_SIDECAR=""
+				if [ -n "$r_job_saved" ] && ! remote_job_usable "$r_job_saved"; then
+					r_job_saved=""
+				fi
+				[ -n "$r_job_saved" ] && \
+					log_msg "INFO" "Продолжаем прежнюю задачу службы: $(basename "$full_path")${pref} — исходник заново не отправляется"
+			fi
+
 			# Загрузка одна на файл, задач — по одной на часть. Второй раз те же
 			# гигабайты не отправляются.
 			#
@@ -1420,6 +1438,8 @@ encode_file() {
 			# создаётся и место не освобождает). Тело запроса печатается ниже.
 			if [ "$part_remote" = "yes" ] && [ "$dry_run" = "yes" ]; then
 				remote_upload_id="<pending>"
+			elif [ "$part_remote" = "yes" ] && [ -n "$r_job_saved" ]; then
+				: # исходник уже у службы, и задача по нему жива — загрузка не нужна
 			elif [ "$part_remote" = "yes" ] && [ -z "${remote_upload_id:-}" ]; then
 				log_msg "INFO" "Отправка на сервер: $(basename "$full_path")"
 				# Sidecar рядом с manifest'ом: повторный запуск после обрыва
@@ -1482,16 +1502,20 @@ encode_file() {
 			remote_dry_run "$remote_upload_id" "$r_op" "$r_params" "${remote_sub_id:-}"
 			part_done="yes"
 		elif [ "$part_remote" = "yes" ]; then
-			local r_job
+			local r_job=""
 			# job_id живёт в sidecar рядом с upload_id: после падения клиента на фазе
 			# ожидания или скачивания следующий запуск идёт сразу в GET /jobs/{id},
 			# вместо повторной отправки гигабайт. Дедупликация службы спасает саму
 			# задачу, но не трафик и не время.
 			REMOTE_UPLOAD_SIDECAR="${manifest}.upload"
-			if remote_submit "$remote_upload_id" "$r_op" "$r_params" "${remote_sub_id:-}"; then
+			if [ -n "$r_job_saved" ]; then
+				r_job="$r_job_saved"
+			elif remote_submit "$remote_upload_id" "$r_op" "$r_params" "${remote_sub_id:-}"; then
 				r_job="$REMOTE_JOB_ID"
-				remote_upload_sidecar_write_job "$r_job"
-				REMOTE_UPLOAD_SIDECAR=""
+				remote_upload_sidecar_write_job "$full_path" "$c" "$file_sig" "$r_job"
+			fi
+			REMOTE_UPLOAD_SIDECAR=""
+			if [ -n "$r_job" ]; then
 				local out_tmp; out_tmp="$(partial_path "$out_file")"
 				rm -f "$out_tmp"
 				_current_out_tmp="$out_tmp"
@@ -1614,6 +1638,16 @@ encode_file() {
 	# готовый результат. Частичный успех manifest'а не получает намеренно.
 	if [ "$dry_run" != "yes" ] && [ "$any_fail" = "no" ] && [ ${#produced[@]} -gt 0 ]; then
 		manifest_write "$manifest" "$full_path" "$file_sig" "${produced[@]}"
+		# Файл доделан — возобновлять нечего, и sidecar (upload_id, подпись, задачи
+		# частей) не имеет права переживать успешный прогон: иначе следующий заход
+		# по тому же файлу нашёл бы в нём идентификаторы задач, которые уже
+		# опубликованы. Удаляет его вызывающий, потому что remote_upload теперь
+		# оставляет файл жить до этой точки.
+		if [ "${remote_active:-no}" = "yes" ]; then
+			REMOTE_UPLOAD_SIDECAR="${manifest}.upload"
+			remote_upload_sidecar_clear
+			REMOTE_UPLOAD_SIDECAR=""
+		fi
 	fi
 }
 

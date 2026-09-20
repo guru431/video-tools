@@ -422,6 +422,18 @@ remote_caps_has_codec() {
 	return 1
 }
 
+# Целое без суффикса. Жалоба идёт в stderr, код возврата — «значение негодное»:
+# вызывающий копит их в один флаг, чтобы человек увидел ВСЕ огрехи конфига за один
+# запуск, а не по одному на прогон.
+remote_validate_int() {
+	case "$1" in
+		''|*[!0-9]*)
+			echo "[ОШИБКА] $2 ожидается целым числом без суффикса (получено: '$1')." >&2
+			return 1 ;;
+	esac
+	return 0
+}
+
 # Всё, что уезжает в JSON без кавычек, обязано быть проверено ДО загрузки гигабайт.
 # Нечисловой wait_timeout («30 мин») давал невалидное тело `{"wait_timeout":30 мин}`,
 # и обнаруживалось это ПОСЛЕ полной отправки файла; prefer вне списка служба
@@ -457,6 +469,28 @@ remote_validate_config() {
 	if [ "$audio_bitrate_status" = "+" ]; then
 		case "$audio_bitrate_value" in
 			''|*[!0-9]*) echo "[ОШИБКА] [audio] bitrate ожидается числом в кбит/с без суффикса (получено: '${audio_bitrate_value}')." >&2; ok=1 ;;
+		esac
+	fi
+	# Остальные поля того же класса: уезжают в JSON БЕЗ кавычек (quality, fps,
+	# threads, channels, rate — см. remote_op_for_config), то есть «23 кбит» даёт
+	# невалидное тело {"quality":23 кбит}. Проверялся здесь только bitrate, хотя
+	# сам комментарий функции обещает проверку ВСЕГО, что идёт без кавычек, и
+	# обнаруживалась ошибка ровно тем способом, который он называет недопустимым —
+	# после полной отправки файла.
+	[ "$video_quality_status" = "+" ] && \
+		{ remote_validate_int "$video_quality_value" "[video] quality (CRF/CQ)" || ok=1; }
+	[ "$video_number_frames_status" = "+" ] && \
+		{ remote_validate_int "$video_number_frames_value" "[video] number_frames (fps)" || ok=1; }
+	[ "$audio_number_channels_status" = "+" ] && \
+		{ remote_validate_int "$audio_number_channels_value" "[audio] number_channels" || ok=1; }
+	[ "$audio_sampling_rate_status" = "+" ] && \
+		{ remote_validate_int "$audio_sampling_rate_value" "[audio] sampling_rate" || ok=1; }
+	remote_validate_int "${threads:-4}" "[performance] threads" || ok=1
+	# speed — дробное: «1.5» допустимо, «1,5» и «быстро» нет (точка одна, не по краям).
+	if [ "$playback_speed_status" = "+" ]; then
+		case "$playback_speed_value" in
+			''|*[!0-9.]*|*.*.*|.*|*.)
+				echo "[ОШИБКА] [speed] playback_speed ожидается числом с точкой (получено: '${playback_speed_value}')." >&2; ok=1 ;;
 		esac
 	fi
 	return $ok
@@ -599,37 +633,90 @@ remote_file_mtime() {
 	stat -c%Y "$1" 2>/dev/null || stat -f%m "$1" 2>/dev/null || echo 0
 }
 
-remote_upload_sidecar_read() {
-	local f="$REMOTE_UPLOAD_SIDECAR" src="$1" uid="" size="" ep="" mt=""
-	[ -n "$f" ] && [ -f "$f" ] || return 0
-	uid="$(sed -n 's/^upload_id=//p' "$f" | head -1)"
+# Отпечаток источника: размер, время изменения, адрес службы. Общая часть докачки
+# загрузки и возобновления задачи — обе обязаны отказаться, если файл подменили или
+# служба другая.
+remote_upload_sidecar_valid() {
+	local f="$REMOTE_UPLOAD_SIDECAR" src="$1" size="" ep="" mt=""
+	[ -n "$f" ] && [ -f "$f" ] || return 1
 	size="$(sed -n 's/^size=//p' "$f" | head -1)"
 	ep="$(sed -n 's/^endpoint=//p' "$f" | head -1)"
 	mt="$(sed -n 's/^mtime=//p' "$f" | head -1)"
 	# Источник изменился или сменилась служба — прежние байты не наши.
-	[ "$size" = "$(file_size "$src")" ] || return 0
-	[ "$ep" = "$remote_endpoint" ] || return 0
+	[ "$size" = "$(file_size "$src")" ] || return 1
+	[ "$ep" = "$remote_endpoint" ] || return 1
 	# Старый sidecar без mtime не отвергаем: поле добавлено позже, и жёсткая проверка
 	# обесценила бы докачку ровно на тех файлах, ради которых её и писали.
-	[ -z "$mt" ] || [ "$mt" = "$(remote_file_mtime "$src")" ] || return 0
-	printf '%s' "$uid"
+	[ -z "$mt" ] || [ "$mt" = "$(remote_file_mtime "$src")" ] || return 1
+	return 0
+}
+
+remote_upload_sidecar_read() {
+	remote_upload_sidecar_valid "$1" || return 0
+	sed -n 's/^upload_id=//p' "$REMOTE_UPLOAD_SIDECAR" | head -1
+}
+
+# Загрузка подтверждена службой. Без этой пометки следующий запуск, увидевший
+# received == size, звал complete ВТОРОЙ раз: ответ на повторный complete контрактом
+# не описан, а 409 здесь чистит sidecar и уводит файл в полный перезалив.
+remote_upload_sidecar_completed() {
+	local f="$REMOTE_UPLOAD_SIDECAR"
+	[ -n "$f" ] && [ -f "$f" ] || return 1
+	grep -q '^complete=yes$' "$f" 2>/dev/null
+}
+
+remote_upload_sidecar_mark_complete() {
+	local f="$REMOTE_UPLOAD_SIDECAR"
+	[ -n "$f" ] && [ -f "$f" ] || return 0
+	grep -q '^complete=yes$' "$f" 2>/dev/null && return 0
+	echo "complete=yes" >> "$f" 2>/dev/null || true
+	return 0
 }
 
 # Идентификатор задачи живёт рядом с идентификатором загрузки: после падения клиента
 # на фазе ожидания или скачивания следующий запуск идёт сразу в GET /jobs/{id} вместо
 # повторной отправки гигабайт. Дедупликация службы спасает саму задачу, но не трафик.
+#
+# Ключ несёт НОМЕР ЧАСТИ: задача создаётся на каждую часть, и с единственным ключом
+# многочастевой файл читал бы в части 2 идентификатор задачи части 1 — то есть
+# публиковал бы чужой отрезок. Подпись настроек обязательна по той же причине:
+# задача считалась по прежнему config.ini, и её результат не соответствует текущим
+# настройкам (ту же роль подпись играет в manifest'е).
 remote_upload_sidecar_read_job() {
-	local f="$REMOTE_UPLOAD_SIDECAR"
-	[ -n "$f" ] && [ -f "$f" ] || return 0
-	sed -n 's/^job_id=//p' "$f" | head -1
+	local f="$REMOTE_UPLOAD_SIDECAR" src="$1" part="${2:-1}" sig="${3:-}"
+	remote_upload_sidecar_valid "$src" || return 0
+	[ "$(sed -n 's/^sig=//p' "$f" | head -1)" = "$sig" ] || return 0
+	sed -n "s/^job\.${part}=//p" "$f" | head -1
 }
 
 remote_upload_sidecar_write_job() {
-	local f="$REMOTE_UPLOAD_SIDECAR" jid="$1"
-	[ -n "$f" ] && [ -f "$f" ] || return 0
-	[ -n "$jid" ] || return 0
-	grep -q '^job_id=' "$f" 2>/dev/null && return 0
-	echo "job_id=$jid" >> "$f" 2>/dev/null || true
+	local f="$REMOTE_UPLOAD_SIDECAR" src="$1" part="${2:-1}" sig="${3:-}" jid="$4" stored=""
+	[ -n "$f" ] && [ -n "$jid" ] || return 0
+	# Файла может не быть (ручная чистка, обрыв между complete и созданием задачи):
+	# создаём с отпечатком. Прежняя версия в этом случае молча выходила, а после
+	# успешного complete файла как раз НЕ БЫЛО — sidecar удалялся там же, — поэтому
+	# идентификатор задачи не попадал в него НИ РАЗУ и фича не работала вовсе.
+	if [ ! -f "$f" ]; then
+		{
+			echo "upload_id="
+			echo "size=$(file_size "$src")"
+			echo "mtime=$(remote_file_mtime "$src")"
+			echo "endpoint=$remote_endpoint"
+		} > "$f" 2>/dev/null || return 0
+	fi
+	stored="$(sed -n 's/^sig=//p' "$f" | head -1)"
+	if [ "$stored" != "$sig" ]; then
+		# Настройки сменились — прежние задачи считались по другому config.ini.
+		# Без этой перезаписи sidecar навсегда остался бы с чужой подписью, и
+		# возобновление молча не работало бы до его удаления руками.
+		{
+			sed -e '/^sig=/d' -e '/^job\./d' "$f"
+			echo "sig=$sig"
+		} > "${f}.new" 2>/dev/null && mv -f "${f}.new" "$f" 2>/dev/null
+		rm -f "${f}.new" 2>/dev/null
+	fi
+	grep -q "^job\.${part}=" "$f" 2>/dev/null && return 0
+	echo "job.${part}=$jid" >> "$f" 2>/dev/null || true
 	return 0
 }
 
@@ -693,6 +780,19 @@ remote_upload() {
 		else
 			uid=""; offset=0
 		fi
+	fi
+
+	# Загрузка уже подтверждена в прошлый раз, и служба её помнит: отправлять нечего.
+	# Повторный complete здесь не зовём — контракт его не описывает, а 409 на верно
+	# собранном файле стоил бы полного перезалива. Длительность берём отдельной
+	# ручкой: ответа complete у нас в этот раз нет вовсе.
+	if [ -n "$uid" ] && [ "$offset" -eq "$size" ] 2>/dev/null && remote_upload_sidecar_completed; then
+		log_msg "INFO" "Исходник уже принят службой — отправка не нужна: $(basename "$file")"
+		remote_http GET "/uploads/$uid/probe"
+		[ "$REMOTE_HTTP_CODE" = "200" ] && \
+			REMOTE_UPLOAD_DURATION="$(remote_json_field "$REMOTE_HTTP_BODY" duration)"
+		REMOTE_UPLOAD_ID="$uid"
+		return 0
 	fi
 
 	if [ -z "$uid" ]; then
@@ -770,7 +870,14 @@ remote_upload() {
 			REMOTE_UPLOAD_DURATION="$(remote_json_field "$REMOTE_HTTP_BODY" duration)"
 	fi
 	REMOTE_UPLOAD_ID="$uid"
-	remote_upload_sidecar_clear
+	# Sidecar здесь НЕ удаляем, хотя загрузка и закончилась: в него сейчас ляжет
+	# идентификатор задачи, а раньше файл исчезал ровно в этой точке — и
+	# remote_upload_sidecar_write_job, вызванный следом, молча выходил по
+	# отсутствию файла. Обещанное «после падения на ожидании следующий запуск идёт
+	# в GET /jobs/{id}» было поэтому недостижимо: sidecar'а к тому моменту не
+	# существовало, и файл заново уезжал целиком. Удаляет его вызывающий, когда
+	# файл доделан (см. manifest_write в script.sh).
+	remote_upload_sidecar_mark_complete
 	return 0
 }
 
@@ -886,6 +993,23 @@ remote_job_body() {
 	[ "$overwrite_existing" = "yes" ] && body="$body,\"no_reuse\":true"
 	[ -n "$extra" ] && body="$body,$extra"
 	printf '%s}' "$body"
+}
+
+# Годна ли сохранённая задача для продолжения. Проверка стоит ОДИН запрос и
+# обязательна: remote_wait на задаче, которой у службы уже нет, получает 404,
+# считает его нефатальным один раз, а затем отменяет ФАЙЛ — то есть возобновление
+# обошлось бы дороже повторной загрузки. Ответ «нет» означает «делаем всё заново».
+remote_job_usable() {
+	local jid="$1" state
+	[ -n "$jid" ] || return 1
+	remote_valid_id "$jid" || return 1
+	remote_http GET "/jobs/$jid"
+	[ "$REMOTE_HTTP_CODE" = "200" ] || return 1
+	state="$(remote_json_field "$REMOTE_HTTP_BODY" state)"
+	case "$state" in
+		''|failed|cancelled) return 1 ;;
+	esac
+	return 0
 }
 
 # Идентификатор задачи — переменной, а не через stdout, по той же причине, что и

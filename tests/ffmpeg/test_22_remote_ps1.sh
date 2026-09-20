@@ -292,4 +292,121 @@ assert_contains "сбойный опрос повторяется, а не ва�
 assert_contains "после серии сбоев задача отменена" "DELETE /jobs/job-6" "$_out"
 rm -f "$_harness"
 
+# ══════════════════════════════════════════════════════════════
+suite "remote PS1: возобновление задачи из sidecar"
+# ══════════════════════════════════════════════════════════════
+# Двойник suite'а «возобновление задачи из sidecar» в test_21: обещание «после
+# падения клиента на ожидании следующий запуск идёт в GET /jobs/{id}» здесь было
+# недостижимо так же — sidecar удалялся сразу после complete, а запись job_id молча
+# выходила по отсутствию файла. Ключ несёт номер части и подпись настроек.
+_harness="$(mktemp_suffix "${TMPDIR:-/tmp}/remote_jsc_" .ps1)"
+_src="$(mktemp "${TMPDIR:-/tmp}/remote_jsrc_XXXXXX")"
+printf 'source-bytes' > "$_src"
+_src_win="$(cygpath -w "$_src" 2>/dev/null || echo "$_src")"
+_sc="$(mktemp "${TMPDIR:-/tmp}/remote_jsc_file_XXXXXX")"; rm -f "$_sc"
+_sc_win="$(cygpath -w "$_sc" 2>/dev/null || echo "$_sc")"
+cat > "$_harness" <<PSEOF
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+. '$MODULE'
+\$remote_endpoint = 'http://mock.invalid/v1'
+\$script:RemoteUploadSidecar = '$_sc_win'
+\$src = '$_src_win'
+\$it = Get-Item -LiteralPath \$src
+\$mt = "\$([int64](\$it.LastWriteTimeUtc - [datetime]'1970-01-01').TotalSeconds)"
+[System.IO.File]::WriteAllLines(\$script:RemoteUploadSidecar, @(
+	'upload_id=up-70', "size=\$(\$it.Length)", "mtime=\$mt",
+	"endpoint=\$remote_endpoint", 'sig=SIG-A', 'job.1=job-71', 'job.2=job-72'))
+Write-Output ("P1=" + (Read-RemoteUploadSidecarJob -Source \$src -Part 1 -Signature 'SIG-A'))
+Write-Output ("P2=" + (Read-RemoteUploadSidecarJob -Source \$src -Part 2 -Signature 'SIG-A'))
+Write-Output ("P3=" + (Read-RemoteUploadSidecarJob -Source \$src -Part 3 -Signature 'SIG-A'))
+Write-Output ("SIGB=" + (Read-RemoteUploadSidecarJob -Source \$src -Part 1 -Signature 'SIG-B'))
+# Смена настроек: прежние задачи обязаны исчезнуть вместе с подписью.
+Write-RemoteUploadSidecarJob -Source \$src -Part 1 -Signature 'SIG-B' -JobId 'job-80'
+Write-Output ("NEW=" + (Read-RemoteUploadSidecarJob -Source \$src -Part 1 -Signature 'SIG-B'))
+Write-Output ("OLD2=" + (Read-RemoteUploadSidecarJob -Source \$src -Part 2 -Signature 'SIG-B'))
+Write-Output ("KEEPUID=" + [bool]((Get-Content -LiteralPath \$script:RemoteUploadSidecar -Raw) -match 'up-70'))
+# Файла может не быть — запись обязана его создать.
+Remove-Item -LiteralPath \$script:RemoteUploadSidecar -Force
+Write-RemoteUploadSidecarJob -Source \$src -Part 1 -Signature 'SIG-C' -JobId 'job-90'
+Write-Output ("CREATED=" + (Test-Path -LiteralPath \$script:RemoteUploadSidecar))
+Write-Output ("AFTER=" + (Read-RemoteUploadSidecarJob -Source \$src -Part 1 -Signature 'SIG-C'))
+# Подтверждённая загрузка не отправляется заново и НЕ подтверждается повторно.
+[System.IO.File]::WriteAllLines(\$script:RemoteUploadSidecar, @(
+	'upload_id=up-70', "size=\$(\$it.Length)", "mtime=\$mt",
+	"endpoint=\$remote_endpoint", 'complete=yes'))
+\$script:calls = New-Object System.Collections.ArrayList
+function Invoke-RemoteHttp {
+	param([string]\$Method, [string]\$Path, [string]\$Body = '',
+	      [hashtable]\$Headers = @{}, [string]\$OutFile = '', [string]\$InFile = '',
+	      [byte[]]\$InBytes = \$null, [int]\$TimeoutMs = 60000)
+	[void]\$script:calls.Add("\$Method \$Path")
+	if (\$Path -like '*/probe') { return [pscustomobject]@{ Code = 200; Body = '{"duration":42}' } }
+	if (\$Method -eq 'GET' -and \$Path -like '/uploads/*') {
+		return [pscustomobject]@{ Code = 200; Body = ('{"received":' + \$it.Length + '}') }
+	}
+	if (\$Method -eq 'GET' -and \$Path -eq '/jobs/job-live') { return [pscustomobject]@{ Code = 200; Body = '{"state":"running"}' } }
+	if (\$Method -eq 'GET' -and \$Path -eq '/jobs/job-dead') { return [pscustomobject]@{ Code = 404; Body = '{}' } }
+	if (\$Method -eq 'GET' -and \$Path -eq '/jobs/job-bad')  { return [pscustomobject]@{ Code = 200; Body = '{"state":"failed"}' } }
+	return [pscustomobject]@{ Code = 200; Body = '{}' }
+}
+function Invoke-RemoteHttpRetry { param([string]\$Method, [string]\$Path, [string]\$Body = '') return (Invoke-RemoteHttp \$Method \$Path \$Body) }
+\$uid = Send-RemoteUpload \$src
+Write-Output ("SKIPUID=\$uid")
+Write-Output ("SKIPDUR=\$(\$script:RemoteUploadDuration)")
+Write-Output ("PATCHED=" + [bool](\$script:calls -match '^PATCH'))
+Write-Output ("RECOMPLETE=" + [bool](\$script:calls -match '/complete'))
+Write-Output ("LIVE=" + (Test-RemoteJobUsable 'job-live'))
+Write-Output ("DEAD=" + (Test-RemoteJobUsable 'job-dead'))
+Write-Output ("BAD="  + (Test-RemoteJobUsable 'job-bad'))
+Write-Output ("EMPTY=" + (Test-RemoteJobUsable ''))
+PSEOF
+_out="$("$PS_BIN" -NoProfile -NonInteractive -File "$_harness" 2>&1 | tr -d '\r')"
+_f() { printf '%s\n' "$_out" | grep "^${1}=" | sed "s/^${1}=//"; }
+assert_eq "часть 1 читает свою задачу"        "job-71" "$(_f P1)"
+assert_eq "часть 2 читает свою задачу"        "job-72" "$(_f P2)"
+assert_empty "части без записи — пусто"                "$(_f P3)"
+assert_empty "другая подпись настроек — пусто"         "$(_f SIGB)"
+assert_eq "новая задача под новой подписью"   "job-80" "$(_f NEW)"
+assert_empty "задача прежней подписи удалена"          "$(_f OLD2)"
+assert_eq "upload_id пережил перезапись"      "True"   "$(_f KEEPUID)"
+assert_eq "sidecar создан при записи задачи"  "True"   "$(_f CREATED)"
+assert_eq "задача читается из созданного"     "job-90" "$(_f AFTER)"
+assert_eq "идентификатор взят из sidecar"     "up-70"  "$(_f SKIPUID)"
+assert_eq "длительность взята у probe"        "42"     "$(_f SKIPDUR)"
+assert_eq "байты заново не отправляются"      "False"  "$(_f PATCHED)"
+assert_eq "повторного complete нет"           "False"  "$(_f RECOMPLETE)"
+assert_eq "живая задача годна"                "True"   "$(_f LIVE)"
+assert_eq "исчезнувшая задача негодна"        "False"  "$(_f DEAD)"
+assert_eq "провалившаяся задача негодна"      "False"  "$(_f BAD)"
+assert_eq "пустой идентификатор негоден"      "False"  "$(_f EMPTY)"
+rm -f "$_harness" "$_src" "$_sc"
+
+# ══════════════════════════════════════════════════════════════
+suite "remote PS1: валидация числовых значений config.ini"
+# ══════════════════════════════════════════════════════════════
+# Паритет с suite'ом «валидация числовых значений config.ini» в test_21: всё, что
+# уезжает в JSON без кавычек, обязано проверяться ДО загрузки гигабайт. Проверялся
+# здесь только bitrate, хотя «23 кбит» в quality давало невалидное тело.
+_vsetup='
+$remote_wait_timeout=1800; $remote_stall_timeout=900
+$remote_prefer="auto"; $remote_on_failure="abort"
+$video_resolution_status="-"; $video_bitrate_status="-"; $audio_bitrate_status="-"
+$video_number_frames_status="-"; $audio_number_channels_status="-"
+$audio_sampling_rate_status="-"; $playback_speed_status="-"; $threads=4
+$video_quality_status="+"; $video_quality_value="23"
+'
+assert_eq "числовой quality проходит" "True" \
+  "$(run_ps "$_vsetup; Test-RemoteConfigValues" | tail -1)"
+_out="$(run_ps "$_vsetup; \$video_quality_value='23 кбит'; Test-RemoteConfigValues")"
+assert_contains "нечисловой quality отклонён" "quality" "$_out"
+assert_contains "и результат — отказ"         "False"   "$_out"
+_out="$(run_ps "$_vsetup; \$video_number_frames_status='+'; \$video_number_frames_value='30fps'; Test-RemoteConfigValues")"
+assert_contains "нечисловой fps отклонён" "number_frames" "$_out"
+assert_eq "дробная скорость проходит" "True" \
+  "$(run_ps "$_vsetup; \$playback_speed_status='+'; \$playback_speed_value='1.5'; Test-RemoteConfigValues" | tail -1)"
+_out="$(run_ps "$_vsetup; \$playback_speed_status='+'; \$playback_speed_value='1,5'; Test-RemoteConfigValues")"
+assert_contains "запятая в скорости отклонена" "playback_speed" "$_out"
+_out="$(run_ps "$_vsetup; \$threads='много'; Test-RemoteConfigValues")"
+assert_contains "нечисловые threads отклонены" "threads" "$_out"
+
 summary

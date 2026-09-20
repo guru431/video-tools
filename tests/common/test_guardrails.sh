@@ -435,6 +435,64 @@ while IFS= read -r _f; do
 done < <(find "$PROJECT_DIR/ffmpeg" "$PROJECT_DIR/yt-dlp" -name '*.ps1' 2>/dev/null)
 assert_empty "нет New-Item в продуктовых .ps1 (у него нет -LiteralPath)" "$_ni_hits"
 
+# Третья сторона того же контракта — удаление. Тут цена ошибки тише и потому дольше
+# живёт: -Path трактует путь как маску, Remove-Item на %TEMP% с '[' или ']' (имя
+# учётной записи, распакованный архив) не находит НИЧЕГО и молча оставляет каталог
+# перевода и concat-списки лежать до ручной чистки. Ошибку не видно в логе вовсе:
+# -ErrorAction SilentlyContinue рядом гасит и её.
+_ri_hits=""
+while IFS= read -r _f; do
+    case "$(basename "$_f")" in ps2exe.ps1) continue ;; esac
+    _h=$(sed 's/#.*//' "$_f" | grep -nE 'Remove-Item[[:space:]]+([^-]|-Path)' | head -1)
+    [ -n "$_h" ] && _ri_hits="$_ri_hits $(basename "$_f"):${_h%%:*}"
+done < <(find "$PROJECT_DIR/ffmpeg" "$PROJECT_DIR/yt-dlp" "$PROJECT_DIR/tools" -name '*.ps1' 2>/dev/null)
+assert_empty "нет Remove-Item без -LiteralPath в продуктовых .ps1" "$_ri_hits"
+
+# ══════════════════════════════════════════════════════════════
+suite "GUI ffmpeg: следы отладки, детект curl, умолчание parallel_files"
+# ══════════════════════════════════════════════════════════════
+# Три находки одного происхождения: проверить их иначе нельзя — код исполняется
+# только в живом окне, поэтому инвариант держится статически.
+_gui_ff="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v18.ps1"
+_gui_src="$(sed 's/#.*//' "$_gui_ff")"
+# 1. Отладочный диалог в production-обработчике: пользователь EXE видел
+# «DEBUG: Click Error» с номером строки вместо внятного сообщения.
+assert_not_contains "нет отладочного заголовка в MessageBox" "DEBUG:" "$_gui_src"
+assert_not_contains "нет номера строки в пользовательском диалоге" 'InvocationInfo.ScriptLineNumber' "$_gui_src"
+# 2. `curl` в Windows PowerShell 5.1 — АЛИАС на Invoke-WebRequest, и он резолвится
+# раньше исполняемого файла: doctor печатал «curl: есть» на машине без curl.exe.
+assert_contains "doctor ищет именно curl.exe как приложение" 'Get-Command curl.exe -CommandType Application' "$_gui_src"
+assert_not_contains "нет резолва голого curl" 'Get-Command curl -ErrorAction' "$_gui_src"
+# 3. Умолчание parallel_files обязано совпадать у всех четырёх ридеров: значение
+# уезжает в воркер и печатается в предупреждении, поэтому config.ini без ключа
+# давал на GUI другой текст, чем в CLI на тех же данных.
+_pf_gui=$(printf '%s\n' "$_gui_src" | grep -oE 'Read-Config "parallel_files" "performance" "[^"]*"' | grep -oE '"-?[0-9]+"$' | tr -d '"')
+_pf_cli=$(sed 's/#.*//' "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v18.ps1" | grep -oE 'Read-Config "parallel_files" "performance" "[^"]*"' | grep -oE '"-?[0-9]+"$' | tr -d '"')
+_pf_sh=$(sed 's/#.*//' "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v18.sh" | grep -oE 'read_config "parallel_files" "performance" "[^"]*"' | grep -oE '"-?[0-9]+"$' | tr -d '"')
+_pf_cmd=$(grep -viE '^[[:space:]]*(rem|::)' "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v18.cmd" | grep -oE 'parallel_files=:[-+]:[0-9]+' | grep -oE ':[-+]:[0-9]+' | sed 's/:\(.\):/\1/')
+assert_eq "умолчание parallel_files: GUI = CLI-PS1" "$_pf_cli" "$_pf_gui"
+assert_eq "умолчание parallel_files: GUI = SH"      "$_pf_sh"  "$_pf_gui"
+assert_eq "умолчание parallel_files: GUI = CMD"     "$_pf_cmd" "$_pf_gui"
+
+# ══════════════════════════════════════════════════════════════
+suite "yt-dlp CMD: из манифеста берётся МЕДИАфайл, а не первая строка"
+# ══════════════════════════════════════════════════════════════
+# Манифест yt-dlp содержит и sidecar-субтитры. Пока `set /p` читал первую строку
+# вообще, первым мог оказаться *.vtt — расширение не опознавалось, video_file
+# сбрасывался, и перевод падал с «не сообщил ни одного медиафайла» при медиафайле,
+# лежащем второй строкой. Отбор отдан findstr: он читает файл сам, поэтому '!' и
+# '%' в именах не проходят фаз раскрытия cmd (в .sh/.ps1 фильтр по тем же
+# расширениям уже был).
+_ycmd_code="$(grep -viE '^[[:space:]]*(rem|::)' "$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v18.cmd")"
+assert_contains "манифест фильтруется по расширениям" 'findstr /i /e /c:".mp4" /c:".mkv" /c:".webm"' "$_ycmd_code"
+assert_not_contains "первая строка манифеста не читается напрямую" '<"!_dl_manifest!" set /p "video_file="' "$_ycmd_code"
+assert_contains "читается уже отфильтрованный список" '<"!_dl_media!" set /p "video_file="' "$_ycmd_code"
+# Временные имена: одиночный %RANDOM% (0..32767) как единственный дискриминатор
+# допускает коллизию параллельных запусков — они скармливали бы друг другу чужой
+# ввод валидации. Остальные temp-файлы этого скрипта уже используют GUID либо
+# !random!!random!.
+assert_not_contains "нет одиночного %random% в именах temp-файлов" 'ytdlp_trimchk_%random%' "$_ycmd_code"
+
 # ══════════════════════════════════════════════════════════════
 suite "yt-dlp SH: ffmpeg-мерж перевода с -nostdin"
 # ══════════════════════════════════════════════════════════════

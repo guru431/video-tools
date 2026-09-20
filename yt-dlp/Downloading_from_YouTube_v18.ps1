@@ -58,6 +58,22 @@ function Get-ManifestMedia {
         Where-Object { Test-Path -LiteralPath $_ })
 }
 
+# Кавычки вокруг значения — обычный результат «Копировать как путь» в проводнике
+# Windows. Три остальных ридера проекта их снимают (ffmpeg GUI — Remove-ConfigQuotes,
+# CMD — :strip_quotes, SH — read_config), а этот не снимал: `base_dir = "C:\video"`
+# давал каталог с литеральными кавычками в имени, а cookie-файл по такому пути не
+# находился вовсе (Test-Path = False).
+function Remove-ConfigQuotes {
+    param([string]$Value)
+    $v = $Value.Trim()
+    if ($v.Length -ge 2) {
+        if (($v[0] -eq '"' -and $v[-1] -eq '"') -or ($v[0] -eq "'" -and $v[-1] -eq "'")) {
+            return $v.Substring(1, $v.Length - 2)
+        }
+    }
+    return $v
+}
+
 # ── Чтение config.ini (один раз в хеш-таблицу) ──────────────────────────
 $script:_configCache = @{}
 if (Test-Path -LiteralPath $configFile) {
@@ -78,7 +94,7 @@ if (Test-Path -LiteralPath $configFile) {
                 if ($null -eq $ev) { Write-Host "WARN: переменная $($m.Groups[1].Value) не задана"; "" } else { $ev }
             })
             $_k = "${curSection}::$($Matches[1].Trim())"
-            if (-not $script:_configCache.ContainsKey($_k)) { $script:_configCache[$_k] = $val }
+            if (-not $script:_configCache.ContainsKey($_k)) { $script:_configCache[$_k] = (Remove-ConfigQuotes $val) }
         }
     }
 }
@@ -375,15 +391,21 @@ function Limit-OutputTemplate {
     # и %(uploader,channel)s. Точный поиск '%(title)' их не видел вовсе — лимит не
     # ставился, и как раз на таких шаблонах путь и переполнялся. Граница после
     # имени: ')' , '|' , ',' или '.' (уже заданный лимит). Паритет с .sh.
+    # Внутренняя часть поля ('|значение по умолчанию', ',альтернативы', '.ключи')
+    # читается и при поиске пользовательского лимита, и при подстановке ниже: иначе
+    # у формы '%(title|Без имени).50s' лимит не находился, и подстановка переписывала
+    # его на 100 — УВЕЛИЧИВАЯ вопреки правилу «только в сторону уменьшения».
+    # Граница после имени та же, что в детекте: ')' , '|' , ',' , '.'.
+    $inner = '(?:[|,.][^)]*)?'
     $t = 0; $p = 0; $u = 0
     if ($Template -match '%\(title[|,).]') {
         $t = $defTitle
-        $m = [regex]::Match($Template, '%\(title\)\.(\d+)')
+        $m = [regex]::Match($Template, '%\(title' + $inner + '\)\.(\d+)')
         if ($m.Success -and [int]$m.Groups[1].Value -lt $t) { $t = [int]$m.Groups[1].Value }
     }
     if ($Template -match '%\(playlist[|,).]') {
         $p = $defPlaylist
-        $m = [regex]::Match($Template, '%\(playlist\)\.(\d+)')
+        $m = [regex]::Match($Template, '%\(playlist' + $inner + '\)\.(\d+)')
         if ($m.Success -and [int]$m.Groups[1].Value -lt $p) { $p = [int]$m.Groups[1].Value }
     }
     if ($Template -match '%\((uploader|channel)[|,).]') {
@@ -392,7 +414,7 @@ function Limit-OutputTemplate {
         # смотрели только на uploader, поэтому '%(channel).10s' переписывался в
         # '.30s' — лимит УВЕЛИЧИВАЛСЯ вопреки правилу «только на уменьшение».
         foreach ($fn in @('uploader', 'channel')) {
-            $m = [regex]::Match($Template, '%\(' + $fn + '\)\.(\d+)')
+            $m = [regex]::Match($Template, '%\(' + $fn + $inner + '\)\.(\d+)')
             if ($m.Success -and [int]$m.Groups[1].Value -lt $u) { $u = [int]$m.Groups[1].Value }
         }
     }
@@ -419,12 +441,17 @@ function Limit-OutputTemplate {
     }
 
     # Подставляем лимиты, сохраняя тип конверсии (s/U/B) — он задан пользователем.
+    # Внутренняя часть поля сохраняется как есть ($1): лимит идёт ПОСЛЕ ')' по
+    # грамматике yt-dlp, поэтому '%(title|Без имени)s' → '%(title|Без имени).100s'.
+    # Прежняя точная форма '%\(title\)' альтернативы не видела вовсе: бюджет под них
+    # считался, а лимит не ставился — путь переполнял MAX_PATH ровно на тех
+    # шаблонах, ради которых функция и написана.
     $out = $Template
-    if ($t -gt 0) { $out = [regex]::Replace($out, '%\(title\)(\.\d+)?([a-zA-Z])',    "%(title).$t`$2") }
-    if ($p -gt 0) { $out = [regex]::Replace($out, '%\(playlist\)(\.\d+)?([a-zA-Z])', "%(playlist).$p`$2") }
+    if ($t -gt 0) { $out = [regex]::Replace($out, '%\(title(' + $inner + ')\)(\.\d+)?([a-zA-Z])',    "%(title`$1).$t`$3") }
+    if ($p -gt 0) { $out = [regex]::Replace($out, '%\(playlist(' + $inner + ')\)(\.\d+)?([a-zA-Z])', "%(playlist`$1).$p`$3") }
     if ($u -gt 0) {
-        $out = [regex]::Replace($out, '%\(uploader\)(\.\d+)?([a-zA-Z])', "%(uploader).$u`$2")
-        $out = [regex]::Replace($out, '%\(channel\)(\.\d+)?([a-zA-Z])',  "%(channel).$u`$2")
+        $out = [regex]::Replace($out, '%\(uploader(' + $inner + ')\)(\.\d+)?([a-zA-Z])', "%(uploader`$1).$u`$3")
+        $out = [regex]::Replace($out, '%\(channel('  + $inner + ')\)(\.\d+)?([a-zA-Z])', "%(channel`$1).$u`$3")
     }
     return $out
 }
@@ -1938,7 +1965,11 @@ $btnStart.Add_Click({
                         } else {
                             Append-Output "Не удалось получить перевод" ([System.Drawing.Color]::Yellow)
                         }
-                        Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+                        # -LiteralPath, как и у соседних удалений: в %TEMP% с '[' или ']'
+                        # в пути (имя учётной записи, подстановка переменной) -Path
+                        # трактует путь как маску, ничего не находит, и каталог с
+                        # переводом остаётся лежать в %TEMP% после каждого ролика.
+                        Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
                     }
                     # Перевод был запрошен и применим, но результата нет → это ошибка (nonzero-
                     # семантика .sh: COUNT_FAIL++). Загрузка уже засчитана в successCount, поэтому

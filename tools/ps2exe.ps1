@@ -202,8 +202,16 @@ function Invoke-ps2exe
 			else
 			{	if ($Param.Value -is [STRING])
 				{
-					if (($Param.Value -match " ") -or ([STRING]::IsNullOrEmpty($Param.Value)))
-					{	$CallParam += " -$($Param.Key) '$($Param.Value)'" }
+					# Значения уезжают внутрь ОДИНАРНЫХ кавычек в строку, которую
+					# powershell.exe ниже разбирает ЗАНОВО: апостроф (путь вида
+					# C:\Users\O'Brien\…) закрывал литерал и ломал команду — сборка на
+					# Core падала с синтаксической ошибкой либо теряла параметры. В
+					# PowerShell апостроф внутри одинарных кавычек удваивается.
+					# Кавычим ВСЕГДА, когда экранирование понадобилось: без кавычек
+					# удвоение смысла не имеет.
+					$_pv = ([string]$Param.Value) -replace "'", "''"
+					if (($Param.Value -match "[ ']") -or ([STRING]::IsNullOrEmpty($Param.Value)))
+					{	$CallParam += " -$($Param.Key) '$_pv'" }
 					else
 					{	$CallParam += " -$($Param.Key) $($Param.Value)" }
 				}
@@ -211,7 +219,11 @@ function Invoke-ps2exe
 				{ if ($Param.Value -is [System.Collections.Hashtable])
 					{
 						$CallParam += " -$($Param.Key) @{"
-						$Param.Value.Keys | % { $CallParam += "'$_'='$($Param.Value[$_])';" }
+						$Param.Value.Keys | % {
+							$_ek = ([string]$_) -replace "'", "''"
+							$_ev = ([string]$Param.Value[$_]) -replace "'", "''"
+							$CallParam += "'$_ek'='$_ev';"
+						}
 						$CallParam += "}"
 					} else {
 						$CallParam += " -$($Param.Key) $($Param.Value)"
@@ -475,7 +487,17 @@ function Invoke-ps2exe
 
 			$embedFiles.Keys | % {
 				[VOID]$cp.EmbeddedResources.Add($embedFiles["$_"])
-				$EMBEDSECTION += "tgtFile = Environment.ExpandEnvironmentVariables(@`"$_`");`r`nif (string.Compare(`".\\`", 0, tgtFile, 0, 2) == 0) { tgtFile = System.AppDomain.CurrentDomain.BaseDirectory + tgtFile.Substring(2); }`r`ntry { tgtDir = System.IO.Path.GetDirectoryName(tgtFile);`r`nif (tgtDir != string.Empty) { System.IO.Directory.CreateDirectory(tgtDir); }`r`nusing (System.IO.Stream tgtStream = new System.IO.FileStream(tgtFile, System.IO.FileMode.Create)) { executingAssembly.GetManifestResourceStream(`"$([System.IO.Path]::GetFileName($embedFiles["$_"]))`").CopyTo(tgtStream); }`r`n}`r`ncatch { throw new System.IO.IOException(`"Error creating '`" + tgtFile + `"'\r\n`"); }`r`n"
+				# Целевой путь попадает внутрь verbatim-литерала @"…", а имя ресурса —
+				# внутрь обычного "…": это ДВА разных правила экранирования, и путь
+				# нельзя гнать через $_escapeCS (тот удваивает '\', что для verbatim
+				# означает два бэкслеша в пути). В verbatim закрыть литерал может
+				# только кавычка, и закрывается она удвоением. Без этого кавычка в
+				# целевом пути разрывала литерал и позволяла дописать произвольный
+				# C#-код в компилируемый exe. Тот же класс, что закрыт для метаданных
+				# выше; здесь он был пропущен.
+				$_tgt = ([string]$_) -replace '"', '""'
+				$_res = & $_escapeCS ([System.IO.Path]::GetFileName($embedFiles["$_"]))
+				$EMBEDSECTION += "tgtFile = Environment.ExpandEnvironmentVariables(@`"$_tgt`");`r`nif (string.Compare(`".\\`", 0, tgtFile, 0, 2) == 0) { tgtFile = System.AppDomain.CurrentDomain.BaseDirectory + tgtFile.Substring(2); }`r`ntry { tgtDir = System.IO.Path.GetDirectoryName(tgtFile);`r`nif (tgtDir != string.Empty) { System.IO.Directory.CreateDirectory(tgtDir); }`r`nusing (System.IO.Stream tgtStream = new System.IO.FileStream(tgtFile, System.IO.FileMode.Create)) { executingAssembly.GetManifestResourceStream(`"$_res`").CopyTo(tgtStream); }`r`n}`r`ncatch { throw new System.IO.IOException(`"Error creating '`" + tgtFile + `"'\r\n`"); }`r`n"
 			}
 		}
 	}
@@ -2539,8 +2561,10 @@ $(if ($conHost) {@"
 			streamWriter.AutoFlush = true;
 			Console.SetOut(streamWriter);
 
-			// connect STDERR
-			System.IO.StreamWriter errorWriter = new System.IO.StreamWriter(Console.OpenStandardOutput());
+			// connect STDERR — OpenStandardError, not OpenStandardOutput: the latter
+			// pushed error output down stdout, so any parser of the program's output
+			// got the two streams mixed while the comment promised STDERR
+			System.IO.StreamWriter errorWriter = new System.IO.StreamWriter(Console.OpenStandardError());
 			errorWriter.AutoFlush = true;
 			Console.SetError(errorWriter);
 "@ })

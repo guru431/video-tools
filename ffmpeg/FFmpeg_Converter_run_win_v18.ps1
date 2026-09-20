@@ -147,7 +147,10 @@ $_cfg_threads  = Parse-Flag (Read-Config "threads"        "performance" "+4")
 # parallel_files — SH-only. GUI обязан прочитать ключ и предупредить: один и тот же
 # config.ini не имеет права молча значить разное на разных платформах (то же делают
 # CLI-PS1 и CMD). Контрола в форме нет намеренно — включать нечего.
-$_cfg_parallel = Parse-Flag (Read-Config "parallel_files" "performance" "-1")
+# Умолчание обязано совпадать с остальными платформами («-2» в CLI-PS1, CMD и SH):
+# значение уезжает в воркер и печатается в предупреждении, поэтому config.ini без
+# ключа давал на GUI другой текст, чем на тех же исходных данных в CLI.
+$_cfg_parallel = Parse-Flag (Read-Config "parallel_files" "performance" "-2")
 $_cfg_hw_accel  = Parse-Flag (Read-Config "hw_accel"       "gpu"         "-intel")
 $_cfg_gpu_preset = Parse-Flag (Read-Config "preset"        "gpu"         "-p5")
 $_cfg_gpu_tune   = Parse-Flag (Read-Config "tune"          "gpu"         "-hq")
@@ -1333,8 +1336,13 @@ $buttonDoctor.Add_Click({
     }
 
     if ($chkRemote.Checked) {
+        # Именно curl.exe, а не `curl`: в Windows PowerShell 5.1 это АЛИАС на
+        # Invoke-WebRequest, и он резолвится раньше исполняемого файла. Отчёт
+        # печатал «curl: есть» (Source — путь к модулю) на машине, где curl.exe нет
+        # вовсе, то есть диагностика врала ровно в том случае, ради которого её
+        # открывают. -CommandType Application отсекает алиасы и функции.
         $curl = $null
-        try { $curl = (Get-Command curl -ErrorAction SilentlyContinue).Source } catch {}
+        try { $curl = (Get-Command curl.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source } catch {}
         if ($curl) { $lines += "curl:    есть — $curl" }
         else       { $lines += "curl:    НЕТ — удалённый бэкенд не работает вовсе." }
         $ep = $txtRemoteEndpoint.Text.Trim()
@@ -1808,7 +1816,10 @@ $buttonRun.Add_Click({
     # Глобальная ссылка — чтобы FormClosing мог детерминированно остановить таймер.
     $global:_guiTimer = $timer
   } catch {
-    [System.Windows.Forms.MessageBox]::Show("LINE $($_.InvocationInfo.ScriptLineNumber): $_", "DEBUG: Click Error", "OK", "Error") | Out-Null
+    # Сообщение пользовательское: отладочный диалог «DEBUG: Click Error» с номером
+    # строки уезжал в собранный EXE, и любой сбой подготовки запуска выглядел для
+    # пользователя как след разработки, а не как внятная ошибка.
+    [System.Windows.Forms.MessageBox]::Show("Ошибка подготовки запуска: $_", "Видеоконвертер", "OK", "Error") | Out-Null
     $buttonRun.Enabled = $true
     $buttonStop.Enabled = $false
   }

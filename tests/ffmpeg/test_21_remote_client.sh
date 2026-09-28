@@ -612,6 +612,21 @@ remote_upload_sidecar_write_job "$_rsrc" 1 SIG-C job-90
 assert_file_exists "sidecar создан при записи задачи" "$_sidecar"
 assert_eq "задача читается из созданного sidecar" "job-90" "$(remote_upload_sidecar_read_job "$_rsrc" 1 SIG-C)"
 
+# Запись — через соседний .new и mv. Прямая `> "$f"` сперва усекала sidecar, и
+# обрыв между усечением и записью стоил полной повторной загрузки. Сорванная
+# запись (здесь место .new занято каталогом) обязана оставить прежний sidecar целым.
+_before="$(cat "$_sidecar")"
+mkdir "${_sidecar}.new"
+remote_upload_sidecar_write "$_rsrc" up-99
+remote_upload_sidecar_mark_complete
+assert_eq "сорванная запись не тронула sidecar" "$_before" "$(cat "$_sidecar")"
+rmdir "${_sidecar}.new"
+remote_upload_sidecar_mark_complete
+assert_contains "complete=yes дописан"            "complete=yes"  "$(cat "$_sidecar")"
+assert_contains "задача пережила пометку complete" "job.1=job-90" "$(cat "$_sidecar")"
+if [ -e "${_sidecar}.new" ]; then fail "временный .new не остаётся" "нет файла" "есть"
+else pass "временный .new не остаётся"; fi
+
 # Годность задачи проверяется ОДНИМ запросом: мёртвую нельзя отдавать в remote_wait —
 # тот получит 404 и отменит ФАЙЛ, то есть возобновление обойдётся дороже загрузки.
 MOCK_CURL_ROUTES="$(routes \

@@ -1455,33 +1455,6 @@ encode_file() {
 					   [ -n "${REMOTE_UPLOAD_DURATION:-}" ]; then
 						file_duration="${REMOTE_UPLOAD_DURATION%%.*}"
 					fi
-					# Файл субтитров приходит той же дорогой, что видео: путей в
-					# параметрах служба не принимает по построению.
-					# Провал загрузки титров — ПРОВАЛ части, а не тихое «без титров».
-					# Раньше задача создавалась без subtitle_upload_id, и файл
-					# приезжал без субтитров со статусом OK: пользователь узнавал
-					# об этом только просмотром результата.
-					remote_sub_id=""
-					if [ "$sub_found" = "1" ] && [ -n "${sub_file:-}" ]; then
-						local _sub_sidecar_saved="$REMOTE_UPLOAD_SIDECAR"
-						REMOTE_UPLOAD_SIDECAR=""
-						if remote_upload "$sub_file"; then
-							remote_sub_id="$REMOTE_UPLOAD_ID"
-						else
-							printf "\n"
-							REMOTE_UPLOAD_SIDECAR="$_sub_sidecar_saved"
-							if remote_fallback_allowed "$full_path" "загрузка файла субтитров не удалась"; then
-								part_remote="no"
-							else
-								log_msg "FAIL" "$(basename "$full_path"): загрузка файла субтитров не удалась"
-								any_fail="yes"
-								echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
-								REMOTE_UPLOAD_SIDECAR=""
-								((c+=1)); continue
-							fi
-						fi
-						REMOTE_UPLOAD_SIDECAR="$_sub_sidecar_saved"
-					fi
 				else
 					printf "\n"
 					if remote_fallback_allowed "$full_path" "загрузка не удалась"; then
@@ -1495,6 +1468,31 @@ encode_file() {
 					fi
 				fi
 				REMOTE_UPLOAD_SIDECAR=""
+			fi
+
+			# Файл субтитров приходит той же дорогой, что видео: путей в параметрах
+			# служба не принимает по построению. Это ОТДЕЛЬНЫЙ шаг, а не хвост ветки
+			# загрузки видео выше: у тонкого клиента с [split] length видео грузится
+			# ещё до цикла (ради длительности), ветка выше не исполняется ни для одной
+			# части, и задача уходила без subtitle_upload_id — burn/meta приезжали без
+			# субтитров со статусом OK. Тот же исход давала и часть, идущая следом за
+			# откатом на локальный ffmpeg из-за сбоя загрузки титров.
+			# Провал загрузки титров — ПРОВАЛ части, а не тихое «без титров».
+			if [ "$part_remote" = "yes" ] && [ "$dry_run" != "yes" ] && [ -z "$r_job_saved" ] && \
+			   [ "${sub_found:-}" = "1" ] && [ -n "${sub_file:-}" ] && [ -z "${remote_sub_id:-}" ]; then
+				if remote_upload "$sub_file"; then
+					remote_sub_id="$REMOTE_UPLOAD_ID"
+				else
+					printf "\n"
+					if remote_fallback_allowed "$full_path" "загрузка файла субтитров не удалась"; then
+						part_remote="no"
+					else
+						log_msg "FAIL" "$(basename "$full_path"): загрузка файла субтитров не удалась"
+						any_fail="yes"
+						echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+						((c+=1)); continue
+					fi
+				fi
 			fi
 		fi
 

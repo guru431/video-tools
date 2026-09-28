@@ -89,35 +89,31 @@ else
     : > "$workdir/amp&.mp4"
     : > "$workdir/bang!.mp4"
     : > "$workdir/two!!.mp4"
+    # НАСТОЯЩАЯ :warn_bang_names из production-файла, а не inline-копия: копия
+    # уже успела разойтись с оригиналом (имя temp-файла), то есть проверяла сама себя.
+    BANG_SRC=$(sed -n '/^:warn_bang_names/,/^exit \/b/p' "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.cmd" | tr -d '\r')
+    if [ -z "$BANG_SRC" ]; then
+        fail "CMD: подпрограмма :warn_bang_names найдена в production-файле" "найдена" "не найдена"
+    fi
     drv=$(mktemp_suffix /tmp/test_bang_drv_ .cmd)
-    cat > "$drv" << 'CMDEOF'
-@echo off
-setlocal enabledelayedexpansion
-set "folder_sources=%~1"
-set "format_files_in=mp4"
-set "format_files_in_pattern=*.%format_files_in:,= *.%"
-call :warn_bang_names
-exit /b
-:warn_bang_names
-setlocal disabledelayedexpansion
-set "_bang_tmp=%temp%\ffbang_%random%.txt"
-(for /r "%folder_sources%" %%a in (%format_files_in_pattern%) do @echo %%~nxa) 2>nul | findstr /c:"!" > "%_bang_tmp%"
-for /f "usebackq delims=" %%z in ("%_bang_tmp%") do echo BANG:%%z
-del "%_bang_tmp%" 2>nul
-endlocal
-exit /b
-CMDEOF
+    {
+        printf '%s\n' '@echo off' 'chcp 65001 >nul' 'setlocal enabledelayedexpansion' \
+            'set "folder_sources=%~1"' 'set "format_files_in=mp4"' \
+            'set "format_files_in_pattern=*.%format_files_in:,= *.%"' \
+            'call :warn_bang_names' 'exit /b'
+        printf '%s\n' "$BANG_SRC"
+    } | sed 's/$/\r/' > "$drv"
     win_src=$(cygpath -w "$workdir")
     win_drv=$(cygpath -w "$drv")
     res=$(cmd //c "$win_drv" "$win_src" 2>/dev/null | tr -d '\r')
     rm -f "$drv"; rm -rf "$workdir"
 
-    assert_contains "bang!.mp4 помечен"    "BANG:bang!.mp4"   "$res"
-    assert_contains "two!!.mp4 помечен"    "BANG:two!!.mp4"   "$res"
-    assert_not_contains "plain.mp4 НЕ помечен"       "BANG:plain.mp4"       "$res"
-    assert_not_contains "'with space.mp4' НЕ помечен" "BANG:with space.mp4"  "$res"
-    assert_not_contains "pct%.mp4 НЕ помечен"        "BANG:pct%.mp4"        "$res"
-    assert_not_contains "amp&.mp4 НЕ помечен"        "BANG:amp&.mp4"        "$res"
+    assert_contains "bang!.mp4 помечен"    "SH/PS1: bang!.mp4"   "$res"
+    assert_contains "two!!.mp4 помечен"    "SH/PS1: two!!.mp4"   "$res"
+    assert_not_contains "plain.mp4 НЕ помечен"       "SH/PS1: plain.mp4"       "$res"
+    assert_not_contains "'with space.mp4' НЕ помечен" "SH/PS1: with space.mp4"  "$res"
+    assert_not_contains "pct%.mp4 НЕ помечен"        "SH/PS1: pct%.mp4"        "$res"
+    assert_not_contains "amp&.mp4 НЕ помечен"        "SH/PS1: amp&.mp4"        "$res"
 fi
 
 summary

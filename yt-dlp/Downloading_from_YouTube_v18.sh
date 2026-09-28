@@ -217,6 +217,12 @@ read_config() {
     # Default_Quality работали в GUI, но в SH молча давали default.
     local saved_ncm; saved_ncm=$(shopt -p nocasematch)
     shopt -s nocasematch
+    # bash ≥ 5.2 (patsub_replacement): `&` в строке замены ${v//шаблон/замена}
+    # означает найденный текст, и значение переменной окружения с `&` (прокси-URL
+    # с query) превращалось в 32 повтора мусора. Кавычки вокруг замены на bash 3.2
+    # уезжают в результат буквально, поэтому опция выключается на время разбора.
+    local _psr_on=false
+    if shopt -q patsub_replacement 2>/dev/null; then _psr_on=true; shopt -u patsub_replacement; fi
     local in_section=false
     local value=""
     while IFS= read -r line || [ -n "$line" ]; do
@@ -272,12 +278,14 @@ read_config() {
                 value="${value//\$\{$_vn\}/${!_vn:-}}"
             done
             eval "$saved_ncm"
+            if $_psr_on; then shopt -s patsub_replacement; fi
             echo "$value"
             return
         fi
     done < "$CONFIG_FILE"
 
     eval "$saved_ncm"
+    if $_psr_on; then shopt -s patsub_replacement; fi
     echo "$default"
 }
 

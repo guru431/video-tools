@@ -31,6 +31,32 @@ function Remove-ConfigQuotes {
 	return $v
 }
 
+# Подстановка ${ENV_VAR} — тот же алгоритм, что у read_config в .sh и :expand_env
+# в .cmd: первое вхождение за итерацию, имя обязано быть идентификатором
+# [A-Za-z_][A-Za-z0-9_]*, иначе WARN и значение остаётся как есть. Прежний
+# шаблон на \w+ молча оставлял ${MY-VAR} литералом (а ${1X} подставлял), CMD же
+# подставлял любое имя — один config.ini давал на платформах разное. Не более
+# 32 подстановок: самоссылка (SELF='${SELF}') не зациклит разбор.
+function Expand-ConfigEnv {
+	param([string]$Value, [bool]$Quiet)
+	for ($i = 0; $i -lt 32; $i++) {
+		$m = [regex]::Match($Value, '\$\{([^}]*)\}')
+		if (-not $m.Success) { break }
+		$vn = $m.Groups[1].Value
+		if (-not [regex]::IsMatch($vn, '^[A-Za-z_][A-Za-z0-9_]*$')) {
+			Write-Host "WARN: '`${$vn}' — недопустимое имя переменной окружения, оставлено как есть"
+			break
+		}
+		$ev = [Environment]::GetEnvironmentVariable($vn)
+		if ([string]::IsNullOrEmpty($ev)) {
+			if (-not $Quiet) { Write-Host "WARN: переменная $vn не задана" }
+			$ev = ''
+		}
+		$Value = $Value.Replace('${' + $vn + '}', $ev)
+	}
+	return $Value
+}
+
 function Read-Config {
 	param([string]$Key, [string]$Section, [string]$Default = "")
 	if ($script:_cfgCacheFile -ne $configFile) {
@@ -53,15 +79,7 @@ function Read-Config {
 					# Здесь файл разбирается ЦЕЛИКОМ в кэш при первом же Read-Config, поэтому
 					# WARN печатался бы дважды на каждом запуске, о чём бы ни спросили.
 					# Про незаданную переменную громко говорит Invoke-RemotePreflight.
-					$_quiet = ($curSection -eq 'remote')
-					$val = [regex]::Replace($val, '\$\{(\w+)\}', {
-						param($m)
-						$ev = [Environment]::GetEnvironmentVariable($m.Groups[1].Value)
-						if ([string]::IsNullOrEmpty($ev)) {
-							if (-not $_quiet) { Write-Host "WARN: переменная $($m.Groups[1].Value) не задана" }
-							""
-						} else { $ev }
-					})
+					$val = Expand-ConfigEnv $val ($curSection -eq 'remote')
 					$_k = "${curSection}::$($Matches[1].Trim())"
 					# ContainsKey-guard = ПЕРВОЕ вхождение ключа (контракт всех платформ).
 					if (-not $script:_cfgCache.ContainsKey($_k)) { $script:_cfgCache[$_k] = (Remove-ConfigQuotes $val) }

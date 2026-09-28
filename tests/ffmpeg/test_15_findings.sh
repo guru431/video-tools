@@ -421,6 +421,61 @@ assert_not_contains "F29: вход НЕ умножен на число част�
 rm -f "$IN/split.mp4" "$DST"/split*.mp4
 
 # ══════════════════════════════════════════════════════════════
+suite "split по тишине: порог притяжения одинаков в SH и PS1 (нечётная длина)"
+# ══════════════════════════════════════════════════════════════
+# Порог — половина длины части. SH делит нацело (7/2 = 3), а PS1 брал [int](7/2),
+# и .NET округлял 3.5 банковски до 4: пауза на расстоянии 4 с притягивалась в PS1
+# и не притягивалась в SH. Файл 30 с, шаг 7 с, центр паузы 11 с. SH: границы
+# 0/7/11/21/28 (7 → 11 не тянется, diff 4 > 3; 14 → 11 тянется, diff 3).
+# Прежний PS1: 0/11/14/21/28 — части «7» не было вовсе.
+: > "$IN/odd.mp4"
+(
+    export PATH="$MOCKS_DIR:$PATH"; export MOCK_FFMPEG_ENCODERS=""; export MOCK_FFMPEG_LOG="$FFMPEG_LOG"
+    export MOCK_FFMPEG_DURATION="00:00:30.00"; export MOCK_FFMPEG_SILENCE="10:12"
+    rm -f "$FFMPEG_LOG"
+    default_vars
+    length_coding=":+:00-00-07"; split_by_silence="yes"
+    source "$SCRIPT" >/dev/null 2>&1
+) < /dev/null
+SH_SS=$(grep -F -- "-c:v libx264" "$FFMPEG_LOG" 2>/dev/null | grep -oE -- '-ss [0-9]+' | sort -u | tr '\n' ' ')
+assert_eq "SH: границы 7/11/21/28" "-ss 11 -ss 21 -ss 28 -ss 7 " "$SH_SS"
+rm -f "$DST"/odd*.mp4
+
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*|*NT*) _ps_ok=1 ;; *) _ps_ok="" ;; esac
+_ps_bin=""
+for _c in powershell pwsh; do command -v "$_c" >/dev/null 2>&1 && _ps_bin="$_c" && break; done
+if [ -z "$_ps_ok" ] || [ -z "$_ps_bin" ]; then
+    skip "PS1: те же границы, что у SH" "нужен Windows PowerShell (мок ffmpeg — .cmd)"
+else
+    _ps_log="$WORK/mock_ps.log"; rm -f "$_ps_log"
+    MOCK_FFMPEG_ENCODERS="" MOCK_FFMPEG_LOG="$(cygpath -w "$_ps_log")" \
+    MOCK_FFMPEG_DURATION="00:00:30.00" MOCK_FFMPEG_SILENCE="10:12" \
+    "$_ps_bin" -NoProfile -NonInteractive -Command "
+\$ErrorActionPreference='Continue'
+\$folder_sources=(Get-Item -LiteralPath '$(cygpath -w "$IN")').FullName + [IO.Path]::DirectorySeparatorChar
+\$folder_destination=(Get-Item -LiteralPath '$(cygpath -w "$DST")').FullName + [IO.Path]::DirectorySeparatorChar
+\$ffmpeg='$(cygpath -w "$MOCKS_DIR/ffmpeg.cmd")'; \$ffprobe=\$ffmpeg
+\$audio_codec=':+:aac'; \$audio_number_channels=':-:2'; \$audio_bitrate=':-:128'
+\$audio_sampling_rate=':-:44100'; \$audio_normalize=':-:loudnorm'
+\$video_codec=':+:libx264'; \$video_resolution=':-:1280x720'; \$video_bitrate=':-:2000'
+\$video_number_frames=':-:25'; \$video_rotation=':-:2'; \$video_subtitles=':-:burn'
+\$video_quality=':+:23'; \$keep_aspect_ratio=':+:yes'; \$output_container=':+:mp4'
+\$multithreads=':-:4'; \$parallel_files=':-:2'
+\$hw_accel=':-:nvidia'; \$gpu_preset=':-:p5'; \$gpu_tune=':-:hq'; \$gpu_rc=':-:vbr'
+\$playback_speed=':-:1.0'; \$start_coding=':-:01-00-00'; \$length_coding=':+:00-00-07'
+\$split_by_silence='yes'; \$silence_duration='2.0'; \$silence_threshold='-30dB'
+\$save_old_extension='no'; \$format_files_in='mp4'
+\$subtitles_style=''; \$dry_run='no'; \$enable_log='no'; \$log_file=''
+\$audio_only='no'; \$merge_files='no'; \$create_frame='no'
+\$copy_codecs='no'; \$extract_audio_copy='no'; \$overwrite_existing='yes'
+. '$(cygpath -w "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1")'
+" >/dev/null 2>&1 < /dev/null
+    PS_SS=$(grep -F -- "-c:v libx264" "$_ps_log" 2>/dev/null | grep -oE -- '-ss [0-9]+' | sort -u | tr '\n' ' ')
+    assert_eq "PS1: те же границы, что у SH" "$SH_SS" "$PS_SS"
+fi
+rm -f "$IN/odd.mp4" "$DST"/odd*.mp4
+
+# ══════════════════════════════════════════════════════════════
 suite "F26: имя temp сохраняет расширение (иначе ffmpeg не выводит muxer)"
 # ══════════════════════════════════════════════════════════════
 # Суть: temp назывался `.movie.mp4.partial` — расширение стало `.partial`. Режимы

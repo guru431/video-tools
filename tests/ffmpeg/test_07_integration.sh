@@ -395,6 +395,38 @@ _out="$(run_script_out         'ffmpeg="/nonexistent/ffmpeg-does-not-exist"'    
 assert_contains "локальный режим без ffmpeg отвергнут" "считается локально" "$_out"
 rm -f "$CURL_LOG"
 
+# ══════════════════════════════════════════════════════════════
+suite "remote: тонкий клиент + [split] length — субтитры уезжают с каждой частью"
+# ══════════════════════════════════════════════════════════════
+# Без локального ffmpeg длительность знает только служба, поэтому видео грузится
+# ещё ДО цикла по частям. Загрузка субтитров жила внутри ветки «видео ещё не
+# загружено» и не исполнялась ни для одной части: задачи уходили без
+# subtitle_upload_id, и burn приезжал без титров со статусом OK.
+# Служба здесь проваливает каждую задачу — проверяется только тело запроса.
+_tc_in="$(mktemp -d /tmp/test_tc_in_XXXXXX)"; _tc_out="$(mktemp -d /tmp/test_tc_out_XXXXXX)"
+printf 'video-bytes' > "$_tc_in/clip.mp4"
+printf '1\n00:00:01,000 --> 00:00:02,000\nhello\n' > "$_tc_in/clip.srt"
+_routes="$(printf '%s\n' \
+    'GET /v1/capabilities|200|{"args_version":"2","chunk_size":1048576}' \
+    'POST /v1/uploads|200|{"upload_id":"up-1"}' \
+    'PATCH /v1/uploads/up-1|200|{"received":0}' \
+    'POST /v1/uploads/up-1/complete|200|{"upload_id":"up-1","status":"complete"}' \
+    'GET /v1/uploads/up-1/probe|200|{"duration":20}' \
+    'POST /v1/jobs|200|{"job_id":"job-1","state":"queued"}' \
+    'GET /v1/jobs/job-1|200|{"job_id":"job-1","state":"failed","error":"test"}' \
+    'DELETE /v1/jobs/job-1|200|{"ok":true}' | sed 's/|/\t/g')"
+rm -f "$CURL_LOG"
+_out="$(MOCK_CURL_LOG="$CURL_LOG" MOCK_CURL_ROUTES="$_routes" REMOTE_RETRY_SECONDS=0 REMOTE_POLL_SECONDS=1 \
+    run_script_out \
+        "folder_sources=\"$_tc_in\"" "folder_destination=\"$_tc_out\"" \
+        'ffmpeg="/nonexistent/ffmpeg-does-not-exist"' \
+        'remote_enabled="yes"' 'remote_endpoint="http://mock.invalid/v1"' 'remote_api_key="k"' \
+        'video_subtitles=":+:burn"' 'length_coding=":+:00-00-10"')"
+_jobs="$(grep -F -- 'mock.invalid/v1/jobs' "$CURL_LOG" 2>/dev/null | grep -F -- '-X POST')"
+assert_eq "задач создано по числу частей" "2" "$(printf '%s\n' "$_jobs" | grep -c 'mock.invalid')"
+assert_eq "каждая задача несёт subtitle_upload_id" "2" "$(printf '%s\n' "$_jobs" | grep -c 'subtitle_upload_id')"
+rm -rf "$_tc_in" "$_tc_out"; rm -f "$CURL_LOG"
+
 # ── Cleanup ───────────────────────────────────────────────────
 rm -f "$FFMPEG_LOG"
 rm -rf "$INPUT_DIR" "$OUTPUT_DIR"

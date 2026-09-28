@@ -192,7 +192,7 @@ assert_empty "ни один тест не переопределяет productio
 #   • test_10 — inline-пересказ подпрограммы :to_flag, терявший ветку пустого значения.
 # Оба «зелёно» проверяли копию. Здесь ловим определения в тестах, а не вызовы.
 PROD_PS_FUNCS="Read-Config To-Flag Parse-Flag Quote-WinArg Join-WinArgs Get-Platform"
-PROD_CMD_LABELS="to_flag resolve_hw build_atempo kbps_from_line trim_val trim_key strip_inline_comment expand_env assign_var"
+PROD_CMD_LABELS="to_flag resolve_hw build_atempo kbps_from_line trim_val trim_key strip_inline_comment expand_env assign_var log_msg warn_bang_names"
 ps_cmd_offenders=""
 for _t in "$TESTS_DIR"/ffmpeg/test_*.sh "$TESTS_DIR"/yt-dlp/test_*.sh "$TESTS_DIR"/common/test_*.sh; do
     [ -f "$_t" ] || continue
@@ -492,6 +492,14 @@ assert_contains "читается уже отфильтрованный спис
 # ввод валидации. Остальные temp-файлы этого скрипта уже используют GUID либо
 # !random!!random!.
 assert_not_contains "нет одиночного %random% в именах temp-файлов" 'ytdlp_trimchk_%random%' "$_ycmd_code"
+# Тот же стандарт для обоих .cmd целиком: у ffmpeg-скрипта concat-список merge,
+# ffinfo_ и ffbang_ жили на ОДНОМ random (0..32767) после того, как yt-dlp уже
+# перешёл на пару. Пара random подряд или GUID — иначе строка считается нарушением.
+_single_rand=$(grep -hviE '^[[:space:]]*(rem|::)' \
+        "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.cmd" \
+        "$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v18.cmd" \
+    | grep -iE 'set "[^=]+=%temp%' | grep -iE 'random' | grep -viE 'random[!%]{2}random')
+assert_empty "temp-имена в .cmd не держатся на одиночном random" "$_single_rand"
 
 # ══════════════════════════════════════════════════════════════
 suite "yt-dlp SH: ffmpeg-мерж перевода с -nostdin"
@@ -969,5 +977,23 @@ BRACEEOF
 _brace_neg="$(grep -nE '"\$\([a-zA-Z_][a-zA-Z_0-9]* "[^"]*\{[^}]*,[^}]*\}' "$_brace_probe" || true)"
 assert_not_empty "синтетический нарушитель ловится" "$_brace_neg"
 rm -f "$_brace_probe"
+
+# ══════════════════════════════════════════════════════════════
+suite "config.ini: \${ENV} во всех PS1-ридерах по одному алгоритму"
+# ══════════════════════════════════════════════════════════════
+# Прежний '\$\{(\w+)\}' молча оставлял ${MY-VAR} литералом и подставлял ${1X},
+# тогда как SH и CMD требуют идентификатор — один config.ini давал разное.
+# В обоих GUI предупреждение не имеет права идти через Write-Host: в EXE
+# (-noConsole) это отдельный MessageBox на каждое вхождение.
+for _f in ffmpeg/FFmpeg_Converter_run_v18.ps1 ffmpeg/FFmpeg_Converter_run_win_v18.ps1 \
+          yt-dlp/Downloading_from_YouTube_v18.ps1; do
+    _src="$(cat "$PROJECT_DIR/$_f")"
+    assert_not_contains "$_f: нет прежнего \\w+-шаблона" "'\\\$\\{(\\w+)\\}'" "$_src"
+    assert_contains     "$_f: подстановка через Expand-ConfigEnv" 'Expand-ConfigEnv $val' "$_src"
+done
+for _f in ffmpeg/FFmpeg_Converter_run_win_v18.ps1 yt-dlp/Downloading_from_YouTube_v18.ps1; do
+    assert_not_contains "$_f: WARN подстановки не через Write-Host" 'Write-Host "WARN: переменная' \
+        "$(cat "$PROJECT_DIR/$_f")"
+done
 
 summary

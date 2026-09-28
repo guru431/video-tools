@@ -236,6 +236,8 @@ rm -f "$CONFIG_FILE"
 
 # Статический: фича присутствует в реальных SH и PS1
 assert_contains "SH: подстановка \${ENV} реализована"  'value="${value//\$\{$_vn\}/${!_vn:-}}"'  "$sh_src"
-assert_contains "PS1: подстановка \${ENV} реализована"  '\$\{(\w+)\}'  "$ps1_src"
+# PS1 — Expand-ConfigEnv по алгоритму SH (имя-идентификатор, иначе литерал);
+# поведение, включая предупреждения старта вместо Write-Host, — в test_06_ps1.
+assert_contains "PS1: подстановка \${ENV} реализована"  'Expand-ConfigEnv $val'  "$ps1_src"
 
 summary

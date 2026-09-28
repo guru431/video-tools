@@ -129,6 +129,13 @@ else
     fail "GUI: probe энкодера стоит до запуска runspace" "probe<run" "probe=$_gui_probe_line run=$_gui_run_line"
 fi
 
+# message из прогресс-JSON — причина ОТКАЗА. Добавленное безусловно, оно делало бы
+# успешный батч «Ошибкой» при любом информационном сообщении воркера на success.
+assert_contains "GUI: message считается ошибкой только вне success" \
+    'if ($json.message -and $state -ne "success") { $errParts += [string]$json.message }' "$src_gui"
+assert_not_contains "GUI: безусловного добавления message больше нет" \
+    'if ($json.message) { $errParts += [string]$json.message }' "$src_gui"
+
 # ── Cleanup ───────────────────────────────────────────────────
 rm -rf "$WORK"
 

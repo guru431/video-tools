@@ -74,6 +74,37 @@ function Remove-ConfigQuotes {
     return $v
 }
 
+# Предупреждения старта копим и показываем один раз при открытии окна: Write-Host
+# в EXE (-noConsole) превращается в MessageBox на каждый вызов. Заводится ДО
+# разбора config.ini: подстановка ${ENV_VAR} ниже тоже пишет сюда.
+$script:startupWarnings = @()
+
+# Подстановка ${ENV_VAR} — тот же алгоритм, что у read_config в .sh: первое
+# вхождение за итерацию, имя обязано быть идентификатором [A-Za-z_][A-Za-z0-9_]*,
+# иначе предупреждение и значение остаётся как есть; не более 32 подстановок
+# (самоссылка SELF='${SELF}' не зациклит разбор). Прежний шаблон на \w+ молча
+# оставлял ${MY-VAR} литералом, а о незаданной переменной сообщал через
+# Write-Host — то есть отдельным MessageBox на каждое вхождение.
+function Expand-ConfigEnv {
+    param([string]$Value)
+    for ($i = 0; $i -lt 32; $i++) {
+        $m = [regex]::Match($Value, '\$\{([^}]*)\}')
+        if (-not $m.Success) { break }
+        $vn = $m.Groups[1].Value
+        if (-not [regex]::IsMatch($vn, '^[A-Za-z_][A-Za-z0-9_]*$')) {
+            $script:startupWarnings += "config.ini: '`${$vn}' — недопустимое имя переменной окружения, оставлено как есть."
+            break
+        }
+        $ev = [Environment]::GetEnvironmentVariable($vn)
+        if ([string]::IsNullOrEmpty($ev)) {
+            $script:startupWarnings += "config.ini: переменная окружения $vn не задана — подставлена пустая строка."
+            $ev = ''
+        }
+        $Value = $Value.Replace('${' + $vn + '}', $ev)
+    }
+    return $Value
+}
+
 # ── Чтение config.ini (один раз в хеш-таблицу) ──────────────────────────
 $script:_configCache = @{}
 if (Test-Path -LiteralPath $configFile) {
@@ -87,12 +118,7 @@ if (Test-Path -LiteralPath $configFile) {
         }
         if ($curSection -and $line -match '^([^=]+?)\s*=\s*(.*)') {
             $val = $Matches[2] -replace '\s+#.*', ''
-            # Подстановка ${ENV_VAR} из окружения. Не задана → пустая строка + WARN.
-            $val = [regex]::Replace($val, '\$\{(\w+)\}', {
-                param($m)
-                $ev = [Environment]::GetEnvironmentVariable($m.Groups[1].Value)
-                if ($null -eq $ev) { Write-Host "WARN: переменная $($m.Groups[1].Value) не задана"; "" } else { $ev }
-            })
+            $val = Expand-ConfigEnv $val
             $_k = "${curSection}::$($Matches[1].Trim())"
             if (-not $script:_configCache.ContainsKey($_k)) { $script:_configCache[$_k] = (Remove-ConfigQuotes $val) }
         }
@@ -124,9 +150,7 @@ function Read-ConfigBool {
 }
 
 # ── Загрузка настроек ─────────────────────────────────────────────────────
-# Предупреждения старта копим и показываем один раз при открытии окна: Write-Host
-# в EXE (-noConsole) превращается в MessageBox на каждый вызов.
-$script:startupWarnings = @()
+# $script:startupWarnings заведён выше, до разбора config.ini.
 $cfg_proxy_raw = Read-Config "url" "proxy" ""
 $cfg_proxyType = "https"
 $cfg_proxyHost = ""

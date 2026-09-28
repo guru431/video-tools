@@ -135,6 +135,40 @@ dup_out=$(cmd //c "$WIN_RUN --print-config" < /dev/null 2>&1)
 dup_line=$(printf '%s\n' "$dup_out" | tr -d '\r' | grep '^video_codec=' | head -1)
 assert_eq "дубликат: победило первое вхождение" "video_codec=:+:libx264" "$dup_line"
 
+# ══════════════════════════════════════════════════════════════
+suite "CMD: инлайн-комментарий с '=' в хвосте"
+# ══════════════════════════════════════════════════════════════
+# Хвост после " #" вычитался подстановкой !_val: #<хвост>=!, и первый '=' в
+# хвосте завершал искомую подстроку: `mp4,mkv # x=y` давало `mp4,mkvy==y`.
+# PS1 (\s+#.*) и SH такой проблемы не имеют — один config.ini значил разное.
+printf '[other]\r\nformat_files_in = mp4,mkv # x=y\r\ndry_run = yes # default=no, 50%% off\r\nlog_file = my#file.log # a # b=c\r\n' > "$TMP_DIR/config.ini"
+sic_out=$(cmd //c "$WIN_RUN --print-config" < /dev/null 2>&1 | tr -d '\r')
+assert_eq "хвост 'x=y' срезан целиком" "format_files_in=mp4,mkv" \
+    "$(printf '%s\n' "$sic_out" | grep '^format_files_in=' | head -1)"
+assert_eq "хвост с '=', ',' и '%' срезан целиком" "dry_run=yes" \
+    "$(printf '%s\n' "$sic_out" | grep '^dry_run=' | head -1)"
+case "$(printf '%s\n' "$sic_out" | grep '^log_file=' | head -1)" in
+    *'\my#file.log') pass "режется по ПЕРВОЙ ' #', '#' без пробела остаётся в значении" ;;
+    *) fail "режется по ПЕРВОЙ ' #', '#' без пробела остаётся в значении" "…\\my#file.log" \
+        "$(printf '%s\n' "$sic_out" | grep '^log_file=')" ;;
+esac
+
+# ══════════════════════════════════════════════════════════════
+suite "CMD: \${ENV} — имя обязано быть идентификатором"
+# ══════════════════════════════════════════════════════════════
+# CMD брал имя как любой текст до '}' и подставлял ${MY-VAR}, а SH и PS1
+# оставляли литерал — один config.ini давал разное. Контракт трёх платформ:
+# [A-Za-z_][A-Za-z0-9_]*, иначе WARN и значение как есть.
+printf '[other]\r\nformat_files_in = ${MY-VAR}/x\r\nsubtitles_style = ${1ABC}/y\r\ndry_run = ${FF_T_ENV_OK}\r\n' > "$TMP_DIR/config.ini"
+env_out=$(env 'MY-VAR=leaked' FF_T_ENV_OK=yes cmd //c "$WIN_RUN --print-config" < /dev/null 2>&1 | tr -d '\r')
+assert_eq "\${MY-VAR} остаётся литералом (переменная при этом задана)" 'format_files_in=${MY-VAR}/x' \
+    "$(printf '%s\n' "$env_out" | grep '^format_files_in=' | head -1)"
+assert_eq "\${1ABC} остаётся литералом" 'subtitles_style=${1ABC}/y' \
+    "$(printf '%s\n' "$env_out" | grep '^subtitles_style=' | head -1)"
+assert_contains "недопустимое имя → WARN" "недопустимое имя переменной окружения" "$env_out"
+assert_eq "допустимое имя по-прежнему подставляется" "dry_run=yes" \
+    "$(printf '%s\n' "$env_out" | grep '^dry_run=' | head -1)"
+
 rm -rf "$TMP_DIR"
 
 summary

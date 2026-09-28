@@ -428,4 +428,33 @@ assert_contains "CMD: extract уважает overwrite_existing" 'if exist "!out
 # F-collision (#6): skip файлов внутри каталога назначения
 assert_contains "CMD: dest-inside-source флаг" 'set "dest_inside_source=1"' "$src_cmd"
 
+# ══════════════════════════════════════════════════════════════
+suite "script.cmd: :log_msg — цифра в конце и & в сообщении"
+# ══════════════════════════════════════════════════════════════
+# `echo … %~2>>"log"`: сообщение на « 2» давало `2>>` — перенаправление stderr,
+# строка уходила в консоль без цифры, а в лог не попадало ничего; `&` из имени
+# файла исполнялся как команда. Вызывается НАСТОЯЩАЯ подпрограмма.
+LOG_MSG_SRC=$(sed -n '/^:log_msg/,/^exit \/b/p' "$SCRIPT_CMD" | tr -d '\r')
+if [ -z "$LOG_MSG_SRC" ]; then
+    fail "CMD: подпрограмма :log_msg найдена в production-файле" "найдена" "не найдена"
+fi
+LM_LOG=$(mktemp_suffix /tmp/test_logmsg_ .log)
+rm -f "$LM_LOG"
+LM_LOG_WIN=$(cygpath -w "$LM_LOG")
+lm_out=$(run_cmd "$(printf '%s\n' \
+    "set \"enable_log=yes\"" \
+    "set \"log_file=$LM_LOG_WIN\"" \
+    "call :log_msg \"INFO\" \"files: 2\"" \
+    "call :log_msg \"INFO\" \"movie2\"" \
+    "call :log_msg \"FAIL\" \"a & b.mp4\"" \
+    "goto :done_logmsg" \
+    "$LOG_MSG_SRC" \
+    ":done_logmsg" | sed 's/$/\r/')")
+lm_log=$(tr -d '\r' < "$LM_LOG" 2>/dev/null)
+rm -f "$LM_LOG"
+assert_contains "« 2» в конце дошло до лога целиком" "[INFO] files: 2"   "$lm_log"
+assert_contains "имя на цифру дошло до лога"         "[INFO] movie2"     "$lm_log"
+assert_contains "& в сообщении записан литералом"   "[FAIL] a & b.mp4"  "$lm_log"
+assert_empty    "в консоль не протекло ничего"      "$(printf '%s' "$lm_out" | tr -d '\r\n')"
+
 summary

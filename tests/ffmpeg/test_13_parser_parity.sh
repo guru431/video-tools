@@ -47,6 +47,9 @@ RUN_PS1_WIN=$(cygpath -w "$RUN_PS1" 2>/dev/null || echo "$RUN_PS1")
 
 # $env:FFCONV_TEST=1 — гард в run_v18.ps1: дот-сорсим только определения, конвейер
 # не запускаем (паритет с SH-гардом BASH_SOURCE == $0).
+# 6>$null: WARN разбора PS1 печатает через Write-Host (информационный поток), а
+# файл разбирается целиком при первом вызове — без этого WARN про ЛЮБОЙ ключ
+# с недопустимым именем смешивался бы с возвращаемым значением каждого ключа.
 run_ps1_readconfig() {
     local cfg_win="$1"
     local key="$2"
@@ -56,7 +59,7 @@ run_ps1_readconfig() {
 \$env:FFCONV_TEST = '1'
 . '$RUN_PS1_WIN'
 \$configFile = '$cfg_win'
-Read-Config '$key' '$section' '$default'
+Read-Config '$key' '$section' '$default' 6>\$null
 " 2>/dev/null | tr -d '\r'
 }
 
@@ -77,6 +80,10 @@ quoted_dq = "C:/video/in"
 quoted_sq = 'C:/video/out'
 dup_key = first
 dup_key = second
+bad_name = ${MY-VAR}/x
+digit_name = ${1ABC}/y
+amp_ref = ${MY_AMP_VAR}/z
+Mixed_Case = mc
 EOCONFIG
 
 CFG_WIN=$(cygpath -w "$CONFIG_FILE" 2>/dev/null || echo "$CONFIG_FILE")
@@ -90,9 +97,16 @@ CFG_WIN=$(cygpath -w "$CONFIG_FILE" 2>/dev/null || echo "$CONFIG_FILE")
 # Windows-вид при передаче в нативный процесс, и `/mnt/data` доехало бы до PowerShell
 # как `C:/Program Files/Git/mnt/data` — тест ловил бы MSYS, а не расхождение парсеров.
 export MY_PARITY_VAR="parity-val-42"
+# `&` в значении: на bash ≥ 5.2 (patsub_replacement) он в строке замены означал
+# найденный текст, и значение превращалось в 32 повтора мусора.
+export MY_AMP_VAR="a=1&b=2"
 
 # ── Ключи для сравнения ──────────────────────────────────────────────────────
-KEYS=(embed_eq inline_cmt hash_val spaced var_ref quoted_dq quoted_sq dup_key)
+# bad_name/digit_name: имя не идентификатор → литерал на всех платформах. Прежний
+# PS1 брал '\$\{(\w+)\}' и ${1ABC} подставлял, а SH оставлял как есть.
+# mixed_case: ключ `Mixed_Case` в файле — SH сравнивает через =~ под nocasematch,
+# и bash применяет эту опцию и к =~ (ревью 2026-09-26 утверждало обратное).
+KEYS=(embed_eq inline_cmt hash_val spaced var_ref quoted_dq quoted_sq dup_key bad_name digit_name amp_ref mixed_case)
 
 # ══════════════════════════════════════════════════════════════
 suite "Кросс-парсерный паритет: SH read_config vs PS1 Read-Config"
@@ -132,6 +146,19 @@ assert_eq "quoted_sq: одинарные кавычки сняты" "C:/video/ou
 # Дубликат ключа: побеждает ПЕРВОЕ вхождение — контракт всех платформ. Раньше CMD и
 # GUI брали последнее, и один config.ini давал разные кодеки на разных платформах.
 assert_eq "dup_key: побеждает первое вхождение" "first" "$(read_config dup_key tricky '')"
+assert_eq "bad_name: \${MY-VAR} остаётся литералом"   '${MY-VAR}/x'  "$(read_config bad_name tricky '' 2>/dev/null)"
+assert_eq "digit_name: \${1ABC} остаётся литералом"   '${1ABC}/y'    "$(read_config digit_name tricky '' 2>/dev/null)"
+assert_contains "недопустимое имя → WARN" "недопустимое имя" "$(read_config bad_name tricky '' 2>&1 >/dev/null)"
+assert_eq "amp_ref: '&' в значении переменной не трогается" "a=1&b=2/z" "$(read_config amp_ref tricky '')"
+assert_eq "mixed_case: ключ другого регистра найден" "mc" "$(read_config mixed_case tricky '')"
+# patsub_replacement выключается только на время разбора и возвращается как был.
+if shopt -q patsub_replacement 2>/dev/null; then
+    pass "patsub_replacement после read_config восстановлен"
+elif shopt patsub_replacement >/dev/null 2>&1; then
+    fail "patsub_replacement после read_config восстановлен" "on" "off"
+else
+    skip "patsub_replacement после read_config восстановлен" "bash ${BASH_VERSION} без этой опции"
+fi
 
 # Незаданная переменная → пустая подстановка + предупреждение (значение не остаётся
 # литералом ${...}, иначе оно уехало бы в ffmpeg как имя каталога).

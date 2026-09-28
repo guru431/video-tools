@@ -124,6 +124,9 @@ timeout_sec = abc
 format = badfmt
 [output]
 base_dir = "C:\video in quotes"
+[envtest]
+unset_ref = ${YTDLP_TEST_UNSET_VAR_X}/a
+bad_ref = ${MY-VAR}/b
 INIEOF
 win_cfg=$(cygpath -w "$tmpcfg" 2>/dev/null || echo "$tmpcfg")
 
@@ -154,6 +157,13 @@ Write-Output ("rc_dup=" + (Read-Config 'default_quality' 'download' '720'))
 # кавычками в имени, а cookie-файл по такому пути не находится вовсе.
 Write-Output ("rc_quoted=" + (Read-Config 'base_dir' 'output' '_video_'))
 Write-Output ("rc_unquote_fn=" + (Remove-ConfigQuotes '''C:\one quoted'''))
+# ${ENV}: незаданная → пусто, недопустимое имя → литерал (как read_config в .sh).
+# Оба случая — предупреждения СТАРТА, а не Write-Host: в EXE (-noConsole)
+# Write-Host = отдельный MessageBox на каждое вхождение ещё до появления окна.
+Write-Output ("rc_env_unset=" + (Read-Config 'unset_ref' 'envtest' ''))
+Write-Output ("rc_env_bad=" + (Read-Config 'bad_ref' 'envtest' ''))
+Write-Output ("warn_env_unset=" + [bool]($script:startupWarnings -match 'YTDLP_TEST_UNSET_VAR_X'))
+Write-Output ("warn_env_bad=" + [bool]($script:startupWarnings -match 'MY-VAR'))
 
 # Валидация значений config.ini: неизвестный enum и нечисловой таймаут обязаны
 # скатываться к умолчанию И порождать предупреждение. Раньше они молча
@@ -238,6 +248,11 @@ assert_eq "translation enabled"                        "true"                   
 assert_eq "дубль ключа: выигрывает первое вхождение"   "1080"                         "$(get_field "$out" rc_dup)"
 assert_eq "кавычки вокруг значения сняты"              'C:\video in quotes'           "$(get_field "$out" rc_quoted)"
 assert_eq "одинарные кавычки тоже снимаются"           'C:\one quoted'                "$(get_field "$out" rc_unquote_fn)"
+assert_eq "незаданная \${VAR} → пусто"                  "/a"                           "$(get_field "$out" rc_env_unset)"
+assert_eq "\${MY-VAR} (не идентификатор) → литерал"     '${MY-VAR}/b'                  "$(get_field "$out" rc_env_bad)"
+assert_eq "незаданная \${VAR} → предупреждение старта"  "True"                         "$(get_field "$out" warn_env_unset)"
+assert_eq "недопустимое имя → предупреждение старта"    "True"                         "$(get_field "$out" warn_env_bad)"
+assert_not_contains "подстановка не пишет через Write-Host" "WARN: переменная"          "$out"
 
 # ── Get-Platform ──────────────────────────────────────────────
 suite "PS1 yt-dlp: валидация значений config.ini (enum/bool/таймаут)"
@@ -247,7 +262,8 @@ assert_eq "неизвестный [subtitles] format → vtt"     "vtt"   "$(get
 # перевод обрывался бы мгновенно на каждом ролике.
 assert_eq "нечисловой timeout_sec → 900"             "900"   "$(get_field "$out" cfg_timeout)"
 assert_eq "enabled = true распознан как true"        "true"  "$(get_field "$out" cfg_transen)"
-assert_eq "оба промаха дали предупреждения"          "2"     "$(get_field "$out" warn_count)"
+# 4 = два промаха значений (формат, таймаут) + два промаха подстановки [envtest].
+assert_eq "все четыре промаха дали предупреждения"   "4"     "$(get_field "$out" warn_count)"
 assert_eq "предупреждение про формат субтитров"      "True"  "$(get_field "$out" warn_subfmt)"
 assert_eq "предупреждение про timeout_sec"           "True"  "$(get_field "$out" warn_timeout)"
 assert_eq "корректный enum проходит без подмены"     "browser" "$(get_field "$out" enum_ok)"

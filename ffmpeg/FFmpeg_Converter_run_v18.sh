@@ -38,6 +38,14 @@ read_config() {
 	local result="$default"
 	local saved_ncm; saved_ncm=$(shopt -p nocasematch)
 	shopt -s nocasematch
+	# bash ≥ 5.2 (patsub_replacement): `&` в строке замены ${v//шаблон/замена}
+	# означает найденный текст. Значение переменной окружения с `&` (URL с
+	# query `?a=1&b=2`) превращалось в 32 повтора мусора — `&` вставлял обратно
+	# ${VAR}, и цикл подстановки ниже крутился до предела. Кавычки вокруг замены
+	# тут не выход: на bash 3.2 они уезжают в результат буквально (см. шапку
+	# remote_client.sh). До 5.2 опции нет, и `&` там и так обычный символ.
+	local _psr_on=false
+	if shopt -q patsub_replacement 2>/dev/null; then _psr_on=true; shopt -u patsub_replacement; fi
 	local in_section=false
 	while IFS= read -r line || [ -n "$line" ]; do
 		# Trim через bash parameter expansion (см. yt-dlp/Downloading_from_YouTube_v18.sh
@@ -106,6 +114,7 @@ read_config() {
 	done < "$CONFIG_FILE"
 
 	eval "$saved_ncm"
+	if $_psr_on; then shopt -s patsub_replacement; fi
 	echo "$result"
 }
 

@@ -503,7 +503,7 @@ if "%merge_files%"=="yes" (
 			set /a "total_skip+=1"
 		)
 		if defined _do_merge (
-			set "full_path=%temp%\%random%.tmp"
+			set "full_path=%temp%\ffconcat_!random!!random!.tmp"
 			rem Шаг 1: сырые пути в UTF-16 (Unicode-имена). Шаг 2: PowerShell оборачивает в
 			rem concat-формат и экранирует апостроф в имени (паритет с .sh/.ps1).
 			cmd /u /c "(for /r "%folder_sources%" %%a in (%format_files_in_pattern%) do @echo %%a)" > "!full_path!.u16"
@@ -792,7 +792,7 @@ rem а goto из тела for обрывал бы перечисление фа�
 		if not exist "%folder_destination%!file_path!!file_name!!part_suffix_known!.!current_format_out!" (
 				rem P3. Один вызов ffmpeg -i на файл — раньше было 2: bitrate + Duration.
 				rem ffmpeg печатает metadata в stderr → перенаправляем в файл, stdout → nul.
-				set "_ff_info_tmp=%temp%\ffinfo_!random!.txt"
+				set "_ff_info_tmp=%temp%\ffinfo_!random!!random!.txt"
 				"%ffmpeg%" -nostdin -i "!full_path!" 1>nul 2>"!_ff_info_tmp!"
 				rem E4. Получение битрейта.
 				rem Берём подстроку после "bitrate: " и первый токен — число кб/с; надёжнее
@@ -1221,10 +1221,17 @@ exit /b 0
 rem --- F12. Логирование в файл с таймстампом (паритет с SH log_msg / PS1 Log-Msg) ---
 rem %1=level %2=message. Пишет в log_file только при enable_log=yes; консольные echo
 rem остаются на местах вызова, сюда идёт таймстампованная копия для разбора батча.
+rem Текст идёт через переменную и echo !…!, а перенаправление стоит ПЕРЕД echo:
+rem при `echo … %~2>>"log"` сообщение, оканчивающееся на « 2», давало `2>>` —
+rem перенаправление stderr (строка уходила в консоль без цифры, лог пустел), а
+rem `&` из имени файла исполнялся как команда. Раскрытие !…! повторно не разбирается.
 :log_msg
 if /i not "%enable_log%"=="yes" exit /b
 if not defined log_file exit /b
-echo [%date% %time:~0,8%] [%~1] %~2>>"%log_file%"
+setlocal enabledelayedexpansion
+set "_lm_line=[%date% %time:~0,8%] [%~1] %~2"
+>>"%log_file%" echo !_lm_line!
+endlocal
 exit /b
 
 rem --- F25. Извлечь число перед " kb/s" из строки ffmpeg (напр. `..., 1808 kb/s, ...`).
@@ -1298,7 +1305,9 @@ rem     disabledelayedexpansion: иначе literal '!' в findstr съедае�
 rem     а '!' в именах терялся бы при echo. Enum через findstr — только имена, содержащие '!'.
 :warn_bang_names
 setlocal disabledelayedexpansion
-set "_bang_tmp=%temp%\ffbang_%random%.txt"
+rem Два %random% (delayed expansion здесь выключен, поэтому не !random!): одиночный
+rem даёт 32768 имён, и параллельные запуски делили бы один temp-файл.
+set "_bang_tmp=%temp%\ffbang_%random%%random%.txt"
 (for /r "%folder_sources%" %%a in (%format_files_in_pattern%) do @echo %%~nxa) 2>nul | findstr /c:"!" > "%_bang_tmp%"
 for /f "usebackq delims=" %%z in ("%_bang_tmp%") do echo [WARN] Имя с '!' не поддерживается CMD-версией (файл будет пропущен/упадёт) - используйте SH/PS1: %%z
 del "%_bang_tmp%" 2>nul

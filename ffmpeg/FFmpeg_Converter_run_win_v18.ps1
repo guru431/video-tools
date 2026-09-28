@@ -59,6 +59,32 @@ function Remove-ConfigQuotes {
     return $v
 }
 
+# Подстановка ${ENV_VAR} — алгоритм read_config из .sh, :expand_env из .cmd и
+# Expand-ConfigEnv из CLI-PS1: имя обязано быть идентификатором, иначе WARN и
+# значение остаётся как есть; не более 32 подстановок. Предупреждения КОПЯТСЯ и
+# показываются одним окном после открытия формы: в EXE (-noConsole) Write-Host
+# превращается в MessageBox на КАЖДЫЙ вызов, ещё до появления окна.
+$script:configWarnings = @()
+function Expand-ConfigEnv {
+    param([string]$Value, [bool]$Quiet)
+    for ($i = 0; $i -lt 32; $i++) {
+        $m = [regex]::Match($Value, '\$\{([^}]*)\}')
+        if (-not $m.Success) { break }
+        $vn = $m.Groups[1].Value
+        if (-not [regex]::IsMatch($vn, '^[A-Za-z_][A-Za-z0-9_]*$')) {
+            $script:configWarnings += "WARN: '`${$vn}' — недопустимое имя переменной окружения, оставлено как есть"
+            break
+        }
+        $ev = [Environment]::GetEnvironmentVariable($vn)
+        if ([string]::IsNullOrEmpty($ev)) {
+            if (-not $Quiet) { $script:configWarnings += "WARN: переменная $vn не задана" }
+            $ev = ''
+        }
+        $Value = $Value.Replace('${' + $vn + '}', $ev)
+    }
+    return $Value
+}
+
 # --- Чтение config.ini (один раз в хеш-таблицу) ---
 $configFile = Join-Path $script:_appDir "config.ini"
 $script:_configCache = @{}
@@ -76,15 +102,7 @@ if (Test-Path -LiteralPath $configFile) {
             # Подстановка ${ENV_VAR} из окружения (паритет с yt-dlp/CLI). Не задана → пусто + WARN.
             # Кроме секции [remote]: там TRANSCODE_URL/TRANSCODE_API_KEY не заданы у всех,
             # кто удалённым бэкендом не пользуется, и WARN сыпался бы при каждом старте GUI.
-            $_quiet = ($curSection -eq 'remote')
-            $val = [regex]::Replace($val, '\$\{(\w+)\}', {
-                param($m)
-                $ev = [Environment]::GetEnvironmentVariable($m.Groups[1].Value)
-                if ([string]::IsNullOrEmpty($ev)) {
-                    if (-not $_quiet) { Write-Host "WARN: переменная $($m.Groups[1].Value) не задана" }
-                    ""
-                } else { $ev }
-            })
+            $val = Expand-ConfigEnv $val ($curSection -eq 'remote')
             # ContainsKey-guard = ПЕРВОЕ вхождение ключа. Раньше здесь побеждало
             # ПОСЛЕДНЕЕ, а CLI-PS1 и .sh брали первое: один config.ini с дублем
             # `codec` давал libx264 из CLI и libx265 из GUI — молча.
@@ -1750,7 +1768,11 @@ $buttonRun.Add_Click({
                     $progressBarTotal.Value = 100
                     $labelProgressTotal.Text = "Файлов: $($json.fileNum) / $($json.totalFiles)"
                     $labelProgressSummary.Text = "OK: $($json.ok)   Ошибки: $($json.fail)   Пропущено: $($json.skip)"
-                    if ($json.message) { $errParts += [string]$json.message }
+                    # message — причина ОТКАЗА, и только при отказе она ошибка: при
+                    # state=success любое информационное сообщение воркера иначе
+                    # превращало успешный батч в «Ошибку» с MessageBox. Fail-closed
+                    # это не ослабляет — он держится на state, а не на message.
+                    if ($json.message -and $state -ne "success") { $errParts += [string]$json.message }
                 }
             } catch {}
 
@@ -1838,6 +1860,14 @@ if ($form.Height -gt $wa.Height) {
     $form.Width  = [Math]::Min($form.Width + [System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth, $wa.Width)
 }
 if ($form.Width -gt $wa.Width) { $form.Width = $wa.Width }
+
+# Предупреждения разбора config.ini (см. Expand-ConfigEnv) — одним окном и уже
+# поверх открытой формы, а не россыпью MessageBox до её появления.
+if ($script:configWarnings.Count -gt 0) {
+    $form.Add_Shown({
+        [System.Windows.Forms.MessageBox]::Show(($script:configWarnings -join "`n"), "config.ini", "OK", "Warning") | Out-Null
+    })
+}
 
 # ========== Получить версию ffmpeg — после отрисовки формы (через отложенный вызов) ==========
 $form.Add_Shown({

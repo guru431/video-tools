@@ -625,12 +625,6 @@ function Test-RemoteFallbackAllowed {
 		Log-Msg "WARN" "${Name}: $Reason, но прогон остановлен — локально не считаем"
 		return $false
 	}
-	# Отмена пользователем (Stop) — не «служба недоступна»: считать файл локально
-	# после явной остановки значит проигнорировать саму остановку.
-	if ($guiCancelFile -and (Test-Path -LiteralPath $guiCancelFile)) {
-		Log-Msg "WARN" "${Name}: $Reason, но прогон остановлен — локально не считаем"
-		return $false
-	}
 	# Тонкий клиент без ffmpeg откатываться некуда — честнее сказать это вслух.
 	if (-not $ffmpeg_available) {
 		Log-Msg "WARN" "${Name}: $Reason, а локального ffmpeg нет — откат невозможен"
@@ -1201,10 +1195,12 @@ function Encode-File {
 				if ($lineStr -match "silence_start:\s+(-?[\d.]+)") { $silence_start_val = [double]$matches[1] }
 				if ($lineStr -match "silence_end:\s+(-?[\d.]+)" -and $null -ne $silence_start_val) {
 					$silence_end_val = [double]$matches[1]
-					# Floor, а не [int]: приведение к int в .NET округляет «к ближайшему
-					# чётному» (банковское), а printf "%d" в .sh усекает — точка разреза
-					# по одной и той же паузе отличалась между платформами на секунду.
-					$split_points += [int][Math]::Floor(($silence_start_val + $silence_end_val) / 2)
+					# Truncate, а не [int] и не Floor: приведение к int в .NET округляет «к
+					# ближайшему чётному» (банковское), а printf "%d" в .sh усекает К НУЛЮ —
+					# точка разреза по одной и той же паузе отличалась между платформами на
+					# секунду. Floor совпадал с усечением только для положительных значений,
+					# а silence_start бывает отрицательным (см. шаблон выше).
+					$split_points += [int][Math]::Truncate(($silence_start_val + $silence_end_val) / 2)
 				}
 			}
 		}
@@ -1229,7 +1225,10 @@ function Encode-File {
 					$d = [Math]::Abs($p - $nominal)
 					if ($d -lt $best_diff) { $best_diff = $d; $best_point = $p }
 				}
-				if ($best_diff -le [int]($length_coding_value / 2)) { $bnd = $best_point }
+				# Floor — паритет с целочисленным length_coding_value/2 в .sh: [int] здесь
+				# округлял бы банковски, и при length = 7 порог был бы 4 против 3 в SH —
+				# одна пауза притягивалась бы на одной платформе и нет на другой.
+				if ($best_diff -le [int][Math]::Floor($length_coding_value / 2)) { $bnd = $best_point }
 			}
 			# Монотонность: граница обязана строго расти, иначе получим часть нулевой или
 			# отрицательной длины (две номинальные точки могли притянуться к одной тишине).
@@ -1451,29 +1450,32 @@ function Encode-File {
 					if ((-not $fileDuration -or $fileDuration -le 0) -and $script:RemoteUploadDuration) {
 						$fileDuration = [int]([double]$script:RemoteUploadDuration)
 					}
-					$script:remoteSubId = ''
-					# Файл субтитров приходит той же дорогой, что видео: путей в
-					# параметрах служба не принимает по построению.
-					# Провал загрузки титров — ПРОВАЛ части, а не тихое «без титров»:
-					# раньше задача создавалась без subtitle_upload_id, и файл
-					# приезжал без субтитров со статусом OK.
-					if ($sub_found -and $sub_file) {
-						$script:remoteSubId = Send-RemoteUpload $sub_file
-						if (-not $script:remoteSubId) {
-							if (Test-RemoteFallbackAllowed $file.Name "загрузка файла субтитров не удалась") {
-								$partRemote = $false
-							} else {
-								Log-Msg "FAIL" "$($file.Name): загрузка файла субтитров не удалась"
-								$script:anyFail = $true; $script:countFail++
-								$partRemote = $false; $partDone = $true
-							}
-						}
-					}
 				} else {
 					if (Test-RemoteFallbackAllowed $file.Name "загрузка не удалась") {
 						$partRemote = $false
 					} else {
 						Log-Msg "FAIL" "$($file.Name): загрузка не удалась"
+						$script:anyFail = $true; $script:countFail++
+						$partRemote = $false; $partDone = $true
+					}
+				}
+			}
+			# Файл субтитров приходит той же дорогой, что видео: путей в параметрах
+			# служба не принимает по построению. Это ОТДЕЛЬНЫЙ шаг, а не хвост ветки
+			# загрузки видео выше: у тонкого клиента с [split] length видео грузится
+			# ещё до цикла (ради длительности), ветка выше не исполняется ни для одной
+			# части, и задача уходила без subtitle_upload_id — burn/meta приезжали без
+			# субтитров со статусом OK. Тот же исход давала и часть, идущая следом за
+			# откатом на локальный ffmpeg из-за сбоя загрузки титров. Паритет с .sh.
+			# Провал загрузки титров — ПРОВАЛ части, а не тихое «без титров».
+			if ($partRemote -and $dry_run -ne 'yes' -and -not $rJobSaved -and
+			    $sub_found -and $sub_file -and -not $script:remoteSubId) {
+				$script:remoteSubId = Send-RemoteUpload $sub_file
+				if (-not $script:remoteSubId) {
+					if (Test-RemoteFallbackAllowed $file.Name "загрузка файла субтитров не удалась") {
+						$partRemote = $false
+					} else {
+						Log-Msg "FAIL" "$($file.Name): загрузка файла субтитров не удалась"
 						$script:anyFail = $true; $script:countFail++
 						$partRemote = $false; $partDone = $true
 					}

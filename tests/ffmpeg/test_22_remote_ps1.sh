@@ -168,6 +168,33 @@ assert_eq "av1 не находится, когда его нет" "False"     "$
 # одна из них молча собирает тело по контракту, которого у службы больше нет.
 assert_eq "версия сборщика = 2" "2" "$(run_ps "\$script:RemoteClientArgsVersion")"
 
+# Служба, не объявившая контейнеров (ключа ops нет вовсе — прежняя версия за
+# прокси), обязана приниматься: «молчание службы не повод отказывать». В PS1
+# @($null) давал массив из ОДНОГО элемента, проверка «список разобран»
+# срабатывала, и preflight отвергал каждый запуск с пустым «Служба объявила: ».
+_harness="$(mktemp_suffix "${TMPDIR:-/tmp}/remote_pf_" .ps1)"
+cat > "$_harness" <<'PSEOF'
+param([string]$Module)
+. $Module
+$script:capsBody = ''
+function Invoke-RemoteHttp {
+	param([string]$Method, [string]$Path, [string]$Body = '', [hashtable]$Headers = @{},
+	      [string]$OutFile = '', [string]$InFile = '', [byte[]]$InBytes = $null, [int]$TimeoutMs = 60000)
+	return [pscustomobject]@{ Code = 200; Body = $script:capsBody }
+}
+$remote_endpoint = 'http://mock.invalid/v1'; $remote_api_key = 'k'
+$set_video_codec = 'libx264'; $output_container_status = '+'; $output_container_value = 'mp4'
+$script:capsBody = '{"args_version":"2","chunk_size":1048576}'
+Write-Output ("NOOPS=" + [bool](Invoke-RemotePreflight 6>$null))
+$script:capsBody = '{"args_version":"2","chunk_size":1048576,"ops":{"transcode":{"values":{"container":["mkv"]}}}}'
+Write-Output ("MKVONLY=" + [bool](Invoke-RemotePreflight 6>$null))
+PSEOF
+_out="$("$PS_BIN" -NoProfile -NonInteractive -File "$_harness" -Module "$MODULE" 2>&1 | tr -d '\r')"
+_f() { printf '%s\n' "$_out" | grep "^${1}=" | sed "s/^${1}=//"; }
+assert_eq "контейнеры не объявлены — служба принята" "True"  "$(_f NOOPS)"
+assert_eq "объявлен только mkv — mp4 отвергнут"       "False" "$(_f MKVONLY)"
+rm -f "$_harness"
+
 # ══════════════════════════════════════════════════════════════
 suite "remote PS1: короткое чтение и повтор куска"
 # ══════════════════════════════════════════════════════════════
@@ -330,6 +357,20 @@ Remove-Item -LiteralPath \$script:RemoteUploadSidecar -Force
 Write-RemoteUploadSidecarJob -Source \$src -Part 1 -Signature 'SIG-C' -JobId 'job-90'
 Write-Output ("CREATED=" + (Test-Path -LiteralPath \$script:RemoteUploadSidecar))
 Write-Output ("AFTER=" + (Read-RemoteUploadSidecarJob -Source \$src -Part 1 -Signature 'SIG-C'))
+# Запись — через соседний .tmp и File.Replace: WriteAllLines/AppendAllText прямо в
+# целевой файл сперва его усекали, и обрыв стоил полной повторной загрузки.
+# Сорванная запись (место .tmp занято каталогом) обязана оставить sidecar целым.
+\$before = [System.IO.File]::ReadAllText(\$script:RemoteUploadSidecar)
+[void](New-Item -ItemType Directory -Path "\$(\$script:RemoteUploadSidecar).tmp")
+Write-RemoteUploadSidecar -UploadId 'up-99' -Size 1 -Source \$src
+Set-RemoteUploadSidecarCompleted
+Write-Output ("INTACT=" + (\$before -eq [System.IO.File]::ReadAllText(\$script:RemoteUploadSidecar)))
+Remove-Item -LiteralPath "\$(\$script:RemoteUploadSidecar).tmp" -Force
+Set-RemoteUploadSidecarCompleted
+\$txt = [System.IO.File]::ReadAllText(\$script:RemoteUploadSidecar)
+Write-Output ("MARKED=" + [bool](\$txt -match 'complete=yes'))
+Write-Output ("JOBKEPT=" + [bool](\$txt -match 'job\.1=job-90'))
+Write-Output ("NOTMP=" + (-not (Test-Path -LiteralPath "\$(\$script:RemoteUploadSidecar).tmp")))
 # Подтверждённая загрузка не отправляется заново и НЕ подтверждается повторно.
 [System.IO.File]::WriteAllLines(\$script:RemoteUploadSidecar, @(
 	'upload_id=up-70', "size=\$(\$it.Length)", "mtime=\$mt",
@@ -371,6 +412,10 @@ assert_empty "задача прежней подписи удалена"        
 assert_eq "upload_id пережил перезапись"      "True"   "$(_f KEEPUID)"
 assert_eq "sidecar создан при записи задачи"  "True"   "$(_f CREATED)"
 assert_eq "задача читается из созданного"     "job-90" "$(_f AFTER)"
+assert_eq "сорванная запись не тронула sidecar" "True"  "$(_f INTACT)"
+assert_eq "complete=yes дописан"              "True"   "$(_f MARKED)"
+assert_eq "задача пережила пометку complete"  "True"   "$(_f JOBKEPT)"
+assert_eq "временный .tmp не остаётся"        "True"   "$(_f NOTMP)"
 assert_eq "идентификатор взят из sidecar"     "up-70"  "$(_f SKIPUID)"
 assert_eq "длительность взята у probe"        "42"     "$(_f SKIPDUR)"
 assert_eq "байты заново не отправляются"      "False"  "$(_f PATCHED)"
@@ -380,6 +425,127 @@ assert_eq "исчезнувшая задача негодна"        "False"  "
 assert_eq "провалившаяся задача негодна"      "False"  "$(_f BAD)"
 assert_eq "пустой идентификатор негоден"      "False"  "$(_f EMPTY)"
 rm -f "$_harness" "$_src" "$_sc"
+
+# ══════════════════════════════════════════════════════════════
+suite "remote PS1: тонкий клиент + [split] length — субтитры с каждой частью"
+# ══════════════════════════════════════════════════════════════
+# Двойник suite'а в test_07. Без локального ffmpeg длительность знает только
+# служба, поэтому видео грузится ДО цикла по частям, и загрузка субтитров, жившая
+# внутри ветки «видео ещё не загружено», не исполнялась ни для одной части.
+# Настоящий script.ps1; модуль подключён заранее, поэтому скрипт его не
+# перечитывает, и подменённый Invoke-RemoteHttp остаётся в силе.
+_tc_in="$(mktemp -d "${TMPDIR:-/tmp}/remote_tc_in_XXXXXX")"
+_tc_out="$(mktemp -d "${TMPDIR:-/tmp}/remote_tc_out_XXXXXX")"
+printf 'video-bytes' > "$_tc_in/clip.mp4"
+printf '1\n00:00:01,000 --> 00:00:02,000\nhello\n' > "$_tc_in/clip.srt"
+_harness="$(mktemp_suffix "${TMPDIR:-/tmp}/remote_tc_" .ps1)"
+cat > "$_harness" <<PSEOF
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+\$env:REMOTE_POLL_SECONDS = '0'
+\$env:REMOTE_RETRY_SECONDS = '0'
+. '$MODULE'
+\$script:calls = New-Object System.Collections.ArrayList
+function Invoke-RemoteHttp {
+	param([string]\$Method, [string]\$Path, [string]\$Body = '',
+	      [hashtable]\$Headers = @{}, [string]\$OutFile = '', [string]\$InFile = '',
+	      [byte[]]\$InBytes = \$null, [int]\$TimeoutMs = 60000)
+	[void]\$script:calls.Add("\$Method \$Path \$Body")
+	\$b = switch ("\$Method \$Path") {
+		'GET /capabilities'             { '{"args_version":"2","chunk_size":1048576}' }
+		'POST /uploads'                 { '{"upload_id":"up-1"}' }
+		'PATCH /uploads/up-1'           { '{}' }
+		'POST /uploads/up-1/complete'   { '{"upload_id":"up-1","status":"complete"}' }
+		'GET /uploads/up-1/probe'       { '{"duration":20}' }
+		'POST /jobs'                    { '{"job_id":"job-1","state":"queued"}' }
+		'GET /jobs/job-1'               { '{"job_id":"job-1","state":"failed","error":"test"}' }
+		'DELETE /jobs/job-1'            { '{}' }
+		default                         { \$null }
+	}
+	if (\$null -eq \$b) { return [pscustomobject]@{ Code = 404; Body = '{}' } }
+	return [pscustomobject]@{ Code = 200; Body = \$b }
+}
+\$ErrorActionPreference = 'Continue'
+\$folder_sources = (Get-Item -LiteralPath '$(cygpath -w "$_tc_in" 2>/dev/null || echo "$_tc_in")').FullName + [IO.Path]::DirectorySeparatorChar
+\$folder_destination = (Get-Item -LiteralPath '$(cygpath -w "$_tc_out" 2>/dev/null || echo "$_tc_out")').FullName + [IO.Path]::DirectorySeparatorChar
+\$ffmpeg = 'C:\nonexistent\ffmpeg-does-not-exist.exe'; \$ffprobe = \$ffmpeg
+\$audio_codec=':+:aac'; \$audio_number_channels=':-:2'; \$audio_bitrate=':-:128'
+\$audio_sampling_rate=':-:44100'; \$audio_normalize=':-:loudnorm'
+\$video_codec=':+:libx264'; \$video_resolution=':-:1280x720'; \$video_bitrate=':-:2000'
+\$video_number_frames=':-:25'; \$video_rotation=':-:2'; \$video_subtitles=':+:burn'
+\$video_quality=':+:23'; \$keep_aspect_ratio=':+:yes'; \$output_container=':+:mp4'
+\$multithreads=':-:4'; \$parallel_files=':-:2'
+\$hw_accel=':-:nvidia'; \$gpu_preset=':-:p5'; \$gpu_tune=':-:hq'; \$gpu_rc=':-:vbr'
+\$playback_speed=':-:1.0'; \$start_coding=':-:01-00-00'; \$length_coding=':+:00-00-10'
+\$split_by_silence='no'; \$silence_duration='2.0'; \$silence_threshold='-30dB'
+\$save_old_extension='no'; \$format_files_in='mp4'
+\$subtitles_style=''; \$dry_run='no'; \$enable_log='no'; \$log_file=''
+\$audio_only='no'; \$merge_files='no'; \$create_frame='no'
+\$copy_codecs='no'; \$extract_audio_copy='no'; \$overwrite_existing='yes'
+\$remote_enabled='yes'; \$remote_endpoint='http://mock.invalid/v1'; \$remote_api_key='k'
+\$remote_api_key_command=''; \$remote_prefer='auto'; \$remote_wait_timeout='60'
+\$remote_stall_timeout='60'; \$remote_on_failure='abort'
+try { . '$(cd "$PROJECT_DIR/ffmpeg" && pwd -W 2>/dev/null || echo "$PROJECT_DIR/ffmpeg")/FFmpeg_Converter_script.ps1' } catch {}
+\$jobs = @(\$script:calls | Where-Object { \$_ -like 'POST /jobs *' })
+Write-Output ("JOBS=" + \$jobs.Count)
+Write-Output ("WITHSUB=" + @(\$jobs | Where-Object { \$_ -match 'subtitle_upload_id' }).Count)
+PSEOF
+_out="$("$PS_BIN" -NoProfile -NonInteractive -File "$_harness" 2>&1 < /dev/null | tr -d '\r')"
+_f() { printf '%s\n' "$_out" | grep "^${1}=" | sed "s/^${1}=//"; }
+assert_eq "задач создано по числу частей"          "2" "$(_f JOBS)"
+assert_eq "каждая задача несёт subtitle_upload_id" "2" "$(_f WITHSUB)"
+rm -f "$_harness"; rm -rf "$_tc_in" "$_tc_out"
+
+# ══════════════════════════════════════════════════════════════
+suite "remote PS1: сбой записи результата не повторяется"
+# ══════════════════════════════════════════════════════════════
+# Общий catch в Invoke-RemoteHttp отдавал Code = 0 на ЛЮБОЕ исключение, включая
+# ошибку записи результата на диск, а 0 считается обрывом связи — результат на
+# 3 ГБ выкачивался заново до четырёх раз при заведомо неустранимой причине.
+# Здесь настоящий Invoke-RemoteHttp против локального TCP-сервера (без http.sys и
+# URL ACL): служба отвечает 200, а путь назначения ведёт в несуществующий каталог.
+_harness="$(mktemp_suffix "${TMPDIR:-/tmp}/remote_wr_" .ps1)"
+_nodir="$(mktemp -d "${TMPDIR:-/tmp}/remote_wr_dir_XXXXXX")"
+_nodir_win="$(cygpath -w "$_nodir" 2>/dev/null || echo "$_nodir")"
+cat > "$_harness" <<PSEOF
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+. '$MODULE'
+\$env:REMOTE_RETRY_SECONDS = '0'
+\$tl = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+\$tl.Start()
+\$hits = [hashtable]::Synchronized(@{ n = 0 })
+\$srv = [PowerShell]::Create().AddScript({
+	param(\$tl, \$hits)
+	while (\$true) {
+		\$c = \$tl.AcceptTcpClient(); \$hits.n++
+		\$s = \$c.GetStream(); \$b = New-Object byte[] 8192; [void]\$s.Read(\$b, 0, \$b.Length)
+		\$r = [System.Text.Encoding]::ASCII.GetBytes("HTTP/1.1 200 OK\`r\`nContent-Length: 6\`r\`nConnection: close\`r\`n\`r\`nRESULT")
+		\$s.Write(\$r, 0, \$r.Length); \$s.Flush(); \$c.Close()
+	}
+}).AddArgument(\$tl).AddArgument(\$hits)
+[void]\$srv.BeginInvoke()
+\$remote_endpoint = "http://127.0.0.1:\$(\$tl.LocalEndpoint.Port)/v1"
+\$remote_api_key = 'k'
+\$ok = Join-Path '$_nodir_win' 'ok.bin'
+\$r = Invoke-RemoteHttpRetry GET '/jobs/j/result' '' @{} \$ok '' \$null 5000
+Write-Output ("OKCODE=" + \$r.Code)
+Write-Output ("OKBODY=" + [System.IO.File]::ReadAllText(\$ok))
+\$hits.n = 0
+\$bad = Join-Path '$_nodir_win' 'no-such-dir\res.bin'
+\$r = Invoke-RemoteHttpRetry GET '/jobs/j/result' '' @{} \$bad '' \$null 5000
+Write-Output ("BADCODE=" + \$r.Code)
+Write-Output ("BADHITS=" + \$hits.n)
+Write-Output ("RECV=" + (Receive-RemoteResult 'j' \$bad))
+\$tl.Stop()
+PSEOF
+_out="$("$PS_BIN" -NoProfile -NonInteractive -File "$_harness" 2>&1 | tr -d '\r')"
+_f() { printf '%s\n' "$_out" | grep "^${1}=" | sed "s/^${1}=//"; }
+assert_eq "исправный путь: результат записан"      "200"    "$(_f OKCODE)"
+assert_eq "исправный путь: содержимое целиком"     "RESULT" "$(_f OKBODY)"
+assert_eq "сбой записи — отдельный код -1"          "-1"     "$(_f BADCODE)"
+assert_eq "сбой записи не повторяется"              "1"      "$(_f BADHITS)"
+assert_eq "Receive-RemoteResult отдаёт отказ"       "False"  "$(_f RECV)"
+assert_contains "причина названа, а не «HTTP -1»"   "запись на диск не удалась" "$_out"
+rm -f "$_harness"; rm -rf "$_nodir"
 
 # ══════════════════════════════════════════════════════════════
 suite "remote PS1: валидация числовых значений config.ini"

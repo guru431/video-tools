@@ -121,9 +121,19 @@ try {
             # STRICT_SKIP=1 — как Windows CI: падаем, если ЦЕЛЫЙ CMD/PS1 suite пропущен
             # (cmd/powershell недоступны). Без него release-гейт слабее CI: частичный прогон
             # уходил бы зелёным. run_tests.sh вернёт rc=1 при полностью пропущенном suite'е.
+            # Переменная живёт только на время прогона: $env: — это окружение ПРОЦЕССА,
+            # и без восстановления она доставалась бы обеим сборкам ниже, а при запуске
+            # из открытой консоли (.\tools\check_release.ps1) — и всей сессии после.
+            $prevStrict = $env:STRICT_SKIP
             $env:STRICT_SKIP = '1'
-            & $bash tests/run_tests.sh
-            if ($LASTEXITCODE -ne 0) { throw "тесты провалены (rc=$LASTEXITCODE)" }
+            try {
+                & $bash tests/run_tests.sh
+                $testsRc = $LASTEXITCODE
+            } finally {
+                if ($null -eq $prevStrict) { Remove-Item -LiteralPath Env:STRICT_SKIP -ErrorAction SilentlyContinue }
+                else { $env:STRICT_SKIP = $prevStrict }
+            }
+            if ($testsRc -ne 0) { throw "тесты провалены (rc=$testsRc)" }
         }
         Write-Host "== Сборка EXE =="
         # После КАЖДОЙ сборки сразу проверяем $LASTEXITCODE: последовательные native-вызовы

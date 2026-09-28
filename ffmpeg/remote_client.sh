@@ -665,11 +665,23 @@ remote_upload_sidecar_completed() {
 	grep -q '^complete=yes$' "$f" 2>/dev/null
 }
 
+# Sidecar пишется ЦЕЛИКОМ через соседний .new и mv. Запись `> "$f"` сперва
+# усекает файл: падение между усечением и записью оставляло пустой или обрезанный
+# sidecar, отпечаток не сходился, и файл уезжал на полную повторную загрузку —
+# ровно то, ради чего sidecar заведён. Итоговое содержимое приходит на stdin.
+# Паритет с Save-RemoteUploadSidecarLines в .ps1.
+remote_sidecar_save() {
+	local f="$1" rc=0
+	{ cat > "${f}.new"; } 2>/dev/null && mv -f "${f}.new" "$f" 2>/dev/null || rc=1
+	rm -f "${f}.new" 2>/dev/null
+	return $rc
+}
+
 remote_upload_sidecar_mark_complete() {
 	local f="$REMOTE_UPLOAD_SIDECAR"
 	[ -n "$f" ] && [ -f "$f" ] || return 0
 	grep -q '^complete=yes$' "$f" 2>/dev/null && return 0
-	echo "complete=yes" >> "$f" 2>/dev/null || true
+	{ cat "$f"; echo "complete=yes"; } | remote_sidecar_save "$f" || true
 	return 0
 }
 
@@ -696,27 +708,28 @@ remote_upload_sidecar_write_job() {
 	# создаём с отпечатком. Прежняя версия в этом случае молча выходила, а после
 	# успешного complete файла как раз НЕ БЫЛО — sidecar удалялся там же, — поэтому
 	# идентификатор задачи не попадал в него НИ РАЗУ и фича не работала вовсе.
-	if [ ! -f "$f" ]; then
-		{
-			echo "upload_id="
-			echo "size=$(file_size "$src")"
-			echo "mtime=$(remote_file_mtime "$src")"
-			echo "endpoint=$remote_endpoint"
-		} > "$f" 2>/dev/null || return 0
+	local cur=""
+	if [ -f "$f" ]; then
+		cur="$(cat "$f" 2>/dev/null)"
+	else
+		cur="upload_id=
+size=$(file_size "$src")
+mtime=$(remote_file_mtime "$src")
+endpoint=$remote_endpoint"
 	fi
-	stored="$(sed -n 's/^sig=//p' "$f" | head -1)"
+	stored="$(printf '%s\n' "$cur" | sed -n 's/^sig=//p' | head -1)"
 	if [ "$stored" != "$sig" ]; then
 		# Настройки сменились — прежние задачи считались по другому config.ini.
 		# Без этой перезаписи sidecar навсегда остался бы с чужой подписью, и
 		# возобновление молча не работало бы до его удаления руками.
-		{
-			sed -e '/^sig=/d' -e '/^job\./d' "$f"
-			echo "sig=$sig"
-		} > "${f}.new" 2>/dev/null && mv -f "${f}.new" "$f" 2>/dev/null
-		rm -f "${f}.new" 2>/dev/null
+		cur="$(printf '%s\n' "$cur" | sed -e '/^sig=/d' -e '/^job\./d')
+sig=$sig"
+	elif printf '%s\n' "$cur" | grep -q "^job\.${part}="; then
+		return 0
 	fi
-	grep -q "^job\.${part}=" "$f" 2>/dev/null && return 0
-	echo "job.${part}=$jid" >> "$f" 2>/dev/null || true
+	# Одна запись итогового содержимого вместо цепочки «создать → переписать →
+	# дописать»: каждое звено было отдельным окном для обрыва.
+	printf '%s\njob.%s=%s\n' "$cur" "$part" "$jid" | remote_sidecar_save "$f" || true
 	return 0
 }
 
@@ -728,11 +741,11 @@ remote_upload_sidecar_write() {
 		echo "size=$(file_size "$src")"
 		echo "mtime=$(remote_file_mtime "$src")"
 		echo "endpoint=$remote_endpoint"
-	} > "$f" 2>/dev/null || true
+	} | remote_sidecar_save "$f" || true
 }
 
 remote_upload_sidecar_clear() {
-	[ -n "$REMOTE_UPLOAD_SIDECAR" ] && rm -f "$REMOTE_UPLOAD_SIDECAR" 2>/dev/null
+	[ -n "$REMOTE_UPLOAD_SIDECAR" ] && rm -f "$REMOTE_UPLOAD_SIDECAR" "${REMOTE_UPLOAD_SIDECAR}.new" 2>/dev/null
 	return 0
 }
 

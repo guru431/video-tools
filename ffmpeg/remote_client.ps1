@@ -329,10 +329,32 @@ function Invoke-RemoteHttp {
 		$resp = $req.GetResponse()
 		$code = [int]$resp.StatusCode
 		if ($OutFile) {
-			# Потоком в файл: тело может быть в гигабайты.
+			# Потоком в файл: тело может быть в гигабайты. Чтение из сети и запись
+			# на диск разведены, а не слиты в CopyTo: сбой ЗАПИСИ (диск полон, нет
+			# прав, путь занят каталогом) — локальная ошибка, и повтор её не
+			# исправит. Раньше она уходила в общий catch с Code = 0, который
+			# Test-RemoteRetryableCode считает обрывом связи, и результат на 3 ГБ
+			# выкачивался заново до четырёх раз. Код -1 не повторяется; сбой
+			# ЧТЕНИЯ из сети по-прежнему идёт в общий catch и повторяется.
 			$src = $resp.GetResponseStream()
-			$dst = [System.IO.File]::Create($OutFile)
-			try { $src.CopyTo($dst, 1048576) } finally { $dst.Dispose(); $src.Dispose() }
+			$localErr = ''
+			$dst = $null
+			try { $dst = [System.IO.File]::Create($OutFile) } catch { $localErr = $_.Exception.Message }
+			try {
+				if ($dst) {
+					$buf = New-Object byte[] 1048576
+					while (($n = $src.Read($buf, 0, $buf.Length)) -gt 0) {
+						try { $dst.Write($buf, 0, $n) } catch { $localErr = $_.Exception.Message; break }
+					}
+				}
+			} finally {
+				if ($dst) { try { $dst.Dispose() } catch { if (-not $localErr) { $localErr = $_.Exception.Message } } }
+				$src.Dispose()
+			}
+			if ($localErr) {
+				$resp.Close()
+				return [pscustomobject]@{ Code = -1; Body = "запись на диск не удалась: $localErr" }
+			}
 			$text = ''
 		} else {
 			$sr = New-Object System.IO.StreamReader($resp.GetResponseStream())
@@ -434,7 +456,11 @@ function Invoke-RemotePreflight {
 	# равнялась времени загрузки гигабайтов. Спрашиваем здесь.
 	$script:RemoteCapsWaitMax = if ($null -ne $caps.limits) { $caps.limits.wait_timeout_max_s } else { $null }
 	$script:RemoteCapsContainers = @()
-	try { $script:RemoteCapsContainers = @($caps.ops.transcode.values.container) } catch {}
+	# Where-Object обязателен: без ключа ops выражение даёт $null, а @($null) — это
+	# массив из ОДНОГО элемента. Проверка «список разобран» ниже срабатывала, и
+	# служба, не объявившая контейнеров, отвергалась на каждом запуске («не умеет
+	# mp4. Служба объявила: » с пустым списком). SH-двойник проверяет непустую строку.
+	try { $script:RemoteCapsContainers = @($caps.ops.transcode.values.container | Where-Object { $_ }) } catch {}
 	# Пустой список и отсутствие ключа — разные вещи: первое означает «служба не
 	# умеет ничего» и обязано быть отказом, второе — «служба ничего не сказала».
 	if (($caps.PSObject.Properties.Name -contains 'encoders') -and @($script:RemoteEncoders).Count -eq 0) {
@@ -484,6 +510,25 @@ function Invoke-RemotePreflight {
 # GET /uploads/<свежий id> честно отвечал received: 0. Путь задаёт вызывающий
 # ($script:RemoteUploadSidecar, рядом с manifest'ом).
 $script:RemoteUploadSidecar = ''
+
+# Sidecar пишется ЦЕЛИКОМ через соседний .tmp и File.Replace/Move — тот же приём,
+# что у файла прогресса GUI. WriteAllLines и AppendAllText прямо в целевой файл
+# сперва его усекают: падение между усечением и записью оставляло пустой или
+# обрезанный sidecar, парсер молча возвращал пустую карту, и файл уезжал на полную
+# повторную загрузку — ровно то, ради чего sidecar заведён. Паритет с
+# remote_sidecar_save в .sh.
+function Save-RemoteUploadSidecarLines {
+	param([string]$Path, [string[]]$Lines)
+	$tmp = "$Path.tmp"
+	[System.IO.File]::WriteAllLines($tmp, $Lines)
+	if ([System.IO.File]::Exists($Path)) {
+		# [NullString]::Value, а не $null: PowerShell превращает $null в строковом
+		# параметре .NET-метода в "", и File.Replace отвечает «путь пуст».
+		[System.IO.File]::Replace($tmp, $Path, [NullString]::Value)
+	} else {
+		[System.IO.File]::Move($tmp, $Path)
+	}
+}
 
 function Get-RemoteUploadSidecarMap {
 	$map = @{}
@@ -538,8 +583,9 @@ function Set-RemoteUploadSidecarCompleted {
 	$f = $script:RemoteUploadSidecar
 	if (-not $f -or -not (Test-Path -LiteralPath $f)) { return }
 	try {
-		foreach ($line in [System.IO.File]::ReadAllLines($f)) { if ($line -eq 'complete=yes') { return } }
-		[System.IO.File]::AppendAllText($f, "complete=yes`n")
+		$lines = @([System.IO.File]::ReadAllLines($f))
+		if ($lines -contains 'complete=yes') { return }
+		Save-RemoteUploadSidecarLines $f ($lines + @('complete=yes'))
 	} catch {}
 }
 
@@ -570,16 +616,17 @@ function Write-RemoteUploadSidecarJob {
 		# выходила, а после успешного complete файла как раз НЕ БЫЛО — sidecar
 		# удалялся там же, — поэтому идентификатор задачи не попадал в него НИ РАЗУ
 		# и фича не работала вовсе.
-		if (-not (Test-Path -LiteralPath $f)) {
+		if (Test-Path -LiteralPath $f) {
+			$lines = @([System.IO.File]::ReadAllLines($f))
+		} else {
 			$sz = 0; $mt = '0'
 			try {
 				$it = Get-Item -LiteralPath $Source
 				$sz = $it.Length
 				$mt = "$([int64]($it.LastWriteTimeUtc - [datetime]'1970-01-01').TotalSeconds)"
 			} catch {}
-			[System.IO.File]::WriteAllLines($f, @("upload_id=", "size=$sz", "mtime=$mt", "endpoint=$remote_endpoint"))
+			$lines = @("upload_id=", "size=$sz", "mtime=$mt", "endpoint=$remote_endpoint")
 		}
-		$lines = @([System.IO.File]::ReadAllLines($f))
 		$stored = ''
 		foreach ($l in $lines) { if ($l -like 'sig=*') { $stored = $l.Substring(4); break } }
 		if ($stored -ne $Signature) {
@@ -587,10 +634,12 @@ function Write-RemoteUploadSidecarJob {
 			# Без этой перезаписи sidecar навсегда остался бы с чужой подписью, и
 			# возобновление молча не работало бы до его удаления руками.
 			$lines = @($lines | Where-Object { $_ -notlike 'sig=*' -and $_ -notlike 'job.*' }) + @("sig=$Signature")
-			[System.IO.File]::WriteAllLines($f, $lines)
+		} elseif (@($lines | Where-Object { $_ -like "job.$Part=*" }).Count -gt 0) {
+			return
 		}
-		foreach ($l in [System.IO.File]::ReadAllLines($f)) { if ($l -like "job.$Part=*") { return } }
-		[System.IO.File]::AppendAllText($f, "job.$Part=$JobId`n")
+		# Одна запись итогового содержимого вместо цепочки «создать → переписать →
+		# дописать»: каждое звено было отдельным окном для обрыва.
+		Save-RemoteUploadSidecarLines $f ($lines + @("job.$Part=$JobId"))
 	} catch {}
 }
 
@@ -603,13 +652,13 @@ function Write-RemoteUploadSidecar {
 		try { $mt = "$([int64]((Get-Item -LiteralPath $Source).LastWriteTimeUtc - [datetime]'1970-01-01').TotalSeconds)" } catch {}
 	}
 	try {
-		[System.IO.File]::WriteAllLines($f, @("upload_id=$UploadId", "size=$Size", "mtime=$mt", "endpoint=$remote_endpoint"))
+		Save-RemoteUploadSidecarLines $f @("upload_id=$UploadId", "size=$Size", "mtime=$mt", "endpoint=$remote_endpoint")
 	} catch {}
 }
 
 function Clear-RemoteUploadSidecar {
 	$f = $script:RemoteUploadSidecar
-	if ($f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+	if ($f) { Remove-Item -LiteralPath $f, "$f.tmp" -Force -ErrorAction SilentlyContinue }
 }
 
 # Повторять имеет смысл обрыв и перегрузку, а не отказ по существу: 413 не
@@ -929,6 +978,12 @@ function Receive-RemoteResult {
 	# Скачивание результата — долгий запрос, 60 с общего таймаута ему мало.
 	$script:RemoteResultVerified = 'no'
 	$r = Invoke-RemoteHttpRetry GET "/jobs/$JobId/result" '' @{} $Destination '' $null 3600000
+	if ($r.Code -eq -1) {
+		# Служба результат отдала, не смогли сохранить мы (см. Invoke-RemoteHttp).
+		Write-Host "[ОШИБКА] Результат получен, но $($r.Body)"
+		Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
+		return $false
+	}
 	if ($r.Code -ne 200) {
 		Write-Host "[ОШИБКА] Результат недоступен: HTTP $($r.Code)."
 		Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue

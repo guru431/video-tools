@@ -14,8 +14,8 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 
 $exes = @(
-    @{ Path = 'ffmpeg/_VideoConverter_v18.exe';  Source = 'ffmpeg/FFmpeg_Converter_run_win_v18.ps1' },
-    @{ Path = 'yt-dlp/_VideoDownloader_v18.exe'; Source = 'yt-dlp/Downloading_from_YouTube_v18.ps1' }
+    @{ Path = 'ffmpeg/_VideoConverter_v19.exe';  Source = 'ffmpeg/FFmpeg_Converter_run_win_v19.ps1' },
+    @{ Path = 'yt-dlp/_VideoDownloader_v19.exe'; Source = 'yt-dlp/Downloading_from_YouTube_v19.ps1' }
 )
 function Get-Sha256([string]$p) { (Get-FileHash -Algorithm SHA256 -LiteralPath $p).Hash }
 
@@ -26,12 +26,12 @@ function Get-Sha256([string]$p) { (Get-FileHash -Algorithm SHA256 -LiteralPath $
 # а пользователь EXE получает поведение прошлой версии. Сверяем провенанс:
 # коммит сборки обязан быть НЕ СТАРШЕ последнего коммита, тронувшего исходник.
 $exeDeps = @{
-    'ffmpeg/_VideoConverter_v18.exe'  = @(
-        'ffmpeg/FFmpeg_Converter_run_win_v18.ps1',
+    'ffmpeg/_VideoConverter_v19.exe'  = @(
+        'ffmpeg/FFmpeg_Converter_run_win_v19.ps1',
         'ffmpeg/FFmpeg_Converter_script.ps1',
         'ffmpeg/remote_client.ps1')
-    'yt-dlp/_VideoDownloader_v18.exe' = @(
-        'yt-dlp/Downloading_from_YouTube_v18.ps1')
+    'yt-dlp/_VideoDownloader_v19.exe' = @(
+        'yt-dlp/Downloading_from_YouTube_v19.ps1')
 }
 
 function Get-StaleExeSources {

@@ -16,7 +16,7 @@ Release-хелпер: прогон тестов → сборка обоих EXE 
 антивирусу куски файла и печатает, какие именно получают вердикт.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\amsi_probe.ps1 yt-dlp\Downloading_from_YouTube_v18.ps1
+powershell -ExecutionPolicy Bypass -File tools\amsi_probe.ps1 yt-dlp\Downloading_from_YouTube_v19.ps1
 ```
 
 Запускать на машине, где ошибка воспроизводится. Ни одна строка проверяемого файла

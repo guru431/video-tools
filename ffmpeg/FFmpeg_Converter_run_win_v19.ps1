@@ -208,7 +208,7 @@ if (-not [System.IO.Path]::IsPathRooted($_cfg_log_file)) { $_cfg_log_file = Join
 
 # Main Form
 $form = [System.Windows.Forms.Form]::new()
-$form.Text = "Video Converter (ffmpeg) v18"
+$form.Text = "Video Converter (ffmpeg) v19"
 $form.Size = [System.Drawing.Size]::new(820, 946)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"

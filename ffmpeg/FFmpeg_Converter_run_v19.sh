@@ -48,7 +48,7 @@ read_config() {
 	if shopt -q patsub_replacement 2>/dev/null; then _psr_on=true; shopt -u patsub_replacement; fi
 	local in_section=false
 	while IFS= read -r line || [ -n "$line" ]; do
-		# Trim через bash parameter expansion (см. yt-dlp/Downloading_from_YouTube_v18.sh
+		# Trim через bash parameter expansion (см. yt-dlp/Downloading_from_YouTube_v19.sh
 		# — sed-fork на Windows Git Bash слишком медленный из-за cygwin overhead).
 		line="${line#"${line%%[![:space:]]*}"}"
 		line="${line%"${line##*[![:space:]]}"}"
@@ -104,7 +104,7 @@ read_config() {
 					"'"*"'") value="${value#\'}"; value="${value%\'}" ;;
 				esac
 			fi
-			# ПЕРВОЕ вхождение ключа — контракт (объявлен в комментарии run_v18.ps1).
+			# ПЕРВОЕ вхождение ключа — контракт (объявлен в комментарии run_v19.ps1).
 			# `break` фиксирует его здесь, ContainsKey-guard — в PS1 и GUI,
 			# `if not defined` — в CMD. Дубликат ключа не имеет права давать разные
 			# кодеки на разных платформах из одного config.ini.

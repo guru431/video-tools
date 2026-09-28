@@ -23,7 +23,7 @@ source "$TESTS_DIR/lib/framework.sh"
 # Тест «парсера конфига» проверял НЕ ТОТ парсер; ссылка вела на v11, которого в репозитории
 # давно нет, и это тоже никого не смущало. Production сорсится штатно: main() у него
 # гардится BASH_SOURCE (гард заведён ровно ради тестов).
-YT_SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v18.sh"
+YT_SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v19.sh"
 if [ ! -f "$YT_SH" ]; then
     suite "YT-DLP read_config"
     fail "production-скрипт на месте" "$YT_SH" "файл не найден — тест проверял бы копию, а не production"
@@ -179,9 +179,9 @@ rm -f "$CONFIG_FILE"
 # ══════════════════════════════════════════════════════════════
 suite "Task 12: yt-dlp фиксы (анализ исходников, 3 платформы)"
 # ══════════════════════════════════════════════════════════════
-SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v18.sh"
-CMDF="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v18.cmd"
-PS1F="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v18.ps1"
+SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v19.sh"
+CMDF="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v19.cmd"
+PS1F="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v19.ps1"
 sh_src="$(cat "$SH")"; cmd_src="$(cat "$CMDF")"; ps1_src="$(cat "$PS1F")"
 
 # JS-рантайм: одна функция на оба места вызова (download_url и download_batch).

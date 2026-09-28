@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# test_15_cmd_smoke.sh — сквозной прогон yt-dlp/Downloading_from_YouTube_v18.cmd
+# test_15_cmd_smoke.sh — сквозной прогон yt-dlp/Downloading_from_YouTube_v19.cmd
 #
 # Все прочие CMD-тесты этого проекта проверяют ВЫРЕЗКИ из скрипта: подпрограмму,
 # блок построения формата, отдельный `if`. Целиком интерактивный CLI не запускался
@@ -24,7 +24,7 @@ REPO_DIR="$(cd "$TESTS_DIR/.." && pwd)"
 
 source "$TESTS_DIR/lib/framework.sh"
 
-CMD_SCRIPT="$REPO_DIR/yt-dlp/Downloading_from_YouTube_v18.cmd"
+CMD_SCRIPT="$REPO_DIR/yt-dlp/Downloading_from_YouTube_v19.cmd"
 
 if ! cmd //c "exit 0" &>/dev/null; then
     suite "CMD yt-dlp: сквозной прогон"

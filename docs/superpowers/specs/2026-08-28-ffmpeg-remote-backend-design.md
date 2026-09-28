@@ -301,7 +301,7 @@ GUI (через `<file>.tmp` + `File.Replace`, как сейчас).
 ## 10. GUI
 
 Новая группа «Сервер» в
-[`FFmpeg_Converter_run_win_v18.ps1`](../../../ffmpeg/FFmpeg_Converter_run_win_v18.ps1):
+[`FFmpeg_Converter_run_win_v19.ps1`](../../../ffmpeg/FFmpeg_Converter_run_win_v19.ps1):
 галка «Считать на сервере», выпадающий `prefer`, поле `wait_timeout`, а также
 поля адреса и ключа (ключ — под `UseSystemPasswordChar`).
 

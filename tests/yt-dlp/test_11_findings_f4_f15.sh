@@ -23,9 +23,9 @@ TESTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
 source "$TESTS_DIR/lib/framework.sh"
 
-SH_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v18.sh"
-CMD_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v18.cmd"
-PS1_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v18.ps1"
+SH_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v19.sh"
+CMD_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v19.cmd"
+PS1_SCRIPT="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v19.ps1"
 MOCK_YTDLP="$TESTS_DIR/mocks/yt-dlp"
 chmod +x "$MOCK_YTDLP" 2>/dev/null
 
@@ -217,7 +217,7 @@ if cmd //c "exit 0" &>/dev/null; then
         rm -f "$tmp_cmd"
         echo "$result"
     }
-    # Ровно тот же блок host-детекта, что в продакшне (см. Downloading_from_YouTube_v18.cmd).
+    # Ровно тот же блок host-детекта, что в продакшне (см. Downloading_from_YouTube_v19.cmd).
     detect_platform_cmd() {
         run_cmd_file "set \"url=$1\"
 set \"platform=other\"

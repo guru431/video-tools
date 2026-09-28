@@ -79,10 +79,10 @@ function Count-Comments([string]$t) {
 }
 
 $files = @(
-    'ffmpeg/FFmpeg_Converter_run_win_v18.ps1',
+    'ffmpeg/FFmpeg_Converter_run_win_v19.ps1',
     'ffmpeg/FFmpeg_Converter_script.ps1',
     'ffmpeg/remote_client.ps1',
-    'yt-dlp/Downloading_from_YouTube_v18.ps1'
+    'yt-dlp/Downloading_from_YouTube_v19.ps1'
 )
 foreach ($f in $files) {
     $full = Join-Path $Root $f
@@ -142,10 +142,10 @@ get_field() { printf '%s\n' "$out" | grep "^${1}=" | sed "s/^${1}=//"; }
 # ══════════════════════════════════════════════════════════════
 suite "Remove-PsComments: на настоящих исходниках"
 # ══════════════════════════════════════════════════════════════
-for f in ffmpeg_FFmpeg_Converter_run_win_v18_ps1 \
+for f in ffmpeg_FFmpeg_Converter_run_win_v19_ps1 \
          ffmpeg_FFmpeg_Converter_script_ps1 \
          ffmpeg_remote_client_ps1 \
-         yt_dlp_Downloading_from_YouTube_v18_ps1; do
+         yt_dlp_Downloading_from_YouTube_v19_ps1; do
     before=$(get_field "before_$f")
     # Файл без единого комментария означал бы, что мы тестируем не то.
     if [ -z "$before" ] || [ "$before" = "0" ]; then

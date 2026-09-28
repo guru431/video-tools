@@ -13,9 +13,9 @@ TESTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
 source "$TESTS_DIR/lib/framework.sh"
 
-YT_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v18.ps1"
-YT_CMD="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v18.cmd"
-YT_SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v18.sh"
+YT_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v19.ps1"
+YT_CMD="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v19.cmd"
+YT_SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v19.sh"
 FF_CMD="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.cmd"
 
 ps1="$(cat "$YT_PS1")"
@@ -215,8 +215,8 @@ done
 assert_empty "ни один тест не держит PS1/CMD-копию production-подпрограммы" "$ps_cmd_offenders"
 
 # PS1-тесты парсера обязаны дот-сорсить production под гардом FFCONV_TEST/YTDLP_TEST.
-for _pair in "ffmpeg/test_02_config_ps1.sh:ffmpeg/FFmpeg_Converter_run_v18.ps1" \
-             "ffmpeg/test_13_parser_parity.sh:ffmpeg/FFmpeg_Converter_run_v18.ps1"; do
+for _pair in "ffmpeg/test_02_config_ps1.sh:ffmpeg/FFmpeg_Converter_run_v19.ps1" \
+             "ffmpeg/test_13_parser_parity.sh:ffmpeg/FFmpeg_Converter_run_v19.ps1"; do
     _tf="${_pair%%:*}"; _pf="${_pair#*:}"
     if grep -q "$(basename "$_pf")" "$TESTS_DIR/$_tf" 2>/dev/null; then
         pass "$(basename "$_tf") ссылается на настоящий $(basename "$_pf")"
@@ -226,16 +226,16 @@ for _pair in "ffmpeg/test_02_config_ps1.sh:ffmpeg/FFmpeg_Converter_run_v18.ps1" 
 done
 
 # PS1-точка входа обязана иметь тест-гард, иначе дот-сорсинг запустит загрузку настроек.
-if grep -qE '\$env:FFCONV_TEST' "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v18.ps1" 2>/dev/null; then
-    pass "FFmpeg_Converter_run_v18.ps1: тест-гард FFCONV_TEST на месте"
+if grep -qE '\$env:FFCONV_TEST' "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v19.ps1" 2>/dev/null; then
+    pass "FFmpeg_Converter_run_v19.ps1: тест-гард FFCONV_TEST на месте"
 else
-    fail "FFmpeg_Converter_run_v18.ps1: тест-гард FFCONV_TEST на месте" '$env:FFCONV_TEST' "гарда нет — дот-сорсинг запустит конвейер"
+    fail "FFmpeg_Converter_run_v19.ps1: тест-гард FFCONV_TEST на месте" '$env:FFCONV_TEST' "гарда нет — дот-сорсинг запустит конвейер"
 fi
 
 # Тесты, разбирающие config.ini, обязаны брать парсер из production, а не свой.
-for _pair in "ffmpeg/test_01_config_sh.sh:ffmpeg/FFmpeg_Converter_run_v18.sh" \
-             "yt-dlp/test_01_read_config.sh:yt-dlp/Downloading_from_YouTube_v18.sh" \
-             "yt-dlp/test_03_cookie_args.sh:yt-dlp/Downloading_from_YouTube_v18.sh"; do
+for _pair in "ffmpeg/test_01_config_sh.sh:ffmpeg/FFmpeg_Converter_run_v19.sh" \
+             "yt-dlp/test_01_read_config.sh:yt-dlp/Downloading_from_YouTube_v19.sh" \
+             "yt-dlp/test_03_cookie_args.sh:yt-dlp/Downloading_from_YouTube_v19.sh"; do
     _tf="${_pair%%:*}"; _pf="${_pair#*:}"
     if grep -q "$(basename "$_pf")" "$TESTS_DIR/$_tf" 2>/dev/null; then
         pass "$(basename "$_tf") ссылается на настоящий $(basename "$_pf")"
@@ -245,7 +245,7 @@ for _pair in "ffmpeg/test_01_config_sh.sh:ffmpeg/FFmpeg_Converter_run_v18.sh" \
 done
 
 # Обе точки входа обязаны иметь main-гард, иначе дот-сорсинг запустит конвейер.
-for _g in "ffmpeg/FFmpeg_Converter_run_v18.sh" "yt-dlp/Downloading_from_YouTube_v18.sh"; do
+for _g in "ffmpeg/FFmpeg_Converter_run_v19.sh" "yt-dlp/Downloading_from_YouTube_v19.sh"; do
     if grep -qE '\[ "\$\{BASH_SOURCE\[0\]\}" = "\$\{?0\}?" \]' "$PROJECT_DIR/$_g" 2>/dev/null; then
         pass "$(basename "$_g"): main-гард на месте (дот-сорсинг безопасен)"
     else
@@ -406,7 +406,7 @@ suite "PowerShell: Test-Path/Get-Content по пути только с -LiteralP
 # [ ] ? * (типично для распакованных архивов — video[1], Downloads[2]) трактуется как
 # маска, Test-Path возвращает $false на существующем файле. Последствия по месту:
 # портативный yt-dlp.exe/ffmpeg.exe «не находится» и подменяется голым именем из PATH,
-# run_v18.ps1 печатает «не найден script.ps1» при существующем файле.
+# run_v19.ps1 печатает «не найден script.ps1» при существующем файле.
 # Контракт: в продуктовых .ps1 у Test-Path всегда -LiteralPath (вендоренный ps2exe.ps1
 # исключён — сторонний код со своим стилем).
 _np_hits=""
@@ -453,7 +453,7 @@ suite "GUI ffmpeg: следы отладки, детект curl, умолчан�
 # ══════════════════════════════════════════════════════════════
 # Три находки одного происхождения: проверить их иначе нельзя — код исполняется
 # только в живом окне, поэтому инвариант держится статически.
-_gui_ff="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v18.ps1"
+_gui_ff="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v19.ps1"
 _gui_src="$(sed 's/#.*//' "$_gui_ff")"
 # 1. Отладочный диалог в production-обработчике: пользователь EXE видел
 # «DEBUG: Click Error» с номером строки вместо внятного сообщения.
@@ -467,9 +467,9 @@ assert_not_contains "нет резолва голого curl" 'Get-Command curl 
 # уезжает в воркер и печатается в предупреждении, поэтому config.ini без ключа
 # давал на GUI другой текст, чем в CLI на тех же данных.
 _pf_gui=$(printf '%s\n' "$_gui_src" | grep -oE 'Read-Config "parallel_files" "performance" "[^"]*"' | grep -oE '"-?[0-9]+"$' | tr -d '"')
-_pf_cli=$(sed 's/#.*//' "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v18.ps1" | grep -oE 'Read-Config "parallel_files" "performance" "[^"]*"' | grep -oE '"-?[0-9]+"$' | tr -d '"')
-_pf_sh=$(sed 's/#.*//' "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v18.sh" | grep -oE 'read_config "parallel_files" "performance" "[^"]*"' | grep -oE '"-?[0-9]+"$' | tr -d '"')
-_pf_cmd=$(grep -viE '^[[:space:]]*(rem|::)' "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v18.cmd" | grep -oE 'parallel_files=:[-+]:[0-9]+' | grep -oE ':[-+]:[0-9]+' | sed 's/:\(.\):/\1/')
+_pf_cli=$(sed 's/#.*//' "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v19.ps1" | grep -oE 'Read-Config "parallel_files" "performance" "[^"]*"' | grep -oE '"-?[0-9]+"$' | tr -d '"')
+_pf_sh=$(sed 's/#.*//' "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v19.sh" | grep -oE 'read_config "parallel_files" "performance" "[^"]*"' | grep -oE '"-?[0-9]+"$' | tr -d '"')
+_pf_cmd=$(grep -viE '^[[:space:]]*(rem|::)' "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v19.cmd" | grep -oE 'parallel_files=:[-+]:[0-9]+' | grep -oE ':[-+]:[0-9]+' | sed 's/:\(.\):/\1/')
 assert_eq "умолчание parallel_files: GUI = CLI-PS1" "$_pf_cli" "$_pf_gui"
 assert_eq "умолчание parallel_files: GUI = SH"      "$_pf_sh"  "$_pf_gui"
 assert_eq "умолчание parallel_files: GUI = CMD"     "$_pf_cmd" "$_pf_gui"
@@ -483,7 +483,7 @@ suite "yt-dlp CMD: из манифеста берётся МЕДИАфайл, а
 # лежащем второй строкой. Отбор отдан findstr: он читает файл сам, поэтому '!' и
 # '%' в именах не проходят фаз раскрытия cmd (в .sh/.ps1 фильтр по тем же
 # расширениям уже был).
-_ycmd_code="$(grep -viE '^[[:space:]]*(rem|::)' "$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v18.cmd")"
+_ycmd_code="$(grep -viE '^[[:space:]]*(rem|::)' "$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v19.cmd")"
 assert_contains "манифест фильтруется по расширениям" 'findstr /i /e /c:".mp4" /c:".mkv" /c:".webm"' "$_ycmd_code"
 assert_not_contains "первая строка манифеста не читается напрямую" '<"!_dl_manifest!" set /p "video_file="' "$_ycmd_code"
 assert_contains "читается уже отфильтрованный список" '<"!_dl_media!" set /p "video_file="' "$_ycmd_code"
@@ -497,7 +497,7 @@ assert_not_contains "нет одиночного %random% в именах temp-�
 # перешёл на пару. Пара random подряд или GUID — иначе строка считается нарушением.
 _single_rand=$(grep -hviE '^[[:space:]]*(rem|::)' \
         "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.cmd" \
-        "$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v18.cmd" \
+        "$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v19.cmd" \
     | grep -iE 'set "[^=]+=%temp%' | grep -iE 'random' | grep -viE 'random[!%]{2}random')
 assert_empty "temp-имена в .cmd не держатся на одиночном random" "$_single_rand"
 
@@ -546,10 +546,10 @@ if [ -f "$CHK" ]; then
     assert_contains "свежесть считается по git-предку" "merge-base --is-ancestor" "$chk"
     # Список зависимостей обязан быть полным: воркер и клиент удалённого бэкенда
     # вкомпилированы в тот же EXE, что и GUI, — правка в них так же его устаревает.
-    assert_contains "зависимость: GUI ffmpeg"       "ffmpeg/FFmpeg_Converter_run_win_v18.ps1" "$chk"
+    assert_contains "зависимость: GUI ffmpeg"       "ffmpeg/FFmpeg_Converter_run_win_v19.ps1" "$chk"
     assert_contains "зависимость: воркер ffmpeg"    "ffmpeg/FFmpeg_Converter_script.ps1"      "$chk"
     assert_contains "зависимость: клиент remote"    "ffmpeg/remote_client.ps1"                "$chk"
-    assert_contains "зависимость: GUI yt-dlp"       "yt-dlp/Downloading_from_YouTube_v18.ps1" "$chk"
+    assert_contains "зависимость: GUI yt-dlp"       "yt-dlp/Downloading_from_YouTube_v19.ps1" "$chk"
 else
     fail "check_release.ps1 на месте" "$CHK" "не найден"
 fi
@@ -559,7 +559,7 @@ suite "ffmpeg: интерпретатор параллели, пауза и ме
 # ══════════════════════════════════════════════════════════════
 FF_SH="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.sh"
 FF_PS1="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1"
-GUI_PS1="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v18.ps1"
+GUI_PS1="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v19.ps1"
 ffsh="$(cat "$FF_SH")"; ffps1="$(cat "$FF_PS1")"; gui="$(cat "$GUI_PS1")"
 
 # msys2-xargs считает доступную длину аргументов как ARG_MAX минус размер окружения и
@@ -623,7 +623,7 @@ suite "GUI: без рефлексии к защищённым членам (AMSI
 # AmsiUtils|GetField|EncodedCommand сам стал бы проблемой: паттерн уходит в командную
 # строку grep, и поведенческий анализатор ловит уже её (проверено на Defender —
 # Trojan:PowerShell/PsAttack.R на строку запуска поиска, 2026-08-19).
-YT_GUI="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v18.ps1"
+YT_GUI="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v19.ps1"
 for _g in "$YT_GUI" "$GUI_PS1"; do
     _n="$(basename "$_g")"
     _src="$(grep -v '^[[:space:]]*#' "$_g")"
@@ -655,7 +655,7 @@ done
 assert_contains "script.ps1 берёт каталог из \$guiAppDir" '$guiAppDir' \
     "$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1")"
 assert_contains "GUI передаёт guiAppDir в runspace" 'SetVariable("guiAppDir"' \
-    "$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v18.ps1")"
+    "$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v19.ps1")"
 
 # ══════════════════════════════════════════════════════════════
 suite "CMD: '::' не используется как комментарий внутри блоков"
@@ -985,13 +985,13 @@ suite "config.ini: \${ENV} во всех PS1-ридерах по одному а
 # тогда как SH и CMD требуют идентификатор — один config.ini давал разное.
 # В обоих GUI предупреждение не имеет права идти через Write-Host: в EXE
 # (-noConsole) это отдельный MessageBox на каждое вхождение.
-for _f in ffmpeg/FFmpeg_Converter_run_v18.ps1 ffmpeg/FFmpeg_Converter_run_win_v18.ps1 \
-          yt-dlp/Downloading_from_YouTube_v18.ps1; do
+for _f in ffmpeg/FFmpeg_Converter_run_v19.ps1 ffmpeg/FFmpeg_Converter_run_win_v19.ps1 \
+          yt-dlp/Downloading_from_YouTube_v19.ps1; do
     _src="$(cat "$PROJECT_DIR/$_f")"
     assert_not_contains "$_f: нет прежнего \\w+-шаблона" "'\\\$\\{(\\w+)\\}'" "$_src"
     assert_contains     "$_f: подстановка через Expand-ConfigEnv" 'Expand-ConfigEnv $val' "$_src"
 done
-for _f in ffmpeg/FFmpeg_Converter_run_win_v18.ps1 yt-dlp/Downloading_from_YouTube_v18.ps1; do
+for _f in ffmpeg/FFmpeg_Converter_run_win_v19.ps1 yt-dlp/Downloading_from_YouTube_v19.ps1; do
     assert_not_contains "$_f: WARN подстановки не через Write-Host" 'Write-Host "WARN: переменная' \
         "$(cat "$PROJECT_DIR/$_f")"
 done

@@ -23,8 +23,8 @@ source "$TESTS_DIR/lib/framework.sh"
 # Хуже того, копии закрепляли ложное утверждение: тест уверял, что ffmpeg-парсер не
 # делает подстановку ${VAR} и оставляет её литералом. Оба production-парсера её делают.
 PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
-RUN_SH="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v18.sh"
-RUN_PS1="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v18.ps1"
+RUN_SH="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v19.sh"
+RUN_PS1="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v19.ps1"
 for _f in "$RUN_SH" "$RUN_PS1"; do
     if [ ! -f "$_f" ]; then
         suite "Кросс-парсерный паритет"
@@ -35,7 +35,7 @@ for _f in "$RUN_SH" "$RUN_PS1"; do
 done
 source "$RUN_SH"
 
-# ── PS1-сторона: настоящая Read-Config из run_v18.ps1 ──────────────────────
+# ── PS1-сторона: настоящая Read-Config из run_v19.ps1 ──────────────────────
 HAVE_PS1=true
 PS_CMD="powershell"
 if command -v pwsh &>/dev/null; then
@@ -45,7 +45,7 @@ elif ! command -v powershell &>/dev/null; then
 fi
 RUN_PS1_WIN=$(cygpath -w "$RUN_PS1" 2>/dev/null || echo "$RUN_PS1")
 
-# $env:FFCONV_TEST=1 — гард в run_v18.ps1: дот-сорсим только определения, конвейер
+# $env:FFCONV_TEST=1 — гард в run_v19.ps1: дот-сорсим только определения, конвейер
 # не запускаем (паритет с SH-гардом BASH_SOURCE == $0).
 # 6>$null: WARN разбора PS1 печатает через Write-Host (информационный поток), а
 # файл разбирается целиком при первом вызове — без этого WARN про ЛЮБОЙ ключ
@@ -202,7 +202,7 @@ fi
 # CMD: штатный хук --print-config печатает разобранные переменные и выходит.
 if cmd //c "exit 0" &>/dev/null; then
     # Полный windows-путь: cmd //c не наследует cwd bash-субоболочки.
-    RUN_CMD_WIN=$(cygpath -w "$FF_DIR/FFmpeg_Converter_run_v18.cmd" 2>/dev/null || echo "$FF_DIR/FFmpeg_Converter_run_v18.cmd")
+    RUN_CMD_WIN=$(cygpath -w "$FF_DIR/FFmpeg_Converter_run_v19.cmd" 2>/dev/null || echo "$FF_DIR/FFmpeg_Converter_run_v19.cmd")
     cmd_log=$(cmd //c "$RUN_CMD_WIN --print-config" 2>/dev/null | tr -d '\r' | grep '^log_file=' | head -1 | sed 's/^log_file=//')
     case "$cmd_log" in
         /*|[A-Za-z]:*) pass "CMD: log_file абсолютный" ;;
@@ -246,7 +246,7 @@ if cmd //c "exit 0" &>/dev/null; then
     FF_CFG_BAK="$PROJECT_DIR/ffmpeg/config.ini.parity-bak"
     if [ -f "$FF_CFG" ]; then mv "$FF_CFG" "$FF_CFG_BAK"; fi
     cp "$BOM_CFG" "$FF_CFG"
-    RUN_CMD_WIN=$(cygpath -w "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v18.cmd" 2>/dev/null || echo "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v18.cmd")
+    RUN_CMD_WIN=$(cygpath -w "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v19.cmd" 2>/dev/null || echo "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v19.cmd")
     cmd_src=$(cmd //c "$RUN_CMD_WIN --print-config" 2>/dev/null | tr -d '\r' | grep '^folder_sources=' | head -1 | sed 's/^folder_sources=//')
     rm -f "$FF_CFG"
     if [ -f "$FF_CFG_BAK" ]; then mv "$FF_CFG_BAK" "$FF_CFG"; fi

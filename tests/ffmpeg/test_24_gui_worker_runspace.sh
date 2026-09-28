@@ -27,7 +27,7 @@ source "$TESTS_DIR/lib/framework.sh"
 
 WORKER="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1"
 REMOTE="$PROJECT_DIR/ffmpeg/remote_client.ps1"
-GUI="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v18.ps1"
+GUI="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v19.ps1"
 MOCK_CMD="$TESTS_DIR/mocks/ffmpeg.cmd"
 
 for _f in "$WORKER" "$REMOTE" "$GUI" "$MOCK_CMD"; do

@@ -17,9 +17,9 @@ PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
 source "$TESTS_DIR/lib/framework.sh"
 
 YAML="$TESTS_DIR/config-key-contract.yaml"
-YT_SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v18.sh"
-YT_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v18.ps1"
-YT_CMD="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v18.cmd"
+YT_SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v19.sh"
+YT_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v19.ps1"
+YT_CMD="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v19.cmd"
 YT_EXAMPLE="$PROJECT_DIR/yt-dlp/config.ini.example"
 
 keys_of() { grep -oE '^[[:space:]]*[a-z_]+[[:space:]]*=' "$1" | sed 's/[[:space:]=]//g'; }
@@ -87,7 +87,7 @@ suite "contract: ffmpeg-исключения читаются, а не деко�
 # проверяемое — ключ, у которого поведение расходится между платформами, обязан
 # в «обделённой» платформе печатать [ПРЕДУПРЕЖДЕНИЕ] рядом с чтением. Иначе один
 # config.ini молча значит разное, что правило паритета и запрещает.
-FF_CMD_RUN="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v18.cmd"
+FF_CMD_RUN="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v19.cmd"
 FF_CMD_SCRIPT="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.cmd"
 FF_PS1_SCRIPT="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1"
 
@@ -120,7 +120,7 @@ done < <(printf '%s
 _cmd_run_src="$(cat "$FF_CMD_RUN")"
 while IFS= read -r k; do
     [ -z "$k" ] && continue
-    assert_contains "remote-ключ '$k' читается в run_v18.cmd" "\"$k\"" "$_cmd_run_src"
+    assert_contains "remote-ключ '$k' читается в run_v19.cmd" "\"$k\"" "$_cmd_run_src"
 done < <(printf '%s
 ' "$ff_sh_ps1_only")
 assert_contains "CMD предупреждает о недоступности удалённого бэкенда"     "Удалённый бэкенд" "$_cmd_run_src"

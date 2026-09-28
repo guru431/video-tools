@@ -38,7 +38,7 @@ command -v pwsh &>/dev/null && PS_CMD="pwsh"
 # вместо '^\[([^\]]+)\]$' и потерянный .Trim() на возврате. Из-за этого сьюит
 # «PS1 vs Bash: паритет» сравнивал КОПИЮ с настоящим bash-парсером — то есть
 # не мог обнаружить расхождение, ради которого существовал.
-RUN_PS1="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v18.ps1"
+RUN_PS1="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v19.ps1"
 if [ ! -f "$RUN_PS1" ]; then
     suite "PowerShell config parsing"
     fail "production-скрипт на месте" "$RUN_PS1" "файл не найден — тест проверял бы копию, а не production"
@@ -47,7 +47,7 @@ if [ ! -f "$RUN_PS1" ]; then
 fi
 RUN_PS1_WIN=$(cygpath -w "$RUN_PS1" 2>/dev/null || echo "$RUN_PS1")
 
-# $env:FFCONV_TEST=1 — гард в run_v18.ps1: дот-сорсим только определения функций,
+# $env:FFCONV_TEST=1 — гард в run_v19.ps1: дот-сорсим только определения функций,
 # конвейер загрузки настроек не выполняется.
 run_ps1_readconfig() {
     local config_content="$1"
@@ -167,10 +167,10 @@ container = +mkv
 hw_accel = -nvidia
 EOF
 
-# Загружаем bash read_config. Имя файла менялось v11→v18 — берём первое существующее,
+# Загружаем bash read_config. Имя файла менялось v11→v19 — берём первое существующее,
 # иначе тест бесшумно пропускает сравнение и даёт ложный fail на пустых значениях.
 RUN_SH=""
-for cand in "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v18.sh" "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run.sh"; do
+for cand in "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v19.sh" "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run.sh"; do
     [ -f "$cand" ] && RUN_SH="$cand" && break
 done
 if [ -n "$RUN_SH" ]; then

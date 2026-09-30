@@ -71,25 +71,30 @@ assert_eq "evtErr: очистка и в цикле, и в finally"  "2"  "$n_err
 suite "Runner не маскирует ненулевой exit suite"
 # ══════════════════════════════════════════════════════════════
 # Вызываем НАСТОЯЩУЮ run_suite, вырезанную из run_tests.sh: инлайн-копия логики
-# подсчёта проходила бы, даже если продакшн-runner снова начнёт врать.
+# подсчёта проходила бы, даже если продакшн-runner снова начнёт врать. Вырезаем
+# все функции раннера: run_suite зовёт его же хелперы (время, поиск timeout).
 RUNNER="$TESTS_DIR/run_tests.sh"
-RUN_SUITE_SRC=$(sed -n '/^run_suite() {/,/^}/p' "$RUNNER")
-if [ -z "$RUN_SUITE_SRC" ]; then
+RUN_SUITE_SRC=$(sed -n '/^[a-z_]*() {/,/^}/p' "$RUNNER")
+if ! grep -q '^run_suite() {' <<< "$RUN_SUITE_SRC"; then
     fail "run_suite найдена в run_tests.sh" "найдена" "не найдена"
 fi
 
 # Прогоняет один временный suite через настоящую run_suite и печатает итог счётчиков.
+# PROBE_OUT=1 — добавить в конец вывод самой run_suite (маркеры TESTS_*).
 probe_runner() {
     local body="$1"
     (
         TMPD=$(mktemp -d /tmp/rs_probe_XXXXXX)
-        printf '#!/bin/bash\nsource "%s/lib/framework.sh"\n%s\n' "$TESTS_DIR" "$body" > "$TMPD/probe.sh"
+        mkdir -p "$TMPD/probe"
+        printf '#!/bin/bash\nsource "%s/lib/framework.sh"\n%s\n' "$TESTS_DIR" "$body" > "$TMPD/probe/probe.sh"
         RED=''; GREEN=''; YELLOW=''; CYAN=''; BOLD=''; NC=''
         TOTAL_PASS=0; TOTAL_FAIL=0; TOTAL_SKIP=0
         SUITE_RESULTS=(); SUITES_FULLY_SKIPPED=0; FULLY_SKIPPED_NAMES=()
         eval "$RUN_SUITE_SRC"
-        run_suite "$TMPD/probe.sh" > /dev/null 2>&1
+        TIMEOUT_BIN=$(find_timeout_bin) || TIMEOUT_BIN=""
+        run_suite "$TMPD/probe/probe.sh" > "$TMPD/out.txt" 2>&1
         echo "pass=$TOTAL_PASS fail=$TOTAL_FAIL"
+        [ "${PROBE_OUT:-0}" = "1" ] && cat "$TMPD/out.txt"
         rm -rf "$TMPD"
     )
 }
@@ -115,6 +120,65 @@ assert_contains "чистый suite → нет провалов" "fail=0" "$r"
 r=$(probe_runner 'suite "x"; pass "a"
 exit 3')
 assert_contains "крах до summary → провал" "fail=1" "$r"
+
+# ══════════════════════════════════════════════════════════════
+suite "Runner: время файла, таймаут на файл, уровни (контракт с внешним свипом)"
+# ══════════════════════════════════════════════════════════════
+# Внешний ночной свип тестов читает из вывода раннера три маркера: TESTS_DURATION (пять
+# самых долгих файлов — в находку о бюджете), TESTS_TIMEOUT (зависание) и последнюю
+# строку TESTS_RESULT. Зависший файл раньше держал прогон до таймаута агента.
+r=$(PROBE_OUT=1 probe_runner 'suite "x"; pass "a"
+summary')
+if grep -qE '^TESTS_DURATION [0-9]+\.[0-9]s probe/probe\.sh$' <<< "$r"; then
+    pass "каждый файл печатает TESTS_DURATION <сек>s <модуль>/<файл>"
+else
+    fail "каждый файл печатает TESTS_DURATION" "TESTS_DURATION N.Ns probe/probe.sh" "$r"
+fi
+
+if (eval "$RUN_SUITE_SRC"; find_timeout_bin) > /dev/null 2>&1; then
+    _t0=$SECONDS
+    r=$(TEST_FILE_TIMEOUT=1 PROBE_OUT=1 probe_runner 'suite "x"; pass "a"
+sleep 30
+summary')
+    _el=$((SECONDS - _t0))
+    assert_contains "зависший файл снят по таймауту → провал" "fail=1" "$r"
+    if grep -qE '^TESTS_TIMEOUT probe/probe\.sh after=1s$' <<< "$r"; then
+        pass "снятый файл печатает TESTS_TIMEOUT <файл> after=<N>s"
+    else
+        fail "снятый файл печатает TESTS_TIMEOUT" "TESTS_TIMEOUT probe/probe.sh after=1s" "$r"
+    fi
+    if [ "$_el" -lt 20 ]; then pass "раннер не ждёт зависший файл до конца"; else fail "раннер не ждёт зависший файл" "< 20 с" "${_el} с"; fi
+    # Свой `exit 124` у быстрого файла — не зависание: время меньше лимита.
+    r=$(TEST_FILE_TIMEOUT=30 PROBE_OUT=1 probe_runner 'suite "x"; pass "a"
+summary
+exit 124')
+    assert_not_contains "exit 124 без превышения лимита — не таймаут" "TESTS_TIMEOUT" "$r"
+    assert_contains     "exit 124 без превышения лимита — всё равно провал" "fail=1" "$r"
+else
+    skip "таймаут на файл" "GNU timeout недоступен"
+fi
+
+# Быстрый уровень = ровно файлы FAST_LEVEL. Запись о переименованном файле иначе
+# молча выпала бы из быстрого уровня (раннер прошёл бы мимо), а файл, поднимающий
+# PowerShell/CMD, сорвал бы бюджет и параллель (они не для одновременного запуска).
+_all_list=$(bash "$RUNNER" --list)
+_fast_list=$(bash "$RUNNER" --list --fast)
+_fast_decl=$(sed -n '/^FAST_LEVEL="/,/^"/p' "$RUNNER" | grep -E '^[a-z-]+/test_[a-z0-9_]+\.sh$')
+assert_not_empty "FAST_LEVEL не пуст" "$_fast_decl"
+_stale=""; _missing=""; _winproc=""
+for _f in $_fast_decl; do
+    grep -qxF -- "$_f" <<< "$_all_list" || _stale="$_stale $_f"
+    grep -qxF -- "$_f" <<< "$_fast_list" || _missing="$_missing $_f"
+    grep -qE '(^|[^a-z_])(powershell|pwsh|cmd //c)([^a-z_]|$)' <<< "$(grep -v '^[[:space:]]*#' "$TESTS_DIR/$_f" 2>/dev/null)" \
+        && _winproc="$_winproc $_f"
+done
+assert_empty "каждый файл FAST_LEVEL зарегистрирован в раннере" "$_stale"
+assert_empty "--fast запускает каждый файл FAST_LEVEL" "$_missing"
+assert_empty "файлы FAST_LEVEL не поднимают PowerShell/CMD" "$_winproc"
+_n_fast=$(grep -c . <<< "$_fast_list"); _n_decl=$(grep -c . <<< "$_fast_decl")
+assert_eq "--fast = ровно FAST_LEVEL" "$_n_decl" "$_n_fast"
+_rc=0; bash "$RUNNER" --no-such-flag > /dev/null 2>&1 || _rc=$?
+assert_eq "неизвестный ключ раннера → exit 2" "2" "$_rc"
 
 # ══════════════════════════════════════════════════════════════
 suite "Сетевой guard: тесты не имеют права ходить в сеть"

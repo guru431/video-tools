@@ -218,6 +218,7 @@ yt-dlp/_VideoDownloader_v19.exe
 Тесты на чистом Bash, без внешних зависимостей. Mock-бинарники для ffmpeg, ffprobe, yt-dlp. Единственный источник числа тестов — сам раннер: конкретные числа в документации не приводятся, потому что устаревают при каждом новом assert и зависят от платформы. На платформах без CMD/PowerShell соответствующие suite'ы пропускаются (в CI это ошибка на Windows-линии, ожидаемо на Linux).
 
 ```bash
+bash tests/run_tests.sh --fast    # быстрый уровень (≤60 с): файлы из FAST_LEVEL в раннере
 bash tests/run_tests.sh           # все тесты
 bash tests/run_tests.sh ffmpeg    # ffmpeg (24 файла)
 bash tests/run_tests.sh yt-dlp    # yt-dlp (15 файлов)

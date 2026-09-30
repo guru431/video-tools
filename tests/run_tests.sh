@@ -3,10 +3,21 @@
 # run_tests.sh — Точка входа для всей системы тестирования
 #
 # Использование:
-#   bash tests/run_tests.sh           # все тесты
+#   bash tests/run_tests.sh           # все тесты (полный уровень)
 #   bash tests/run_tests.sh ffmpeg    # только ffmpeg
 #   bash tests/run_tests.sh yt-dlp    # только yt-dlp
 #   bash tests/run_tests.sh common    # только кросс-платформенные инварианты
+#   bash tests/run_tests.sh --fast    # быстрый уровень: без файлов, поднимающих PowerShell/CMD/GUI
+#   bash tests/run_tests.sh --fast ffmpeg              # быстрый уровень одного модуля
+#   bash tests/run_tests.sh --list [--fast] [модуль]   # только список файлов, без запуска
+#
+# Таймаут на файл: TEST_FILE_TIMEOUT=<секунды> (умолчания — ниже, у FAST).
+#
+# Маркеры для внешнего ночного свипа тестов (с начала строки, без цвета):
+#   TESTS_DURATION <сек>s <модуль>/<файл>.sh    — время каждого файла
+#   TESTS_TIMEOUT <модуль>/<файл>.sh after=<N>s  — файл снят по таймауту (= провал)
+#   TESTS_RESULT pass=N fail=N skip=N            — итог прогона, ПОСЛЕДНЯЯ такая строка
+# Команды уровней объявлены в контракте тестов свипа (поле `tests` проекта).
 # ============================================================
 
 TESTS_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -18,7 +29,32 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-FILTER="${1:-all}"
+FAST=0
+LIST=0
+FILTER="all"
+for _arg in "$@"; do
+    case "$_arg" in
+        --fast) FAST=1 ;;
+        --list) LIST=1 ;;
+        -*)
+            echo -e "${RED}Неизвестный ключ: '$_arg'${NC}"
+            echo "Использование: bash tests/run_tests.sh [--fast] [--list] [all|ffmpeg|yt-dlp|common]"
+            exit 2
+            ;;
+        *) FILTER="$_arg" ;;
+    esac
+done
+
+# Таймаут на ОДИН файл теста. Зависший файл раньше держал прогон до таймаута агента;
+# теперь он снимается, считается провалом и печатается маркером TESTS_TIMEOUT.
+# Запас — кратный над самым долгим нормальным файлом своего уровня на загруженной
+# машине (замер 2026-09-30 на Windows-машине разработки; сами времена печатает раннер).
+if [ "$FAST" = "1" ]; then
+    TEST_FILE_TIMEOUT="${TEST_FILE_TIMEOUT:-180}"
+else
+    # ffmpeg/test_15_findings: 241 с на свободной машине, 703 с под нагрузкой.
+    TEST_FILE_TIMEOUT="${TEST_FILE_TIMEOUT:-1800}"
+fi
 
 TOTAL_PASS=0
 TOTAL_FAIL=0
@@ -29,28 +65,117 @@ SUITE_RESULTS=()
 SUITES_FULLY_SKIPPED=0
 FULLY_SKIPPED_NAMES=()
 
-# ── Запуск одного тест-файла в субоболочке ───────────────────────────────────
+# ── Хелперы без форков ───────────────────────────────────────────────────────
+# Результат — в глобальной переменной, а не через `$(...)`: на Windows каждый
+# форк Git Bash стоит 30–250 мс (антивирус проверяет каждый процесс), и раннер
+# с подстановками на каждый файл сам по себе ел заметную долю бюджета.
+
+# NOW_MS ← текущее время в мс. EPOCHREALTIME есть с bash 5; системный bash 3.2 на
+# macOS его не знает — там точность до секунды через date, для отчёта хватает.
+now_ms() {
+    if [ -n "${EPOCHREALTIME:-}" ]; then
+        local t="${EPOCHREALTIME//[.,]/}"
+        NOW_MS=$(( 10#$t / 1000 ))
+    else
+        NOW_MS=$(( $(date +%s) * 1000 ))
+    fi
+}
+
+# FMT_S ← миллисекунды $1 в виде «12.3»
+fmt_s() {
+    printf -v FMT_S '%d.%d' $(( $1 / 1000 )) $(( ($1 % 1000) / 100 ))
+}
+
+# REL ← «<модуль>/<файл>.sh» для пути $1
+rel_of() {
+    local dir="${1%/*}"
+    REL="${dir##*/}/${1##*/}"
+}
+
+# ── GNU timeout ──────────────────────────────────────────────────────────────
+# Только coreutils: на Windows в PATH может оказаться C:\Windows\System32\timeout.exe
+# (пауза cmd с другим синтаксисом), на macOS coreutils из brew ставит gtimeout.
+# Нет ни одного — файлы идут без таймаута, и раннер говорит об этом явно.
+find_timeout_bin() {
+    local c
+    for c in timeout gtimeout; do
+        if "$c" --version 2>/dev/null | grep -q 'GNU coreutils'; then
+            echo "$c"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# ── Исполнение одного тест-файла ─────────────────────────────────────────────
+# Пишет <prefix>.out (вывод), <prefix>.rc (код возврата), <prefix>.ms (время).
+# Вывод — в файл, а не в `$(...)`: подстановка ждёт EOF канала, а осиротевший
+# внук (powershell.exe) после снятия по таймауту держал бы канал открытым, и
+# раннер висел бы дальше. stdin — /dev/null: чтение с терминала в фоновой
+# группе процессов останавливало бы файл навсегда.
+exec_suite() {
+    local test_file="$1" prefix="$2" limit="${TEST_FILE_TIMEOUT:-1800}" t0 rc
+    now_ms; t0=$NOW_MS
+    if [ -n "${TIMEOUT_BIN:-}" ]; then
+        "$TIMEOUT_BIN" -k 10 "$limit" bash "$test_file" > "$prefix.out" 2>&1 < /dev/null
+    else
+        bash "$test_file" > "$prefix.out" 2>&1 < /dev/null
+    fi
+    rc=$?
+    now_ms
+    echo "$rc" > "$prefix.rc"
+    echo $(( NOW_MS - t0 )) > "$prefix.ms"
+}
+
+# ── Запуск одного тест-файла и учёт его итога ────────────────────────────────
+# $2 — префикс файла, уже исполненного параллельно (быстрый уровень); без него файл
+# исполняется здесь же.
 run_suite() {
-    local test_file="$1"
-    local suite_name
-    suite_name=$(basename "$test_file" .sh)
+    local test_file="$1" prefix="${2:-}"
+    local base="${test_file##*/}"
+    local suite_name="${base%.sh}" rel
+    rel_of "$test_file"; rel=$REL
 
     echo -e "\n${BOLD}${CYAN}▶ $suite_name${NC}"
 
-    # Запускаем тест-файл, захватываем вывод и exit code
-    local output
-    output=$(bash "$test_file" 2>&1)
-    local exit_code=$?
-
-    echo "$output"
+    local output exit_code ms dur limit="${TEST_FILE_TIMEOUT:-1800}" own=0
+    if [ -z "$prefix" ]; then
+        prefix="${TMPDIR:-/tmp}/run_suite_$$_${RANDOM}${RANDOM}"
+        own=1
+        exec_suite "$test_file" "$prefix"
+    fi
+    read -r exit_code < "$prefix.rc"
+    read -r ms < "$prefix.ms"
+    LAST_MS=$ms
+    fmt_s "$ms"; dur=$FMT_S
+    output=$(< "$prefix.out")
 
     # Итог берём из machine-readable маркера framework (TESTS_RESULT pass=N fail=N skip=N),
-    # а не из ✓/✗/○-глифов: те зависят от оформления, цветов и локали.
-    local marker pass fail skip
-    marker=$(echo "$output" | grep -o 'TESTS_RESULT pass=[0-9]* fail=[0-9]* skip=[0-9]*' | tail -1)
-    pass=$(echo "$marker" | grep -o 'pass=[0-9]*' | grep -o '[0-9]*')
-    fail=$(echo "$marker" | grep -o 'fail=[0-9]*' | grep -o '[0-9]*')
-    skip=$(echo "$marker" | grep -o 'skip=[0-9]*' | grep -o '[0-9]*')
+    # а не из ✓/✗/○-глифов: те зависят от оформления, цветов и локали. Последний
+    # маркер в выводе; разбор без grep-конвейеров — те стоили десяток форков на файл.
+    local re='TESTS_RESULT pass=([0-9]+) fail=([0-9]+) skip=([0-9]+)'
+    local line marker="" pass=0 fail=0 skip=0
+    while IFS= read -r line || [ -n "$line" ]; do
+        if [[ $line =~ $re ]]; then
+            marker="${BASH_REMATCH[0]}"
+            pass="${BASH_REMATCH[1]}"; fail="${BASH_REMATCH[2]}"; skip="${BASH_REMATCH[3]}"
+        fi
+    done < "$prefix.out"
+    rm -f "$prefix.out" "$prefix.rc" "$prefix.ms"
+    [ "$own" = "1" ] && rm -f "$prefix"
+
+    echo "$output"
+    echo "TESTS_DURATION ${dur}s $rel"
+
+    # 124 — timeout послал TERM, 137 — пришлось добивать KILL. Время сверяем, чтобы
+    # собственный `exit 124` файла не выдать за зависание.
+    if [ -n "${TIMEOUT_BIN:-}" ] && { [ "$exit_code" -eq 124 ] || [ "$exit_code" -eq 137 ]; } \
+        && [ "$ms" -ge $(( limit * 1000 )) ]; then
+        echo "TESTS_TIMEOUT $rel after=${limit}s"
+        TOTAL_FAIL=$((TOTAL_FAIL + 1))
+        SUITE_RESULTS+=("${RED}✗${NC} $suite_name (снят по таймауту ${limit}s)")
+        return
+    fi
 
     # Маркер ОБЯЗАТЕЛЕН. Без него pass=fail=skip=0, и suite с rc=0 уходил в зелёную
     # ветку как «✓» — то есть одна забытая `summary` перед `exit 0` делала целый файл
@@ -61,10 +186,6 @@ run_suite() {
         SUITE_RESULTS+=("${RED}✗${NC} $suite_name (нет маркера TESTS_RESULT: suite не вызвал summary)")
         return
     fi
-
-    pass="${pass:-0}"
-    fail="${fail:-0}"
-    skip="${skip:-0}"
 
     # STRICT_SKIP (Windows-CI и release-гейт) падает не только на ЦЕЛИКОМ пропущенном
     # suite, но и на частичных пропусках «инструмент не найден»: они означают, что
@@ -108,9 +229,9 @@ run_suite() {
     fi
 
     if [ "$fail" -gt 0 ]; then
-        SUITE_RESULTS+=("${RED}✗${NC} $suite_name ($fail failures)")
+        SUITE_RESULTS+=("${RED}✗${NC} $suite_name ($fail failures, ${dur}s)")
     else
-        SUITE_RESULTS+=("${GREEN}✓${NC} $suite_name")
+        SUITE_RESULTS+=("${GREEN}✓${NC} $suite_name (${dur}s)")
     fi
 }
 
@@ -120,11 +241,59 @@ run_suite() {
 run_or_missing() {
     local test_file="$1"
     if [ -f "$test_file" ]; then
-        run_suite "$test_file"
+        run_suite "$test_file" "${2:-}"
     else
+        local base="${test_file##*/}"
         TOTAL_FAIL=$((TOTAL_FAIL + 1))
-        SUITE_RESULTS+=("${RED}✗${NC} $(basename "$test_file" .sh) (файл отсутствует)")
+        SUITE_RESULTS+=("${RED}✗${NC} ${base%.sh} (файл отсутствует)")
     fi
+}
+
+# ── Уровни ───────────────────────────────────────────────────────────────────
+# Быстрый уровень (--fast, бюджет 60 с) — ТОЛЬКО файлы из списка ниже: чистый Bash
+# на заглушках и общие инварианты, без PowerShell/CMD/GUI. Отбор — по замеру
+# (2026-09-30, Windows-машина разработки под нагрузкой), а не по признаку «нет PowerShell»: самые
+# долгие файлы набора как раз чисто Bash-евые — они дот-сорсят production-скрипт
+# десятки раз, а каждый форк Git Bash на этой машине стоит 30–250 мс (замер тех
+# дней: guardrails 455 с, ffmpeg/test_15 703 с, test_21 371 с, yt-dlp/test_07–08
+# по 280–290 с). Всё, что не в списке, — только полный уровень; новый файл тоже
+# (бюджет быстрого уровня не срывается молча). Добавляя файл сюда — замерь его:
+# раннер печатает TESTS_DURATION.
+# Замер уровня целиком (2026-09-30, машина свободнее): 41 с при бюджете 60 с.
+# ffmpeg/test_06_gpu (30–110 с по загрузке) в бюджет не влез — он в полном уровне.
+# Порядок — по убыванию времени: файлы раздаются по дорожкам параллели по кругу.
+# Формат «<модуль>/<файл>.sh» без $TESTS_DIR: guardrail считает регистрации по
+# строкам с `TESTS_DIR/<модуль>/`, и этот список их не задваивает.
+FAST_LEVEL="
+common/test_encoding.sh
+common/test_config_keys.sh
+common/test_config_contract.sh
+yt-dlp/test_02_format_args.sh
+yt-dlp/test_01_read_config.sh
+ffmpeg/test_20_remote_map.sh
+common/test_framework_selfcheck.sh
+common/test_docs_links.sh
+yt-dlp/test_03_cookie_args.sh
+"
+
+# Число параллельных дорожок быстрого уровня. Замер 2026-09-30 под нагрузкой:
+# одна дорожка — 166 с, четыре — 119 с. Выигрыш меньше числа дорожек: узкое
+# место — проверка антивирусом каждого нового процесса, а не CPU.
+FAST_JOBS=4
+
+is_fast_level() {
+    rel_of "$1"
+    case "$FAST_LEVEL" in
+        *"
+$REL
+"*) return 0 ;;
+    esac
+    return 1
+}
+
+# Файл не входит в выбранный уровень (только полный, а идёт --fast)
+skip_in_level() {
+    [ "$FAST" = "1" ] && ! is_fast_level "$1"
 }
 
 # ── Определяем какие тесты запускать ─────────────────────────────────────────
@@ -188,6 +357,52 @@ COMMON_TESTS=(
     "$TESTS_DIR/common/test_build_strip.sh"
 )
 
+# MOD_FILES ← файлы модуля $1, MOD_TITLE ← его заголовок (bash 3.2: без nameref).
+module_files() {
+    case "$1" in
+        ffmpeg) MOD_FILES=("${FFMPEG_TESTS[@]}"); MOD_TITLE="FFmpeg Converter" ;;
+        yt-dlp) MOD_FILES=("${YTDLP_TESTS[@]}"); MOD_TITLE="YT-DLP Downloader" ;;
+        common) MOD_FILES=("${COMMON_TESTS[@]}"); MOD_TITLE="Общие инварианты" ;;
+    esac
+}
+
+case "$FILTER" in
+    ffmpeg|yt-dlp|common) MODULES=("$FILTER") ;;
+    ytdlp) MODULES=(yt-dlp) ;;
+    all) MODULES=(ffmpeg yt-dlp common) ;;
+    *)
+        # Опечатка в фильтре («commmon») раньше молча трактовалась как all: прогон
+        # выглядел успешным, а запрошенный набор не запускался никогда.
+        echo -e "${RED}Неизвестный фильтр: '$FILTER'${NC}"
+        echo "Использование: bash tests/run_tests.sh [--fast] [--list] [all|ffmpeg|yt-dlp|common]"
+        exit 2
+        ;;
+esac
+
+if [ "$LIST" = "1" ]; then
+    for _m in "${MODULES[@]}"; do
+        module_files "$_m"
+        for _f in "${MOD_FILES[@]}"; do
+            skip_in_level "$_f" && continue
+            rel_of "$_f"; echo "$REL"
+        done
+    done
+    exit 0
+fi
+
+TIMEOUT_BIN=$(find_timeout_bin) || TIMEOUT_BIN=""
+
+# Параллельно — только быстрый уровень: его файлы общих путей не пишут. В полном
+# уровне это не так — tests/ffmpeg/config.ini пишут ffmpeg/test_01/02/13, а test_13
+# ещё и подменяет рабочий ffmpeg/config.ini, который читает common/test_config_keys.
+PARALLEL=0
+[ "$FAST" = "1" ] && PARALLEL=1
+
+LANE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/run_tests_XXXXXX")
+LANE_PIDS=""
+trap 'rm -rf "$LANE_DIR"' EXIT
+trap '[ -n "$LANE_PIDS" ] && kill $LANE_PIDS 2>/dev/null; exit 130' INT TERM
+
 # ── Баннер ───────────────────────────────────────────────────────────────────
 echo -e "${BOLD}${CYAN}"
 echo "╔══════════════════════════════════════════════════╗"
@@ -195,54 +410,87 @@ echo "║          Система тестирования видео-скрип
 echo "║          ffmpeg converter + yt-dlp downloader    ║"
 echo "╚══════════════════════════════════════════════════╝"
 echo -e "${NC}"
+if [ "$FAST" = "1" ]; then
+    echo -e "${BOLD}Уровень: быстрый (--fast)${NC} — файлы из FAST_LEVEL, $FAST_JOBS дорожки; вывод — после завершения всех"
+else
+    echo -e "${BOLD}Уровень: полный${NC}"
+fi
+if [ -n "$TIMEOUT_BIN" ]; then
+    echo "Таймаут на файл: ${TEST_FILE_TIMEOUT}s"
+else
+    echo -e "${YELLOW}GNU timeout не найден — файлы идут без таймаута${NC}"
+fi
 
-# ── Запуск тестов ────────────────────────────────────────────────────────────
-case "$FILTER" in
-    ffmpeg)
-        echo -e "${BOLD}Модуль: FFmpeg Converter${NC}"
-        for test_file in "${FFMPEG_TESTS[@]}"; do
-            run_or_missing "$test_file"
-        done
-        ;;
-    yt-dlp|ytdlp)
-        echo -e "${BOLD}Модуль: YT-DLP Downloader${NC}"
-        for test_file in "${YTDLP_TESTS[@]}"; do
-            run_or_missing "$test_file"
-        done
-        ;;
-    common)
-        echo -e "${BOLD}Модуль: Общие инварианты${NC}"
-        for test_file in "${COMMON_TESTS[@]}"; do
-            run_or_missing "$test_file"
-        done
-        ;;
-    all)
-        echo -e "${BOLD}Модуль: FFmpeg Converter${NC}"
-        for test_file in "${FFMPEG_TESTS[@]}"; do
-            run_or_missing "$test_file"
-        done
-        echo ""
-        echo -e "${BOLD}Модуль: YT-DLP Downloader${NC}"
-        for test_file in "${YTDLP_TESTS[@]}"; do
-            run_or_missing "$test_file"
-        done
-        echo ""
-        echo -e "${BOLD}Модуль: Общие инварианты${NC}"
-        for test_file in "${COMMON_TESTS[@]}"; do
-            run_or_missing "$test_file"
-        done
-        ;;
-    *)
-        # Опечатка в фильтре («commmon») раньше молча трактовалась как all: прогон
-        # выглядел успешным, а запрошенный набор не запускался никогда.
-        echo -e "${RED}Неизвестный фильтр: '$FILTER'${NC}"
-        echo "Использование: bash tests/run_tests.sh [all|ffmpeg|yt-dlp|common]"
-        exit 2
-        ;;
-esac
+now_ms; RUN_T0=$NOW_MS
+
+# ── Параллельное исполнение (итог учитывается ниже, в порядке регистрации) ──
+# Файлы раздаются по дорожкам по кругу в порядке FAST_LEVEL (он по убыванию
+# времени), каждая дорожка исполняет свои последовательно.
+if [ "$PARALLEL" = "1" ]; then
+    mkdir -p "$LANE_DIR/ffmpeg" "$LANE_DIR/yt-dlp" "$LANE_DIR/common"
+    _sel=" ${MODULES[*]} "
+    _lane_files=()
+    _i=0
+    for _rel in $FAST_LEVEL; do
+        case "$_sel" in *" ${_rel%%/*} "*) ;; *) continue ;; esac
+        [ -f "$TESTS_DIR/$_rel" ] || continue
+        _l=$(( _i % FAST_JOBS ))
+        _lane_files[_l]="${_lane_files[_l]:-} $_rel"
+        _i=$((_i + 1))
+    done
+    for _l in "${!_lane_files[@]}"; do
+        (
+            for _rel in ${_lane_files[$_l]}; do
+                exec_suite "$TESTS_DIR/$_rel" "$LANE_DIR/${_rel%.sh}"
+            done
+        ) &
+        LANE_PIDS="$LANE_PIDS $!"
+    done
+    wait
+    LANE_PIDS=""
+fi
+
+# ── Запуск тестов / учёт итогов ──────────────────────────────────────────────
+# Время модуля — в человеческой строке; маркер TESTS_DURATION — только у файлов:
+# свип берёт пять самых долгих, и суммы модулей вытеснили бы из пятёрки сами файлы.
+_first=1
+for _m in "${MODULES[@]}"; do
+    module_files "$_m"
+    [ "$_first" = "1" ] || echo ""
+    _first=0
+    echo -e "${BOLD}Модуль: $MOD_TITLE${NC}"
+    now_ms; _t0=$NOW_MS
+    _n_full=0
+    _sum_ms=0
+    for _f in "${MOD_FILES[@]}"; do
+        if skip_in_level "$_f"; then
+            _n_full=$((_n_full + 1))
+            continue
+        fi
+        LAST_MS=0
+        if [ "$PARALLEL" = "1" ]; then
+            rel_of "$_f"
+            run_or_missing "$_f" "$LANE_DIR/${REL%.sh}"
+        else
+            run_or_missing "$_f"
+        fi
+        _sum_ms=$((_sum_ms + LAST_MS))
+    done
+    if [ "$PARALLEL" = "1" ]; then
+        fmt_s "$_sum_ms"
+        echo -e "
+${BOLD}⏱ Модуль $_m: ${FMT_S}s (сумма времени файлов; шли параллельно)${NC}"
+    else
+        now_ms; fmt_s $(( NOW_MS - _t0 ))
+        echo -e "
+${BOLD}⏱ Модуль $_m: ${FMT_S}s${NC}"
+    fi
+    [ "$_n_full" -gt 0 ] && echo -e "${YELLOW}  Только в полном уровне (не запускались): $_n_full файл(ов)${NC}"
+done
 
 # ── Итоговый отчёт ───────────────────────────────────────────────────────────
 TOTAL=$((TOTAL_PASS + TOTAL_FAIL + TOTAL_SKIP))
+now_ms; fmt_s $(( NOW_MS - RUN_T0 ))
 
 echo ""
 echo -e "${BOLD}${CYAN}╔══════════════════════════════════════════════════╗${NC}"
@@ -250,12 +498,16 @@ echo -e "${BOLD}${CYAN}║                 ИТОГОВЫЙ ОТЧЁТ          
 echo -e "${BOLD}${CYAN}╠══════════════════════════════════════════════════╣${NC}"
 
 for result in "${SUITE_RESULTS[@]}"; do
-    echo -e "║  $(echo -e "$result")${NC}"
+    echo -e "║  ${result}${NC}"
 done
 
 echo -e "${BOLD}${CYAN}╠══════════════════════════════════════════════════╣${NC}"
-echo -e "${BOLD}${CYAN}║${NC}  Всего: $TOTAL  |  ${GREEN}✓ $TOTAL_PASS пройдено${NC}  |  ${RED}✗ $TOTAL_FAIL провалено${NC}  |  ${YELLOW}○ $TOTAL_SKIP пропущено${NC}"
+echo -e "${BOLD}${CYAN}║${NC}  Всего: $TOTAL  |  ${GREEN}✓ $TOTAL_PASS пройдено${NC}  |  ${RED}✗ $TOTAL_FAIL провалено${NC}  |  ${YELLOW}○ $TOTAL_SKIP пропущено${NC}  |  ⏱ ${FMT_S}s"
 echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════════════╝${NC}"
+
+# Итог всего прогона для внешнего свипа. Строки TESTS_RESULT отдельных файлов выше
+# тоже есть в выводе — свип берёт ПОСЛЕДНЮЮ, поэтому эта печатается после них.
+echo "TESTS_RESULT pass=$TOTAL_PASS fail=$TOTAL_FAIL skip=$TOTAL_SKIP"
 
 # STRICT_SKIP=1 (Windows CI): ошибка, только если suite пропущен ЦЕЛИКОМ (cmd/powershell
 # недоступен → теряется SH/CMD/PS1 паритет). Частичные окружения-скипы внутри запущенного

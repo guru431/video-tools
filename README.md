@@ -191,6 +191,8 @@ ffmpeg). Откат при `local` не молчаливый: печатаетс
 
 **Исключение (по дизайну):** `yt-dlp/Downloading_from_YouTube_v19.cmd` — интерактивный CLI (спрашивает параметры в консоли) и **не читает `config.ini`**. Это санкционированное отклонение от config-driven паттерна: config-driven режим для yt-dlp даёт SH (`.sh`) и GUI (`.ps1`). Мета-тест `tests/common/test_config_keys.sh` учитывает это исключение (для yt-dlp ключ обязан читаться в `.sh` ИЛИ `.ps1`, CMD не требуется).
 
+Почему многое устроено именно так (ограничения платформ, контракт удалённого бэкенда, правила тестов) — в [`docs/constraints.md`](docs/constraints.md).
+
 ---
 
 ## Запуск
@@ -251,7 +253,7 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 | `test_20_remote_map` | Удалённый бэкенд: отображение config.ini на операции службы (.sh) |
 | `test_21_remote_client` | Удалённый бэкенд: HTTP-слой, preflight, загрузка кусками, задача и отмена (мок curl) |
 | `test_22_remote_ps1` | Удалённый бэкенд: PS1-модуль клиента, загрузка через подменённый HTTP-слой |
-| `test_23_remote_parity` | Удалённый бэкенд: SH и PS1 собирают побайтово одинаковый JSON |
+| `test_23_remote_parity` | Удалённый бэкенд: SH и PS1 собирают побайтово одинаковый JSON |
 | `test_24_gui_worker_runspace` | Воркер запускается ТАК ЖЕ, как из GUI (AddScript-строка): `$PSScriptRoot` пуст, stderr не оседает в `Streams.Error` |
 
 ### Тест-модули YT-DLP (15 файлов)
@@ -278,7 +280,7 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 
 | Файл | Что тестирует |
 |------|---------------|
-| `test_framework_selfcheck` | Сам фреймворк: ассерты честны при `pipefail` (без ложной зелёнки) |
+| `test_framework_selfcheck` | Сам фреймворк: ассерты честны при `pipefail` и сравнивают паттерн буквально, без glob (без ложной зелёнки) |
 | `test_encoding` | Кодировки: `.ps1`=BOM, `.sh`=без BOM, entry `.cmd`=chcp |
 | `test_config_keys` | Паритет ключей config.ini по платформам |
 | `test_config_contract` | Контракт `config-key-contract.yaml` ↔ реальность (CI-safe) |

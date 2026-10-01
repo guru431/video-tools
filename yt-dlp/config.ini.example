@@ -46,7 +46,7 @@ archive_file = download_archive.txt
 # opus, flac, wav. При best дорожка извлекается без перекодирования.
 audio_format = best
 # SponsorBlock: off (выкл), mark (отметить главами), remove (вырезать сегменты)
-sponsorblock = off
+sponsorblock = off
 # Ссылка с &list=… : auto — как решит yt-dlp (плейлист), single — только указанное
 # видео (--no-playlist), full — всегда весь плейлист. single спасает от ссылок
 # вида watch?v=X&list=RD… (бесконечный авто-микс YouTube).
@@ -67,7 +67,7 @@ limit_rate =
 [subtitles]
 # Язык субтитров для режима «только субтитры» и для download_with_video.
 # На пункты меню CMD-загрузчика «Субтитры (RU)/(EN)» НЕ влияет: тот интерактивный
-# CLI config.ini не читает вовсе (санкционированное исключение, см. CLAUDE.md).
+# CLI config.ini не читает вовсе (санкционированное исключение, см. docs/constraints.md).
 lang = ru
 # Формат субтитров. У YouTube нативно доступен только vtt: srt пришлось бы
 # конвертировать (--convert-subs), а этого флага скрипт не передаёт — значение

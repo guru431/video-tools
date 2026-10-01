@@ -54,15 +54,24 @@ suite "contract: yt-dlp ключи (config.ini.example) читаются в .sh 
 sh_only_keys=$(yaml_list_after '    sh_only:')
 sh_src="$(cat "$YT_SH")"
 ps1_src="$(cat "$YT_PS1")"
-is_sh_only() { printf '%s\n' "$sh_only_keys" | grep -qx -- "$1"; }
+# Проверки — по уже прочитанному тексту, без процесса на каждый ключ.
+# is_sh_only: ключ — целая строка списка (как `grep -qx`).
+is_sh_only() { case $'\n'"$sh_only_keys"$'\n' in *$'\n'"$1"$'\n'*) return 0 ;; esac; return 1; }
+# has_word: ключ — отдельное слово (как `grep -qw`): по краям начало/конец текста
+# или не-словесный символ; перевод строки — тоже не-словесный, поэтому весь файл
+# одной строкой проверяется так же, как построчно.
+has_word() {
+    local re="(^|[^[:alnum:]_])$1([^[:alnum:]_]|\$)"
+    [[ $2 =~ $re ]]
+}
 while IFS= read -r key; do
     [ -z "$key" ] && continue
     if is_sh_only "$key"; then
         # batch-ключи — только .sh; в .ps1 их нет (проверяем реальное чтение в .sh).
-        if grep -qw -- "$key" "$YT_SH"; then pass "sh_only '$key' читается в .sh"
+        if has_word "$key" "$sh_src"; then pass "sh_only '$key' читается в .sh"
         else fail "sh_only '$key' читается в .sh" "читается" "отсутствует"; fi
     else
-        if grep -qw -- "$key" "$YT_SH" || grep -qw -- "$key" "$YT_PS1"; then
+        if has_word "$key" "$sh_src" || has_word "$key" "$ps1_src"; then
             pass "yt-dlp '$key' (есть читатель .sh/.ps1)"
         else
             fail "yt-dlp '$key'" "читается в .sh или .ps1" "нигде (мёртвый ключ или не в контракте)"
@@ -75,7 +84,7 @@ suite "contract: sh_only ключи реальны"
 example_keys="$(keys_of "$YT_EXAMPLE")"
 while IFS= read -r sk; do
     [ -z "$sk" ] && continue
-    if printf '%s\n' "$example_keys" | grep -qx -- "$sk"; then pass "sh_only '$sk' есть в config.ini.example"
+    if case $'\n'"$example_keys"$'\n' in *$'\n'"$sk"$'\n'*) true ;; *) false ;; esac; then pass "sh_only '$sk' есть в config.ini.example"
     else fail "sh_only '$sk' есть в config.ini.example" "присутствует" "нет такого ключа (опечатка в контракте)"; fi
 done < <(printf '%s\n' "$sh_only_keys")
 

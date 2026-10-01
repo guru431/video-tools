@@ -21,7 +21,48 @@ set -uo pipefail
 #   ./download.sh --help                        # справка
 # ============================================================================
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# ── Без внешних процессов там, где bash справляется сам ────────────────────
+# Процесс в Git Bash стоит 30–250 мс (антивирус проверяет каждый запуск), и
+# скрипт, который дёргал их десятками до первой загрузки, стартовал секундами.
+# Отсюда два приёма: результат функции — в переменную, а не через $( ) (это
+# подоболочка), и раскрытие параметров вместо dirname/tr.
+#
+# PATH_DIR ← каталог пути $1. Обычный путь (есть '/', нет хвостового '/', '//' и
+# обратного слэша) разбирается раскрытием параметров; любой другой отдаётся
+# настоящему dirname: у Cygwin он считает '\' разделителем, и граничные случаи
+# обязаны вести себя как прежде.
+path_dir() {
+    case "$1" in
+        */|*//*|*\\*) PATH_DIR="$(dirname "$1")" ;;
+        */*) PATH_DIR="${1%/*}"; [ -n "$PATH_DIR" ] || PATH_DIR="/" ;;
+        *) PATH_DIR="$(dirname "$1")" ;;
+    esac
+}
+
+# LOWER_ASCII ← $1 с латиницей в нижнем регистре — то же, что прежний
+# `tr '[:upper:]' '[:lower:]'`, но без двух процессов. ${var,,} не годится: его
+# нет в bash 3.2 (macOS), и он понижал бы и кириллицу. Класс букв перечислен
+# явно: диапазон [A-Z] в bash 3.2 следует порядку сортировки локали.
+_LA_UPPER="ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+_LA_LOWER="abcdefghijklmnopqrstuvwxyz"
+lower_ascii() {
+    local s="$1" out="" c head i
+    LOWER_ASCII="$s"
+    case "$s" in *[ABCDEFGHIJKLMNOPQRSTUVWXYZ]*) ;; *) return 0 ;; esac
+    for ((i = 0; i < ${#s}; i++)); do
+        c="${s:i:1}"
+        case "$c" in
+            [ABCDEFGHIJKLMNOPQRSTUVWXYZ])
+                head="${_LA_UPPER%%"$c"*}"
+                c="${_LA_LOWER:${#head}:1}" ;;
+        esac
+        out="$out$c"
+    done
+    LOWER_ASCII="$out"
+}
+
+path_dir "${BASH_SOURCE[0]}"
+SCRIPT_DIR="$(cd "$PATH_DIR" && pwd)"
 CONFIG_FILE="${SCRIPT_DIR}/config.ini"
 CHANNELS_FILE="${SCRIPT_DIR}/channels.txt"
 
@@ -31,21 +72,23 @@ CHANNELS_FILE="${SCRIPT_DIR}/channels.txt"
 # .exe проверяем ПЕРВЫМ: в Git Bash `test -x dir/ffmpeg` истинно и тогда, когда
 # рядом лежит только ffmpeg.exe — иначе вернули бы путь без расширения, который
 # понимает лишь сам Git Bash.
+# Третий аргумент — имя переменной для результата (без него — печать в stdout).
 resolve_bin() {
-    local override="$1" name="$2"
+    local override="$1" name="$2" found
     if [ -n "$override" ]; then
-        printf '%s' "$override"
+        found="$override"
     elif [ -f "$SCRIPT_DIR/$name.exe" ]; then
-        printf '%s' "$SCRIPT_DIR/$name.exe"
+        found="$SCRIPT_DIR/$name.exe"
     elif [ -x "$SCRIPT_DIR/$name" ] && [ ! -d "$SCRIPT_DIR/$name" ]; then
-        printf '%s' "$SCRIPT_DIR/$name"
+        found="$SCRIPT_DIR/$name"
     else
-        printf '%s' "$name"
+        found="$name"
     fi
+    if [ -n "${3:-}" ]; then printf -v "$3" '%s' "$found"; else printf '%s' "$found"; fi
 }
-YTDLP="$(resolve_bin "${YTDLP_BIN:-}" yt-dlp)"
-FFMPEG="$(resolve_bin "${FFMPEG_BIN:-}" ffmpeg)"
-FFPROBE="$(resolve_bin "${FFPROBE_BIN:-}" ffprobe)"
+resolve_bin "${YTDLP_BIN:-}" yt-dlp YTDLP
+resolve_bin "${FFMPEG_BIN:-}" ffmpeg FFMPEG
+resolve_bin "${FFPROBE_BIN:-}" ffprobe FFPROBE
 
 # Абсолютный путь: POSIX (/x), Windows-диск (C:/x, C:\x) или UNC (\\host\share).
 # Без распознавания drive/UNC `C:/Downloads` считался относительным и превращался
@@ -61,17 +104,19 @@ is_abs_path() {
 # '~' в значении config.ini НЕ раскрывается оболочкой: значение приходит из файла,
 # а не из командной строки. Без явного раскрытия `base_dir = ~/Видео` уезжал в
 # `$SCRIPT_DIR/~/Видео` — каталог с буквальной тильдой в имени.
+# Второй аргумент — имя переменной для результата (без него — печать в stdout).
 expand_tilde() {
-    local p="$1"
+    local p="$1" r
     # Тильда в шаблоне case — литерал по определению (раскрытия здесь нет), так что
     # SC2088 «тильда не раскрывается в кавычках» тут мимо цели. Директива стоит перед
     # всем `case`: перед отдельной веткой shellcheck её не принимает (SC1124).
     # shellcheck disable=SC2088
     case "$p" in
-        "~")   printf '%s' "${HOME:-$p}" ;;
-        "~/"*) printf '%s' "${HOME:-~}/${p#\~/}" ;;
-        *)     printf '%s' "$p" ;;
+        "~")   r="${HOME:-$p}" ;;
+        "~/"*) r="${HOME:-~}/${p#\~/}" ;;
+        *)     r="$p" ;;
     esac
+    if [ -n "${2:-}" ]; then printf -v "$2" '%s' "$r"; else printf '%s' "$r"; fi
 }
 
 # ── JS-рантайм для yt-dlp (deno рядом со скриптом) ─────────────────────────
@@ -91,7 +136,8 @@ expand_tilde() {
 build_js_runtime_args() {
     JS_RUNTIME_ARGS_ARR=()
     local dir deno=""
-    dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    path_dir "${BASH_SOURCE[0]}"
+    dir="$(cd "$PATH_DIR" && pwd)"
     if [ -f "$dir/deno.exe" ]; then
         deno="$dir/deno.exe"
     elif [ -x "$dir/deno" ] && [ ! -d "$dir/deno" ]; then
@@ -153,7 +199,9 @@ trap _cleanup_on_int INT TERM
 COUNT_OK=0
 COUNT_SKIP=0
 COUNT_FAIL=0
-START_TIME=$(date +%s)
+# EPOCHSECONDS — bash 5+, без процесса date; bash 3.2 (macOS) его не знает.
+START_TIME="${EPOCHSECONDS:-}"
+[ -n "$START_TIME" ] || START_TIME=$(date +%s)
 
 # ── Функции вывода ─────────────────────────────────────────────────────────
 # printf '%b…%s', а не `echo -e`: последний интерпретирует escape-последовательности
@@ -171,15 +219,17 @@ log_header(){ printf '\n%b═══ %s ═══%b\n\n' "$BOLD" "$*" "$NC"; }
 # репозитория пишет yes/no — путаница неизбежна и была молчаливой:
 # `use_archive = yes` выключал архив, `continue_on_error = no` всё равно давал -i.
 # Принимаем весь обычный набор написаний; всё непонятное — WARN и умолчание.
+# Результат — в BOOL_VALUE, а не в stdout: вызов через $( ) стоил бы подоболочки.
 to_bool() {
     local raw="$1" def="$2" name="${3:-}"
-    case "$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')" in
-        true|yes|on|1)   printf 'true'  ;;
-        false|no|off|0)  printf 'false' ;;
-        "")              printf '%s' "$def" ;;
+    lower_ascii "$raw"
+    case "$LOWER_ASCII" in
+        true|yes|on|1)   BOOL_VALUE="true"  ;;
+        false|no|off|0)  BOOL_VALUE="false" ;;
+        "")              BOOL_VALUE="$def" ;;
         *)
             [ -n "$name" ] && log_warn "$name: непонятное значение '$raw' (ожидается yes/no) — использую '$def'." >&2
-            printf '%s' "$def" ;;
+            BOOL_VALUE="$def" ;;
     esac
 }
 
@@ -191,31 +241,38 @@ to_bool() {
 # ничего не печатал, поэтому `X=$(validate_enum …)` присваивал пустую строку, и
 # format_preset/audio_format/sponsorblock молча обнулялись. Для config.ini поведение
 # другое и по существу: предупредить и взять умолчание, а не завершить прогон.
+# Результат — в ENUM_VALUE (как и у to_bool — без подоболочки на вызов).
 config_enum() {
     local name="$1" value="$2" def="$3"; shift 3
     local allowed=("$@") a
     for a in "${allowed[@]}"; do
-        [ "$value" = "$a" ] && { printf '%s' "$value"; return; }
+        [ "$value" = "$a" ] && { ENUM_VALUE="$value"; return; }
     done
     log_warn "$name: недопустимое значение '$value' (допустимо: ${allowed[*]}) — использую '$def'." >&2
-    printf '%s' "$def"
+    ENUM_VALUE="$def"
 }
 
 # ── Чтение config.ini ─────────────────────────────────────────────────────
+# Четвёртый аргумент — имя переменной для результата. Без него значение печатается
+# (так его берут тесты), с ним — присваивается: load_config читает десятки ключей,
+# и $( ) на каждый был подоболочкой.
 read_config() {
     local key="$1"
     local section="$2"
     local default="${3:-}"
 
     if [ ! -f "$CONFIG_FILE" ]; then
-        echo "$default"
+        _read_config_out "$default" "${4:-}"
         return
     fi
 
     # F15. Регистронезависимое сравнение ключей/секций — паритет с PS1 (хеш-таблица
     # PowerShell регистронезависима) и с ffmpeg run.sh. Раньше [DOWNLOAD] или
     # Default_Quality работали в GUI, но в SH молча давали default.
-    local saved_ncm; saved_ncm=$(shopt -p nocasematch)
+    # Прежнее состояние опции — через `shopt -q`, а не `$(shopt -p)`: подоболочка
+    # на каждый вызов.
+    local ncm_was_on=false
+    shopt -q nocasematch && ncm_was_on=true
     shopt -s nocasematch
     # bash ≥ 5.2 (patsub_replacement): `&` в строке замены ${v//шаблон/замена}
     # означает найденный текст, и значение переменной окружения с `&` (прокси-URL
@@ -277,16 +334,28 @@ read_config() {
                 [ -n "${!_vn:-}" ] || echo "WARN: переменная $_vn не задана" >&2
                 value="${value//\$\{$_vn\}/${!_vn:-}}"
             done
-            eval "$saved_ncm"
+            $ncm_was_on || shopt -u nocasematch
             if $_psr_on; then shopt -s patsub_replacement; fi
-            echo "$value"
+            _read_config_out "$value" "${4:-}"
             return
         fi
     done < "$CONFIG_FILE"
 
-    eval "$saved_ncm"
+    $ncm_was_on || shopt -u nocasematch
     if $_psr_on; then shopt -s patsub_replacement; fi
-    echo "$default"
+    _read_config_out "$default" "${4:-}"
+}
+
+# Значение read_config: в переменную $2 либо в stdout. Хвостовые переводы строк
+# срезаются и в переменной — ровно как их срезал $( ) у прежних вызовов.
+_read_config_out() {
+    local v="$1"
+    if [ -n "$2" ]; then
+        while [[ $v == *$'\n' ]]; do v="${v%$'\n'}"; done
+        printf -v "$2" '%s' "$v"
+    else
+        echo "$v"
+    fi
 }
 
 # ── Проверка зависимостей ──────────────────────────────────────────────────
@@ -440,15 +509,23 @@ build_cookie_args() {
     esac
 }
 
+# Ссылка несёт ?list=/&list= (без учёта регистра) — то есть ведёт на плейлист.
+# Прежде это был `echo | grep -qi '[?&]list='`: два процесса на каждую проверку.
+url_has_list() {
+    lower_ascii "$1"
+    case "$LOWER_ASCII" in *'?list='*|*'&list='*) return 0 ;; esac
+    return 1
+}
+
 # ── Определение платформы по URL ───────────────────────────────────────────
 detect_platform() {
     local url="$1"
     # Регистр хоста не значим (RFC 3986), поэтому HTTPS://YOUTUBE.COM/... — тот же
     # youtube. Приводим к нижнему регистру только host: путь/query регистрозависимы,
-    # а `tr` вместо ${url,,} — Bash 3.2 на macOS не знает ,,-раскрытия.
+    # а lower_ascii вместо ${url,,} — Bash 3.2 на macOS не знает ,,-раскрытия.
     local host="${url#*://}"
     host="${host%%/*}"; host="${host%%\?*}"; host="${host%%#*}"
-    host="$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')"
+    lower_ascii "$host"; host="$LOWER_ASCII"
     # Домен якорим по границе (начало строки, '.', '@'), иначе notyoutube.com
     # ошибочно распознаётся как youtube (подстрочный матч).
     # youtube-nocookie.com — домен embed-плеера YouTube. Раньше он попадал в "other"
@@ -593,6 +670,43 @@ build_format_args() {
 LIMIT_MAX_PATH=259
 LIMIT_RESERVE=32          # .fNNN + .m4a + .part + -FragNNN
 
+# Разбор полей шаблона — регулярными выражениями самого bash, а не sed: функция
+# стоит на каждой загрузке, и прежние дюжина `printf | sed` были дюжиной процессов.
+# Номерные группы BASH_REMATCH определены и у неучаствовавшей группы (пусто), так
+# что ловушка BSD sed с обратной ссылкой на такую группу здесь не возникает.
+#
+# USER_LIMIT ← пользовательский предел поля $2: число из ПОСЛЕДНЕГО
+# «%(имя[|…|,…|.…]).N» в шаблоне $1 (как жадный `.*` прежнего sed), пусто — нет.
+tpl_user_limit() {
+    local rest="$1" re="%\\($2([|,.][^)]*)?\\)\\.([0-9]+)"
+    USER_LIMIT=""
+    while [[ $rest =~ $re ]]; do
+        USER_LIMIT="${BASH_REMATCH[2]}"
+        rest="${rest#*"${BASH_REMATCH[0]}"}"
+    done
+}
+
+# TPL ← шаблон $1, где у поля $2 предел заменён на $3 с сохранением типа
+# конверсии: сначала «%(имя)[.M]x» → «%(имя).Nx», затем «%(имя<внутр.>)[.M]x» →
+# «%(имя<внутр.>).Nx» — два прохода, как два прежних `sed s///g`.
+tpl_set_limit() {
+    local rest="$1" out="" m
+    local re1="%\\($2\\)(\\.[0-9]+)?([a-zA-Z])"
+    local re2="%\\($2([|,.][^)]*)\\)(\\.[0-9]+)?([a-zA-Z])"
+    while [[ $rest =~ $re1 ]]; do
+        m="${BASH_REMATCH[0]}"
+        out="$out${rest%%"$m"*}%($2).$3${BASH_REMATCH[2]}"
+        rest="${rest#*"$m"}"
+    done
+    rest="$out$rest"; out=""
+    while [[ $rest =~ $re2 ]]; do
+        m="${BASH_REMATCH[0]}"
+        out="$out${rest%%"$m"*}%($2${BASH_REMATCH[1]}).$3${BASH_REMATCH[3]}"
+        rest="${rest#*"$m"}"
+    done
+    TPL="$out$rest"
+}
+
 # Третий аргумент (предел длины пути) — необязательный: production его не передаёт и
 # получает платформенное значение, тест передаёт явно. Без него ожидания теста зависели
 # бы от ОС раннера — на Linux/macOS ветка ниже даёт другой бюджет, и CI падал.
@@ -609,8 +723,10 @@ limit_output_template() {
     # 255 БАЙТ. Считаем бюджет по САМОМУ ДЛИННОМУ компоненту шаблона.
     local posix_component="no"
     if [ -z "$max_path" ]; then
-        case "$(uname -s 2>/dev/null)" in
-            MINGW*|MSYS*|CYGWIN*) max_path=$LIMIT_MAX_PATH ;;
+        # OSTYPE bash знает сам; msys/cygwin — ровно те системы, где uname давал
+        # MINGW/MSYS/CYGWIN. `uname -s` остаётся запасным, если OSTYPE пуст.
+        case "${OSTYPE:-$(uname -s 2>/dev/null)}" in
+            msys*|cygwin*|MINGW*|MSYS*|CYGWIN*) max_path=$LIMIT_MAX_PATH ;;
             *) posix_component="yes" ;;
         esac
     fi
@@ -625,20 +741,30 @@ limit_output_template() {
         budget=$(( max_path - ${#base} - 1 - LIMIT_RESERVE ))
     fi
 
-    # Литеральная часть шаблона: разделители, дефисы, точки — всё, кроме полей.
-    local literals
-    literals=$(printf '%s' "$tpl" | sed 's/%([^)]*)[^a-zA-Z%]*[a-zA-Z]//g')
+    # Поля шаблона и его литеральная часть (разделители, дефисы, точки — всё, кроме
+    # полей) — одним проходом самого bash. Прежде это были `sed` (литералы),
+    # `grep -o` (поля) и ещё по `sed` на каждое поле. Выражение то же, и проход тот
+    # же: слева направо, самое левое совпадение, без перекрытий.
+    local re_field='%\([^)]*\)[^a-zA-Z%]*[a-zA-Z]' re_lim='\)\.([0-9]+)'
+    local rest="$tpl" literals="" field name lim
+    local -a fields=()
+    while [[ $rest =~ $re_field ]]; do
+        field="${BASH_REMATCH[0]}"
+        literals="$literals${rest%%"$field"*}"
+        rest="${rest#*"$field"}"
+        fields+=("$field")
+    done
+    literals="$literals$rest"
     local used=${#literals}
 
     # Прочие поля — консервативные оценки; неизвестное поле считаем длинным.
-    local field name lim
-    while read -r field; do
-        [ -z "$field" ] && continue
+    for field in ${fields[@]+"${fields[@]}"}; do
         name=${field%%)*}; name=${name#%(}
         case "$name" in
             title|playlist|uploader|channel) continue ;;   # считаются отдельно ниже
         esac
-        lim=$(printf '%s' "$field" | sed -n 's/.*)\.\([0-9][0-9]*\).*/\1/p')
+        lim=""
+        [[ $field =~ $re_lim ]] && lim="${BASH_REMATCH[1]}"
         if [ -n "$lim" ]; then used=$(( used + lim )); continue; fi
         case "$name" in
             ext)                       used=$(( used + 5 ))  ;;
@@ -647,7 +773,7 @@ limit_output_template() {
             id)                        used=$(( used + 12 )) ;;
             *)                         used=$(( used + 30 )) ;;
         esac
-    done <<< "$(printf '%s' "$tpl" | grep -o '%([^)]*)[^a-zA-Z%]*[a-zA-Z]')"
+    done
 
     # Присутствие длинных полей и уже заданные пользователем лимиты. Пользовательский
     # лимит уважаем, но только в сторону уменьшения — иначе ini снова вернёт нас в MAX_PATH.
@@ -660,28 +786,34 @@ limit_output_template() {
     # учитывается и здесь, и в подстановке ниже: иначе у формы
     # '%(title|Без имени).50s' пользовательский лимит не находился, а подстановка
     # переписывала его на 100 — УВЕЛИЧИВАЯ вопреки правилу «только в сторону
-    # уменьшения». Группа \([|,.][^)]*\)\{0,1\} не адресуется обратной ссылкой:
-    # BSD sed (macOS-линия CI) поведение ссылки на неучаствовавшую группу не
-    # определяет, поэтому нумерованной остаётся только та, что всегда совпадает.
+    # уменьшения». Сам предел ищет tpl_user_limit.
     local t=0 p=0 u=0 user user_ch
-    if printf '%s' "$tpl" | grep -qE '%\(title[|,).]'; then
+    # Присутствие поля — шаблоном bash (в переменной: '|' и ')' в [[ ]] иначе
+    # разбирались бы как синтаксис), а не `grep -qE` с двумя процессами. Правая
+    # часть `==` намеренно без кавычек: это шаблон, а не строка (SC2053).
+    local has_t='*%(title[|,).]*' has_p='*%(playlist[|,).]*'
+    local has_u='*%(uploader[|,).]*' has_c='*%(channel[|,).]*'
+    # shellcheck disable=SC2053
+    if [[ $tpl == $has_t ]]; then
         t=$def_title
-        user=$(printf '%s' "$tpl" | sed -n 's/.*%(title\([|,.][^)]*\)\{0,1\})\.\([0-9][0-9]*\).*/\2/p')
+        tpl_user_limit "$tpl" title; user="$USER_LIMIT"
         [ -n "$user" ] && [ "$user" -lt "$t" ] && t=$user
     fi
-    if printf '%s' "$tpl" | grep -qE '%\(playlist[|,).]'; then
+    # shellcheck disable=SC2053
+    if [[ $tpl == $has_p ]]; then
         p=$def_playlist
-        user=$(printf '%s' "$tpl" | sed -n 's/.*%(playlist\([|,.][^)]*\)\{0,1\})\.\([0-9][0-9]*\).*/\2/p')
+        tpl_user_limit "$tpl" playlist; user="$USER_LIMIT"
         [ -n "$user" ] && [ "$user" -lt "$p" ] && p=$user
     fi
-    if printf '%s' "$tpl" | grep -qE '%\((uploader|channel)[|,).]'; then
+    # shellcheck disable=SC2053
+    if [[ $tpl == $has_u || $tpl == $has_c ]]; then
         u=$def_uploader
         # Пользовательский лимит читаем у ОБОИХ полей и берём меньший: раньше
         # смотрели только на uploader, поэтому «%(channel).10s» переписывался
         # в «.30s» — лимит УВЕЛИЧИВАЛСЯ вопреки правилу «только в сторону
         # уменьшения», прямо противоположно тому, что обещает комментарий выше.
-        user=$(printf '%s' "$tpl" | sed -n 's/.*%(uploader\([|,.][^)]*\)\{0,1\})\.\([0-9][0-9]*\).*/\2/p')
-        user_ch=$(printf '%s' "$tpl" | sed -n 's/.*%(channel\([|,.][^)]*\)\{0,1\})\.\([0-9][0-9]*\).*/\2/p')
+        tpl_user_limit "$tpl" uploader; user="$USER_LIMIT"
+        tpl_user_limit "$tpl" channel; user_ch="$USER_LIMIT"
         if [ -n "$user_ch" ]; then
             if [ -z "$user" ] || [ "$user_ch" -lt "$user" ]; then user="$user_ch"; fi
         fi
@@ -709,25 +841,18 @@ limit_output_template() {
     fi
 
     # Подставляем лимиты, сохраняя тип конверсии (s/U/B) — он задан пользователем.
-    # Двумя проходами на поле: обычная форма и форма с внутренней частью
-    # ('%(title|Без имени)s', '%(uploader,channel)s'). Одним выражением с
-    # необязательной группой это не делается — обратная ссылка на группу, которая
-    # могла не совпасть, в BSD sed не определена, и macOS-линия CI ловила бы то,
-    # чего не видит Linux. Лимит по грамматике yt-dlp идёт ПОСЛЕ ')', поэтому
-    # внутренняя часть переносится в результат целиком.
+    # Двумя проходами на поле (см. tpl_set_limit): обычная форма и форма с внутренней
+    # частью ('%(title|Без имени)s', '%(uploader,channel)s'). Лимит по грамматике
+    # yt-dlp идёт ПОСЛЕ ')', поэтому внутренняя часть переносится в результат целиком.
     if [ "$t" -gt 0 ]; then
-        tpl=$(printf '%s' "$tpl" | sed "s/%(title)\(\.[0-9][0-9]*\)\{0,1\}\([a-zA-Z]\)/%(title).${t}\2/g")
-        tpl=$(printf '%s' "$tpl" | sed "s/%(title\([|,.][^)]*\))\(\.[0-9][0-9]*\)\{0,1\}\([a-zA-Z]\)/%(title\1).${t}\3/g")
+        tpl_set_limit "$tpl" title "$t"; tpl="$TPL"
     fi
     if [ "$p" -gt 0 ]; then
-        tpl=$(printf '%s' "$tpl" | sed "s/%(playlist)\(\.[0-9][0-9]*\)\{0,1\}\([a-zA-Z]\)/%(playlist).${p}\2/g")
-        tpl=$(printf '%s' "$tpl" | sed "s/%(playlist\([|,.][^)]*\))\(\.[0-9][0-9]*\)\{0,1\}\([a-zA-Z]\)/%(playlist\1).${p}\3/g")
+        tpl_set_limit "$tpl" playlist "$p"; tpl="$TPL"
     fi
     if [ "$u" -gt 0 ]; then
-        tpl=$(printf '%s' "$tpl" | sed "s/%(uploader)\(\.[0-9][0-9]*\)\{0,1\}\([a-zA-Z]\)/%(uploader).${u}\2/g")
-        tpl=$(printf '%s' "$tpl" | sed "s/%(uploader\([|,.][^)]*\))\(\.[0-9][0-9]*\)\{0,1\}\([a-zA-Z]\)/%(uploader\1).${u}\3/g")
-        tpl=$(printf '%s' "$tpl" | sed "s/%(channel)\(\.[0-9][0-9]*\)\{0,1\}\([a-zA-Z]\)/%(channel).${u}\2/g")
-        tpl=$(printf '%s' "$tpl" | sed "s/%(channel\([|,.][^)]*\))\(\.[0-9][0-9]*\)\{0,1\}\([a-zA-Z]\)/%(channel\1).${u}\3/g")
+        tpl_set_limit "$tpl" uploader "$u"; tpl="$TPL"
+        tpl_set_limit "$tpl" channel "$u"; tpl="$TPL"
     fi
     printf '%s' "$tpl"
 }
@@ -936,7 +1061,9 @@ translate_audio() {
     if [ "$vot_timeout" -gt 0 ]; then
         env "${vot_env[@]}" "${vot_cmd[@]}" &
         local vot_pid=$!
-        local waited=0
+        # Первую секунду опрашиваем пятью шагами по 0.2 с: быстрый ответ не ждёт
+        # полной секунды. Таймаут считается в секундах, как и раньше.
+        local waited=0 short_polls=0
         while kill -0 "$vot_pid" 2>/dev/null; do
             if [ "$waited" -ge "$vot_timeout" ]; then
                 log_error "AI-перевод: превышен таймаут ${vot_timeout} с — процесс остановлен."
@@ -946,8 +1073,14 @@ translate_audio() {
                 vot_rc=124
                 break
             fi
-            sleep 1
-            waited=$((waited + 1))
+            if [ "$short_polls" -lt 5 ]; then
+                sleep 0.2
+                short_polls=$((short_polls + 1))
+                [ "$short_polls" -eq 5 ] && waited=$((waited + 1))
+            else
+                sleep 1
+                waited=$((waited + 1))
+            fi
         done
         if [ "$vot_rc" -eq 0 ]; then wait "$vot_pid"; vot_rc=$?; fi
     else
@@ -1118,6 +1251,9 @@ download_batch() {
         log_header "[$total] ${category}/${handle} (${mode})"
 
         local template
+        # OUTPUT_TEMPLATE/PLAYLIST_TEMPLATE заполняет load_config через
+        # `read_config … OUTPUT_TEMPLATE` — присваивание shellcheck не видит (SC2153).
+        # shellcheck disable=SC2153
         if [ "$mode" = "playlists" ]; then
             template="${BASE_DIR}/${category}/$(limit_output_template "${BASE_DIR}/${category}" "$PLAYLIST_TEMPLATE")"
         else
@@ -1260,8 +1396,8 @@ download_batch() {
 
 # ── Итоговая сводка ───────────────────────────────────────────────────────
 print_summary() {
-    local end_time
-    end_time=$(date +%s)
+    local end_time="${EPOCHSECONDS:-}"
+    [ -n "$end_time" ] || end_time=$(date +%s)
     local elapsed=$((end_time - START_TIME))
     local minutes=$((elapsed / 60))
     local seconds=$((elapsed % 60))
@@ -1335,20 +1471,21 @@ EOF
 
 # ── Загрузка конфигурации ──────────────────────────────────────────────────
 load_config() {
-    PROXY_URL=$(read_config "url" "proxy" "")
-    COOKIE_METHOD=$(read_config "method" "cookies" "none")
-    COOKIE_FILE_PATH=$(read_config "file" "cookies" "youtube_cookies.txt")
-    COOKIE_BROWSER=$(read_config "browser" "cookies" "chrome")
-    BASE_DIR=$(read_config "base_dir" "output" "_video_")
-    OUTPUT_TEMPLATE=$(read_config "template" "output" '%(uploader)s/%(upload_date)s - %(title).100U.%(ext)s')
-    PLAYLIST_TEMPLATE=$(read_config "playlist_template" "output" '%(uploader)s/%(playlist)s/%(playlist_index)03d - %(title).100U.%(ext)s')
-    QUALITY=$(read_config "default_quality" "download" "720")
-    FORMAT_PRESET=$(read_config "format_preset" "download" "auto")
-    CONTINUE_ON_ERROR=$(read_config "continue_on_error" "download" "true")
-    USE_ARCHIVE=$(read_config "use_archive" "download" "true")
-    ARCHIVE_FILE=$(read_config "archive_file" "download" "download_archive.txt")
-    AUDIO_FORMAT=$(read_config "audio_format" "download" "best")
-    SPONSORBLOCK=$(read_config "sponsorblock" "download" "off")
+    # Значения — четвёртым аргументом в переменную (см. read_config): без $( ) на ключ.
+    read_config "url" "proxy" "" PROXY_URL
+    read_config "method" "cookies" "none" COOKIE_METHOD
+    read_config "file" "cookies" "youtube_cookies.txt" COOKIE_FILE_PATH
+    read_config "browser" "cookies" "chrome" COOKIE_BROWSER
+    read_config "base_dir" "output" "_video_" BASE_DIR
+    read_config "template" "output" '%(uploader)s/%(upload_date)s - %(title).100U.%(ext)s' OUTPUT_TEMPLATE
+    read_config "playlist_template" "output" '%(uploader)s/%(playlist)s/%(playlist_index)03d - %(title).100U.%(ext)s' PLAYLIST_TEMPLATE
+    read_config "default_quality" "download" "720" QUALITY
+    read_config "format_preset" "download" "auto" FORMAT_PRESET
+    read_config "continue_on_error" "download" "true" CONTINUE_ON_ERROR
+    read_config "use_archive" "download" "true" USE_ARCHIVE
+    read_config "archive_file" "download" "download_archive.txt" ARCHIVE_FILE
+    read_config "audio_format" "download" "best" AUDIO_FORMAT
+    read_config "sponsorblock" "download" "off" SPONSORBLOCK
     # Что делать со ссылкой, у которой есть &list=…:
     #   auto   — как раньше: ссылка с list= считается плейлистом (yt-dlp по умолчанию);
     #   single — скачать ТОЛЬКО указанное видео (--no-playlist);
@@ -1356,59 +1493,69 @@ load_config() {
     # Практический повод для single: у ссылок вида watch?v=X&list=RD… (авто-микс
     # YouTube) плейлист бесконечный, и «скачать это видео» превращалось в закачку
     # микса целиком — по playlist-шаблону, то есть ещё и не туда, куда ожидалось.
-    PLAYLIST_MODE=$(read_config "playlist" "download" "auto")
+    read_config "playlist" "download" "auto" PLAYLIST_MODE
 
     # Нормализация: булевы ключи принимают yes/no/on/off/1/0, перечислимые —
     # проверяются теми же списками, что и одноимённые флаги CLI.
-    CONTINUE_ON_ERROR=$(to_bool "$CONTINUE_ON_ERROR" "true"  "[download] continue_on_error")
-    USE_ARCHIVE=$(to_bool      "$USE_ARCHIVE"        "true"  "[download] use_archive")
-    QUALITY=$(config_enum "[download] default_quality" "$QUALITY" "720" \
-        audio 360 480 720 1080 1440 2160)
-    FORMAT_PRESET=$(config_enum "[download] format_preset" "$FORMAT_PRESET" "auto" \
-        auto avc1_best avc1_https avc1_m3u8 avc1_https_60fps avc1_m3u8_60fps avc1_https_60fps_hdr old_combo)
-    AUDIO_FORMAT=$(config_enum "[download] audio_format" "$AUDIO_FORMAT" "best" \
-        best mp3 m4a opus flac wav)
-    SPONSORBLOCK=$(config_enum "[download] sponsorblock" "$SPONSORBLOCK" "off" \
-        off mark remove)
+    to_bool "$CONTINUE_ON_ERROR" "true"  "[download] continue_on_error"; CONTINUE_ON_ERROR="$BOOL_VALUE"
+    to_bool "$USE_ARCHIVE"       "true"  "[download] use_archive";       USE_ARCHIVE="$BOOL_VALUE"
+    config_enum "[download] default_quality" "$QUALITY" "720" \
+        audio 360 480 720 1080 1440 2160
+    QUALITY="$ENUM_VALUE"
+    config_enum "[download] format_preset" "$FORMAT_PRESET" "auto" \
+        auto avc1_best avc1_https avc1_m3u8 avc1_https_60fps avc1_m3u8_60fps avc1_https_60fps_hdr old_combo
+    FORMAT_PRESET="$ENUM_VALUE"
+    config_enum "[download] audio_format" "$AUDIO_FORMAT" "best" \
+        best mp3 m4a opus flac wav
+    AUDIO_FORMAT="$ENUM_VALUE"
+    config_enum "[download] sponsorblock" "$SPONSORBLOCK" "off" \
+        off mark remove
+    SPONSORBLOCK="$ENUM_VALUE"
 
     # Trim: парсим +/-VALUE из [trim]
     local raw
-    raw=$(read_config "start" "trim" "-00:00:00")
+    read_config "start" "trim" "-00:00:00" raw
     TRIM_START_RAW="$raw"
     if [[ "$raw" == +* ]]; then TRIM_START_ON="true"; TRIM_START_VAL="${raw:1}"
     elif [[ "$raw" == -* ]]; then TRIM_START_ON="false"; TRIM_START_VAL="${raw:1}"
     else TRIM_START_ON="false"; TRIM_START_VAL="$raw"; fi
-    raw=$(read_config "end" "trim" "-00:01:00")
+    read_config "end" "trim" "-00:01:00" raw
     TRIM_END_RAW="$raw"
     if [[ "$raw" == +* ]]; then TRIM_END_ON="true"; TRIM_END_VAL="${raw:1}"
     elif [[ "$raw" == -* ]]; then TRIM_END_ON="false"; TRIM_END_VAL="${raw:1}"
     else TRIM_END_ON="false"; TRIM_END_VAL="$raw"; fi
-    FORCE_KEYFRAMES=$(to_bool "$(read_config "force_keyframes" "trim" "false")" "false" "[trim] force_keyframes")
+    read_config "force_keyframes" "trim" "false" raw
+    to_bool "$raw" "false" "[trim] force_keyframes"; FORCE_KEYFRAMES="$BOOL_VALUE"
     # Сеть: профиль устойчивости + необязательный потолок скорости.
     # Дефолт normal воспроизводит прежние зашитые значения дословно.
-    SPEED_PROFILE=$(read_config "speed_profile" "network" "normal")
-    LIMIT_RATE=$(read_config "limit_rate" "network" "")
+    read_config "speed_profile" "network" "normal" SPEED_PROFILE
+    read_config "limit_rate" "network" "" LIMIT_RATE
 
-    SUB_LANG=$(read_config "lang" "subtitles" "ru")
-    SUB_FORMAT=$(read_config "format" "subtitles" "vtt")
-    SUBS_WITH_VIDEO=$(read_config "download_with_video" "subtitles" "off")
-    SUBS_WITH_VIDEO=$(config_enum "[subtitles] download_with_video" "$SUBS_WITH_VIDEO" "off" \
-        off sidecar embed)
-    PLAYLIST_MODE=$(config_enum "[download] playlist" "$PLAYLIST_MODE" "auto" auto single full)
+    read_config "lang" "subtitles" "ru" SUB_LANG
+    read_config "format" "subtitles" "vtt" SUB_FORMAT
+    read_config "download_with_video" "subtitles" "off" SUBS_WITH_VIDEO
+    config_enum "[subtitles] download_with_video" "$SUBS_WITH_VIDEO" "off" \
+        off sidecar embed
+    SUBS_WITH_VIDEO="$ENUM_VALUE"
+    config_enum "[download] playlist" "$PLAYLIST_MODE" "auto" auto single full
+    PLAYLIST_MODE="$ENUM_VALUE"
     # CLI перекрывает config.ini — как и все прочие флаги.
     [ -n "${PLAYLIST_MODE_CLI:-}" ] && PLAYLIST_MODE="$PLAYLIST_MODE_CLI"
 
     # Перевод
-    TRANSLATE_ENABLED=$(to_bool "$(read_config "enabled" "translation" "false")" "false" "[translation] enabled")
-    TRANSLATE_LANG=$(read_config "target_lang" "translation" "ru")
-    TRANSLATE_VOICE=$(read_config "voice_style" "translation" "live")
-    TRANSLATE_MODE=$(config_enum "[translation] mode" "$(read_config "mode" "translation" "mix")" "mix" \
-        dual_track mix replace)
-    TRANSLATE_ORIG_VOL=$(read_config "original_volume" "translation" "0.3")
-    TRANSLATE_TRANS_VOL=$(read_config "translation_volume" "translation" "1.0")
-    TRANSLATE_ORIG_LANG=$(read_config "original_lang" "translation" "en")
+    read_config "enabled" "translation" "false" raw
+    to_bool "$raw" "false" "[translation] enabled"; TRANSLATE_ENABLED="$BOOL_VALUE"
+    read_config "target_lang" "translation" "ru" TRANSLATE_LANG
+    read_config "voice_style" "translation" "live" TRANSLATE_VOICE
+    read_config "mode" "translation" "mix" raw
+    config_enum "[translation] mode" "$raw" "mix" \
+        dual_track mix replace
+    TRANSLATE_MODE="$ENUM_VALUE"
+    read_config "original_volume" "translation" "0.3" TRANSLATE_ORIG_VOL
+    read_config "translation_volume" "translation" "1.0" TRANSLATE_TRANS_VOL
+    read_config "original_lang" "translation" "en" TRANSLATE_ORIG_LANG
     # Потолок времени на один вызов vot-cli-live. 0 = без ограничения.
-    TRANSLATE_TIMEOUT_SEC=$(read_config "timeout_sec" "translation" "900")
+    read_config "timeout_sec" "translation" "900" TRANSLATE_TIMEOUT_SEC
     case "$TRANSLATE_TIMEOUT_SEC" in
         ''|*[!0-9]*)
             log_warn "[translation] timeout_sec = '$TRANSLATE_TIMEOUT_SEC' — ожидается целое число секунд, использую 900."
@@ -1416,9 +1563,9 @@ load_config() {
     esac
 
     # Относительные пути резолвятся от каталога скрипта; drive/UNC — уже абсолютные.
-    COOKIE_FILE_PATH="$(expand_tilde "$COOKIE_FILE_PATH")"
-    BASE_DIR="$(expand_tilde "$BASE_DIR")"
-    ARCHIVE_FILE="$(expand_tilde "$ARCHIVE_FILE")"
+    expand_tilde "$COOKIE_FILE_PATH" COOKIE_FILE_PATH
+    expand_tilde "$BASE_DIR" BASE_DIR
+    expand_tilde "$ARCHIVE_FILE" ARCHIVE_FILE
     is_abs_path "$COOKIE_FILE_PATH" || COOKIE_FILE_PATH="${SCRIPT_DIR}/${COOKIE_FILE_PATH}"
     is_abs_path "$BASE_DIR"         || BASE_DIR="${SCRIPT_DIR}/${BASE_DIR}"
     # archive_file тоже путь, и абсолютный он или нет — решает та же функция.
@@ -1709,7 +1856,7 @@ main() {
         elif [ "$QUALITY" = "audio" ]; then
             log_warn "AI-перевод не поддерживается для загрузки только аудио (quality=audio) — перевод отключён."
             TRANSLATE_ENABLED="false"
-        elif echo "$URL" | grep -qi '[?&]list='; then
+        elif url_has_list "$URL"; then
             log_warn "AI-перевод недоступен для плейлистов (vot переводит по одному URL) — скачивайте видео по одному. Перевод отключён."
             TRANSLATE_ENABLED="false"
         elif [ "$TRIM_START_ON" = "true" ] || [ "$TRIM_END_ON" = "true" ] || [ "$SPONSORBLOCK" = "remove" ]; then
@@ -1734,7 +1881,7 @@ main() {
         # playlist = single качается одно видео, и playlist-шаблон разложил бы его
         # по несуществующей структуре плейлиста.
         local template
-        if [ "${PLAYLIST_MODE:-auto}" != "single" ] && echo "$URL" | grep -qi '[?&]list='; then
+        if [ "${PLAYLIST_MODE:-auto}" != "single" ] && url_has_list "$URL"; then
             template="${BASE_DIR}/$(limit_output_template "$BASE_DIR" "$PLAYLIST_TEMPLATE")"
         else
             template="${BASE_DIR}/$(limit_output_template "$BASE_DIR" "$OUTPUT_TEMPLATE")"

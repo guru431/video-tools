@@ -21,7 +21,6 @@ TESTS_RESULT_OWNER=$$
 trap '[ "${TESTS_RESULT_OWNER:-}" = "$$" ] && rm -f "$TESTS_RESULT_FILE"' EXIT
 
 _tally() { printf '%s\n' "$1" >> "$TESTS_RESULT_FILE"; }
-_tally_count() { grep -c "^$1\$" "$TESTS_RESULT_FILE" 2>/dev/null || true; }
 
 # ── Временный файл С РАСШИРЕНИЕМ ───────────────────────────
 # $1 = префикс пути (каталог + начало имени), $2 = расширение вместе с точкой.
@@ -33,13 +32,25 @@ _tally_count() { grep -c "^$1\$" "$TESTS_RESULT_FILE" 2>/dev/null || true; }
 # «mkstemp failed: File exists», переменная остаётся пустой, вывод уходит в никуда — и
 # тест молча проверяет не то, что собирался (так упал macOS-джоб CI 2026-08-15).
 # Расширение при этом нужно по делу: powershell не исполняет файл без .ps1, cmd.exe —
-# без .cmd. Поэтому уникальное имя генерируем БЕЗ суффикса и дописываем его сами.
+# без .cmd. Поэтому имя с суффиксом создаём сами: случайная часть из $RANDOM, а
+# уникальность держит noclobber (`>` под `set -C` создаёт файл через O_EXCL и
+# занятое имя не перезапишет — тогда берётся следующее). Прежние mktemp + mv
+# стоили двух процессов на каждый из сотен вызовов набора.
 mktemp_suffix() {
-    local prefix="$1" ext="${2:-}" base
-    base="$(mktemp "${prefix}XXXXXX")" || return 1
-    [ -n "$ext" ] || { printf '%s' "$base"; return 0; }
-    mv "$base" "${base}${ext}" || return 1
-    printf '%s' "${base}${ext}"
+    local prefix="$1" ext="${2:-}" f n=0 set_c=""
+    case "$-" in *C*) ;; *) set -C; set_c=1 ;; esac
+    while [ "$n" -lt 100 ]; do
+        f="${prefix}${RANDOM}${RANDOM}${ext}"
+        n=$((n + 1))
+        { [ -e "$f" ] || [ -L "$f" ]; } && continue
+        if { : > "$f"; } 2>/dev/null; then
+            [ -n "$set_c" ] && set +C
+            printf '%s' "$f"
+            return 0
+        fi
+    done
+    [ -n "$set_c" ] && set +C
+    return 1
 }
 
 # ── Сетевой guard ──────────────────────────────────────────
@@ -54,14 +65,17 @@ mktemp_suffix() {
 if [ -z "${TEST_NET_GUARD_DIR:-}" ]; then
     TEST_NET_GUARD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/tests_netguard_XXXXXX")"
     TEST_NET_GUARD_OWNER=$$
+    # printf, а не `cat <<`, и один chmod на все заглушки: это начало КАЖДОГО
+    # тест-файла, а каждый лишний процесс здесь стоит десятки миллисекунд.
+    # $(basename …) в одинарных кавычках — текст заглушки: раскрывается при её
+    # запуске, а не здесь (SC2016).
     for _bin in vot-cli-live vot-cli-live.exe curl; do
-        cat > "$TEST_NET_GUARD_DIR/$_bin" <<'GUARD'
-#!/bin/bash
-echo "NETWORK GUARD: реальный '$(basename "$0")' вызван в тесте — сетевые вызовы запрещены. Передайте мок через VOT_BIN/CURL_BIN." >&2
-exit 97
-GUARD
-        chmod +x "$TEST_NET_GUARD_DIR/$_bin"
+        # shellcheck disable=SC2016
+        printf '%s\n' '#!/bin/bash' \
+            'echo "NETWORK GUARD: реальный '"'"'$(basename "$0")'"'"' вызван в тесте — сетевые вызовы запрещены. Передайте мок через VOT_BIN/CURL_BIN." >&2' \
+            'exit 97' > "$TEST_NET_GUARD_DIR/$_bin"
     done
+    chmod +x "$TEST_NET_GUARD_DIR/vot-cli-live" "$TEST_NET_GUARD_DIR/vot-cli-live.exe" "$TEST_NET_GUARD_DIR/curl"
     export PATH="$TEST_NET_GUARD_DIR:$PATH"
     export TEST_NET_GUARD_DIR
     trap '[ "${TESTS_RESULT_OWNER:-}" = "$$" ] && rm -f "$TESTS_RESULT_FILE"; [ "${TEST_NET_GUARD_OWNER:-}" = "$$" ] && rm -rf "$TEST_NET_GUARD_DIR"' EXIT
@@ -125,8 +139,18 @@ assert_eq() {
 #     а guardrail зелёный. Проверено на .ps1 в 94 КБ.
 # Here-string читается grep'ом из временного файла, пайплайна нет вовсе,
 # поэтому ни SIGPIPE, ни pipefail на результат не влияют.
+#
+# Однострочный паттерн сравнивается самим bash, без grep: ассерт с grep — это
+# процесс, а процесс в Git Bash стоит 30–250 мс (замер 2026-10-01: 84 мс против
+# 0,8 мс на тексте в 140 КБ), и на тысячах ассертов набора это минуты. Паттерн в
+# кавычках, поэтому `*`, `?` и `[` в нём — обычные символы, как у `grep -F`.
+# Многострочный паттерн `grep -F` понимает как СПИСОК паттернов (совпадение
+# любого), и эта семантика сохраняется — он по-прежнему идёт через grep.
 _text_contains() {
-    grep -qF -- "$2" <<< "$1"
+    case "$2" in
+        *$'\n'*) grep -qF -- "$2" <<< "$1" ;;
+        *) [[ $1 == *"$2"* ]] ;;
+    esac
 }
 
 assert_contains() {
@@ -189,9 +213,17 @@ assert_file_exists() {
 }
 
 summary() {
-    TESTS_PASS=$(_tally_count P); TESTS_PASS=${TESTS_PASS:-0}
-    TESTS_FAIL=$(_tally_count F); TESTS_FAIL=${TESTS_FAIL:-0}
-    TESTS_SKIP=$(_tally_count S); TESTS_SKIP=${TESTS_SKIP:-0}
+    # Подсчёт — циклом самого bash, а не тремя `grep -c`: те стоили шесть
+    # процессов на каждый тест-файл.
+    local _t
+    TESTS_PASS=0; TESTS_FAIL=0; TESTS_SKIP=0
+    while IFS= read -r _t; do
+        case "$_t" in
+            P) TESTS_PASS=$((TESTS_PASS + 1)) ;;
+            F) TESTS_FAIL=$((TESTS_FAIL + 1)) ;;
+            S) TESTS_SKIP=$((TESTS_SKIP + 1)) ;;
+        esac
+    done 2>/dev/null < "$TESTS_RESULT_FILE"
     local total=$((TESTS_PASS + TESTS_FAIL + TESTS_SKIP))
     echo -e "\n${BOLD}${CYAN}═══════════════════════════════════════${NC}"
     echo -e "  Всего: $total  |  ${GREEN}✓ $TESTS_PASS${NC}  |  ${RED}✗ $TESTS_FAIL${NC}  |  ${YELLOW}○ $TESTS_SKIP${NC}"

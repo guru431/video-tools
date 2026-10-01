@@ -97,8 +97,8 @@ if [ ! -e "${WORK}/outroot.mp4" ]; then pass "нет склейки '.../outroot
 rm -rf "$IN/sub" "$IN/root.mp4" "$DST/sub" "$DST/root.mp4" "$DST/.root.ffconv"
 
 # Нормализация — в самом script.* (choke point: покрывает и CLI, и GUI).
-assert_contains "SH: нормализация корневых путей есть"      'folder_sources="$(norm_folder "$folder_sources")"' "$SH_SRC"
-assert_contains "SH: destination тоже нормализуется"        'folder_destination="$(norm_folder "$folder_destination")"' "$SH_SRC"
+assert_contains "SH: нормализация корневых путей есть"      'norm_folder "$folder_sources"; folder_sources="$NORM_FOLDER"' "$SH_SRC"
+assert_contains "SH: destination тоже нормализуется"        'norm_folder "$folder_destination"; folder_destination="$NORM_FOLDER"' "$SH_SRC"
 assert_contains "PS1: нормализация корневых путей есть"     '$folder_sources     = Normalize-FolderPath $folder_sources' "$PS1_SRC"
 assert_contains "CMD: нормализация корневых путей есть"     'call :norm_folder folder_sources' "$CMD_SRC"
 assert_contains "CMD: подпрограмма :norm_folder на месте"   ':norm_folder' "$CMD_SRC"

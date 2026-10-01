@@ -60,15 +60,15 @@ if [[ "$*" == *" -i "* ]] || [[ "$*" == "-i "* ]]; then
     else
         VSTREAM="    Stream #0:0(und): Video: h264 (High), yuv420p, 1920x1080, 30 fps, 30 tbr, 15360 tbn"
     fi
-    cat << MEDIAEOF >&2
-ffmpeg version 6.0 (mock)
-Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'input.mp4':
-  Metadata:
-    encoder         : Lavf58.76.100
-  Duration: ${DURATION}, start: 0.000000, bitrate: ${BITRATE} kb/s
-${VSTREAM}
-    Stream #0:1(und): Audio: ${AUDIO_CODEC}, 48000 Hz, stereo, fltp, 192 kb/s
-MEDIAEOF
+    # printf, а не `cat <<`: мок зовут сотни раз за прогон, и лишний процесс на
+    # каждый вызов -i заметен в общем времени набора.
+    printf '%s\n' "ffmpeg version 6.0 (mock)" \
+        "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'input.mp4':" \
+        "  Metadata:" \
+        "    encoder         : Lavf58.76.100" \
+        "  Duration: ${DURATION}, start: 0.000000, bitrate: ${BITRATE} kb/s" \
+        "${VSTREAM}" \
+        "    Stream #0:1(und): Audio: ${AUDIO_CODEC}, 48000 Hz, stereo, fltp, 192 kb/s" >&2
 fi
 
 # Имитация silencedetect: синтетические silence_start/silence_end в stderr

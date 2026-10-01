@@ -34,15 +34,14 @@ if [[ "$*" == *"-show_entries"* ]] && [[ "$*" == *"format="* ]]; then
     exit 0
 fi
 
-# Дефолтный вывод в стиле ffprobe stderr (текстовый)
-cat << 'EOF'
-ffprobe version 6.0 (mock)
-Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'input.mp4':
-  Metadata:
-    encoder         : Lavf58.76.100
-  Duration: 00:01:00.00, start: 0.000000, bitrate: 2000 kb/s
-    Stream #0:0(und): Video: h264 (High), yuv420p, 1920x1080, 1808 kb/s, 30 fps, 30 tbr, 15360 tbn
-    Stream #0:1(und): Audio: aac, 48000 Hz, stereo, fltp, 192 kb/s
-EOF
+# Дефолтный вывод в стиле ffprobe stderr (текстовый). printf, а не `cat <<`:
+# без лишнего процесса на каждый вызов мока.
+printf '%s\n' "ffprobe version 6.0 (mock)" \
+    "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'input.mp4':" \
+    "  Metadata:" \
+    "    encoder         : Lavf58.76.100" \
+    "  Duration: 00:01:00.00, start: 0.000000, bitrate: 2000 kb/s" \
+    "    Stream #0:0(und): Video: h264 (High), yuv420p, 1920x1080, 1808 kb/s, 30 fps, 30 tbr, 15360 tbn" \
+    "    Stream #0:1(und): Audio: aac, 48000 Hz, stereo, fltp, 192 kb/s"
 
 exit 0

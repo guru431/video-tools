@@ -33,6 +33,7 @@
 #                              macOS — красно, то есть на половине CI.
 # Побайтовый проход безопасен и для UTF-8: продолжающие байты кириллицы всегда
 # ≥ 0x80 и с 0x5C/0x22 не совпадают, поэтому «Шрифт» проходит насквозь.
+# Второй аргумент — имя переменной для результата (без него — печать в stdout).
 remote_escape_dq() {
 	local s="$1" out='' i c
 	for (( i = 0; i < ${#s}; i++ )); do
@@ -43,7 +44,7 @@ remote_escape_dq() {
 			*)   out="$out$c" ;;
 		esac
 	done
-	printf '%s' "$out"
+	if [ -n "${2:-}" ]; then printf -v "$2" '%s' "$out"; else printf '%s' "$out"; fi
 }
 
 # --- JSON: сборка ---
@@ -208,17 +209,26 @@ remote_op_for_config() {
 # {"state":"running","steps":[{"state":"done"}]} поле state читалось как "done", и
 # клиент считал завершённой задачу, которая ещё идёт. Берём ПЕРВОЕ вхождение: срезаем
 # всё до первого `"key"` отдельным шагом, а значение вынимаем уже из хвоста.
+#
+# Разбор — регулярными выражениями самого bash, а не `tr`/`sed`/`head`: функция
+# зовётся на каждом ответе службы, и прежние конвейеры стоили около восьми
+# процессов на поле (в Git Bash процесс — 30–250 мс). Выражения те же, что были у
+# sed: строковое значение в кавычках, иначе — бескавычечное до разделителя.
 remote_json_field() {
-	local json="$1" key="$2" tail v
+	local json="$1" key="$2" tail
+	local re_str='^[[:space:]]*:[[:space:]]*"([^"]*)"'
+	local re_bare='^[[:space:]]*:[[:space:]]*([^",}[:space:]]+)'
 	# Переводы строк схлопываем: pretty-printed JSON от службы иначе не разбирается
-	# построчным sed вовсе (ключ и значение оказываются на разных строках).
-	json="$(printf '%s' "$json" | tr '\n' ' ')"
+	# (ключ и значение оказываются на разных строках).
+	json="${json//$'\n'/ }"
 	case "$json" in *"\"${key}\""*) ;; *) return 0 ;; esac
 	tail="${json#*\"${key}\"}"
-	v="$(printf '%s' "$tail" | sed -n "s/^[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -1)"
-	if [ -n "$v" ]; then printf '%s' "$v"; return 0; fi
-	v="$(printf '%s' "$tail" | sed -n "s/^[[:space:]]*:[[:space:]]*\([^\",}[:space:]]\{1,\}\).*/\1/p" | head -1)"
-	printf '%s' "$v"
+	if [[ $tail =~ $re_str ]] && [ -n "${BASH_REMATCH[1]}" ]; then
+		printf '%s' "${BASH_REMATCH[1]}"
+		return 0
+	fi
+	[[ $tail =~ $re_bare ]] && printf '%s' "${BASH_REMATCH[1]}"
+	return 0
 }
 
 # --- HTTP ---
@@ -240,7 +250,7 @@ remote_json_field() {
 remote_curl_auth() {
 	# Внутри кавычек curl-конфига экранируются ровно \ и " — то же правило, что и
 	# в строке JSON, поэтому общий remote_escape_dq (там же — почему не подстановка).
-	local k; k="$(remote_escape_dq "$remote_api_key")"
+	local k; remote_escape_dq "$remote_api_key" k
 	printf 'header = "Authorization: Bearer %s"\n' "$k"
 }
 
@@ -371,16 +381,48 @@ remote_caps_encoders() {
 	# литералом и молча возвращает пустоту — то есть ровно тот отказ, который
 	# здесь и чинится. Поэтому форму выбирает оболочка, а sed зовётся под каждую
 	# отдельно.
-	local v
-	v="$(printf '%s' "$1" | tr '\n' ' ' | sed -n 's/.*"encoders"[[:space:]]*:[[:space:]]*//p' | head -1)"
+	#
+	# Разбор — средствами самого bash (preflight идёт на каждом прогоне, а прежний
+	# конвейер tr/sed/grep стоил с десяток процессов), семантика прежняя:
+	# значение берётся после ПОСЛЕДНЕГО `"encoders"\s*:\s*` (как у жадного `.*` sed),
+	# список — до первой `]`, объект — до первой `}`, ключи `"имя":` вырезаются, а
+	# строки в кавычках перечисляются через пробел.
+	local s="${1//$'\n'/ }" head="" v="" re_colon='^[[:space:]]*:[[:space:]]*'
+	local re_key='"[A-Za-z_][A-Za-z0-9_]*"[[:space:]]*:[[:space:]]*' m out=""
+	while :; do
+		case "$s" in *'"encoders"'*) ;; *) return 0 ;; esac
+		head="${s%\"encoders\"*}"
+		v="${s##*\"encoders\"}"
+		if [[ $v =~ $re_colon ]]; then
+			v="${v#"${BASH_REMATCH[0]}"}"
+			break
+		fi
+		s="$head"
+	done
 	case "$v" in
-		\[*) v="$(printf '%s' "$v" | sed -n 's/^\(\[[^]]*\]\).*/\1/p')" ;;
-		\{*) v="$(printf '%s' "$v" | sed -n 's/^\({[^}]*}\).*/\1/p')" ;;
+		\[*) case "$v" in *']'*) v="${v%%]*}]" ;; *) v="" ;; esac ;;
+		\{*) case "$v" in *'}'*) v="${v%%\}*}}" ;; *) v="" ;; esac ;;
 		*)   return 0 ;;
 	esac
-	printf '%s' "$v" \
-		| sed 's/"[A-Za-z_][A-Za-z0-9_]*"[[:space:]]*:[[:space:]]*//g' \
-		| grep -o '"[^"]*"' | tr '\n' ' '
+	while [[ $v =~ $re_key ]]; do
+		m="${BASH_REMATCH[0]}"
+		out="$out${v%%"$m"*}"
+		v="${v#*"$m"}"
+	done
+	remote_quoted_words "$out$v"
+	printf '%s' "$REMOTE_WORDS"
+}
+
+# REMOTE_WORDS ← все строки в кавычках из $1, каждая с пробелом после — то же,
+# что `grep -o '"[^"]*"' | tr '\n' ' '`.
+remote_quoted_words() {
+	local rest="$1" re='"[^"]*"' m
+	REMOTE_WORDS=""
+	while [[ $rest =~ $re ]]; do
+		m="${BASH_REMATCH[0]}"
+		REMOTE_WORDS="$REMOTE_WORDS$m "
+		rest="${rest#*"$m"}"
+	done
 }
 
 # Список контейнеров берётся из ops.transcode.values.container. Хвост режем
@@ -388,21 +430,22 @@ remote_caps_encoders() {
 # (concat, remux) свои списки, и жадный поиск подставил бы чужой. Не нашли —
 # молчим и ничего не проверяем: отсутствие поля не повод отказывать.
 remote_caps_containers() {
-	local tail
-	tail="$(printf '%s' "$1" | tr '\n' ' ')"
+	local tail re='^[[:space:]]*:[[:space:]]*\[([^]]*)\]'
+	tail="${1//$'\n'/ }"
 	case "$tail" in *'"transcode"'*) ;; *) return 0 ;; esac
 	tail="${tail#*\"transcode\"}"
 	case "$tail" in *'"container"'*) ;; *) return 0 ;; esac
 	tail="${tail#*\"container\"}"
-	printf '%s' "$tail" | sed -n 's/^[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/p' \
-		| grep -o '"[^"]*"' | tr '\n' ' '
+	[[ $tail =~ $re ]] || return 0
+	remote_quoted_words "${BASH_REMATCH[1]}"
+	printf '%s' "$REMOTE_WORDS"
 }
 
 # Пустой список ("encoders": []) и отсутствие ключа — РАЗНЫЕ вещи. Первое означает
 # «служба не умеет ничего», второе — «служба ничего не сказала», и раньше оба
 # приводили к «принять любой кодек».
 remote_caps_declared() {
-	case "$(printf '%s' "$1" | tr '\n' ' ')" in *'"encoders"'*) return 0 ;; esac
+	case "${1//$'\n'/ }" in *'"encoders"'*) return 0 ;; esac
 	return 1
 }
 
@@ -636,12 +679,25 @@ remote_file_mtime() {
 # Отпечаток источника: размер, время изменения, адрес службы. Общая часть докачки
 # загрузки и возобновления задачи — обе обязаны отказаться, если файл подменили или
 # служба другая.
+# SIDECAR_VALUE ← значение из ПЕРВОЙ строки «<ключ>=…» файла $1 (пусто, если её
+# нет) — то же, что `sed -n 's/^<ключ>=//p' | head -1`, но чтением самого bash:
+# sidecar разбирается на каждом файле и каждой части, а sed с head — процессы.
+remote_sidecar_get() {
+	local line
+	SIDECAR_VALUE=""
+	[ -f "$1" ] || return 0
+	while IFS= read -r line || [ -n "$line" ]; do
+		case "$line" in "$2="*) SIDECAR_VALUE="${line#"$2="}"; return 0 ;; esac
+	done < "$1"
+	return 0
+}
+
 remote_upload_sidecar_valid() {
 	local f="$REMOTE_UPLOAD_SIDECAR" src="$1" size="" ep="" mt=""
 	[ -n "$f" ] && [ -f "$f" ] || return 1
-	size="$(sed -n 's/^size=//p' "$f" | head -1)"
-	ep="$(sed -n 's/^endpoint=//p' "$f" | head -1)"
-	mt="$(sed -n 's/^mtime=//p' "$f" | head -1)"
+	remote_sidecar_get "$f" size; size="$SIDECAR_VALUE"
+	remote_sidecar_get "$f" endpoint; ep="$SIDECAR_VALUE"
+	remote_sidecar_get "$f" mtime; mt="$SIDECAR_VALUE"
 	# Источник изменился или сменилась служба — прежние байты не наши.
 	[ "$size" = "$(file_size "$src")" ] || return 1
 	[ "$ep" = "$remote_endpoint" ] || return 1
@@ -653,7 +709,9 @@ remote_upload_sidecar_valid() {
 
 remote_upload_sidecar_read() {
 	remote_upload_sidecar_valid "$1" || return 0
-	sed -n 's/^upload_id=//p' "$REMOTE_UPLOAD_SIDECAR" | head -1
+	remote_sidecar_get "$REMOTE_UPLOAD_SIDECAR" upload_id
+	[ -n "$SIDECAR_VALUE" ] && printf '%s\n' "$SIDECAR_VALUE"
+	return 0
 }
 
 # Загрузка подтверждена службой. Без этой пометки следующий запуск, увидевший
@@ -662,7 +720,16 @@ remote_upload_sidecar_read() {
 remote_upload_sidecar_completed() {
 	local f="$REMOTE_UPLOAD_SIDECAR"
 	[ -n "$f" ] && [ -f "$f" ] || return 1
-	grep -q '^complete=yes$' "$f" 2>/dev/null
+	remote_sidecar_has_line "$f" "complete=yes"
+}
+
+# Есть ли в файле $1 строка, в точности равная $2 (как `grep -q '^…$'`).
+remote_sidecar_has_line() {
+	local line
+	while IFS= read -r line || [ -n "$line" ]; do
+		[ "$line" = "$2" ] && return 0
+	done < "$1"
+	return 1
 }
 
 # Sidecar пишется ЦЕЛИКОМ через соседний .new и mv. Запись `> "$f"` сперва
@@ -673,14 +740,15 @@ remote_upload_sidecar_completed() {
 remote_sidecar_save() {
 	local f="$1" rc=0
 	{ cat > "${f}.new"; } 2>/dev/null && mv -f "${f}.new" "$f" 2>/dev/null || rc=1
-	rm -f "${f}.new" 2>/dev/null
+	# После удачного mv удалять нечего — rm (процесс) только когда .new остался.
+	[ -e "${f}.new" ] && rm -f "${f}.new" 2>/dev/null
 	return $rc
 }
 
 remote_upload_sidecar_mark_complete() {
 	local f="$REMOTE_UPLOAD_SIDECAR"
 	[ -n "$f" ] && [ -f "$f" ] || return 0
-	grep -q '^complete=yes$' "$f" 2>/dev/null && return 0
+	remote_sidecar_has_line "$f" "complete=yes" && return 0
 	{ cat "$f"; echo "complete=yes"; } | remote_sidecar_save "$f" || true
 	return 0
 }
@@ -697,8 +765,11 @@ remote_upload_sidecar_mark_complete() {
 remote_upload_sidecar_read_job() {
 	local f="$REMOTE_UPLOAD_SIDECAR" src="$1" part="${2:-1}" sig="${3:-}"
 	remote_upload_sidecar_valid "$src" || return 0
-	[ "$(sed -n 's/^sig=//p' "$f" | head -1)" = "$sig" ] || return 0
-	sed -n "s/^job\.${part}=//p" "$f" | head -1
+	remote_sidecar_get "$f" sig
+	[ "$SIDECAR_VALUE" = "$sig" ] || return 0
+	remote_sidecar_get "$f" "job.${part}"
+	[ -n "$SIDECAR_VALUE" ] && printf '%s\n' "$SIDECAR_VALUE"
+	return 0
 }
 
 remote_upload_sidecar_write_job() {
@@ -717,14 +788,24 @@ size=$(file_size "$src")
 mtime=$(remote_file_mtime "$src")
 endpoint=$remote_endpoint"
 	fi
-	stored="$(printf '%s\n' "$cur" | sed -n 's/^sig=//p' | head -1)"
+	# Строки разбираются самим bash, а не sed/grep: прежде здесь было пять процессов
+	# на каждую созданную задачу.
+	local line kept="" seen_sig="no" have_job="no"
+	while IFS= read -r line; do
+		case "$line" in
+			sig=*) [ "$seen_sig" = "no" ] && { stored="${line#sig=}"; seen_sig="yes"; } ;;
+		esac
+		case "$line" in "job.${part}="*) have_job="yes" ;; esac
+		case "$line" in sig=*|job.*) ;; *) kept="$kept$line"$'\n' ;; esac
+	done <<< "$cur"
 	if [ "$stored" != "$sig" ]; then
 		# Настройки сменились — прежние задачи считались по другому config.ini.
 		# Без этой перезаписи sidecar навсегда остался бы с чужой подписью, и
 		# возобновление молча не работало бы до его удаления руками.
-		cur="$(printf '%s\n' "$cur" | sed -e '/^sig=/d' -e '/^job\./d')
-sig=$sig"
-	elif printf '%s\n' "$cur" | grep -q "^job\.${part}="; then
+		# Хвостовые пустые строки срезаются, как их срезал прежний $( ).
+		while [[ $kept == *$'\n' ]]; do kept="${kept%$'\n'}"; done
+		cur="$kept"$'\n'"sig=$sig"
+	elif [ "$have_job" = "yes" ]; then
 		return 0
 	fi
 	# Одна запись итогового содержимого вместо цепочки «создать → переписать →
@@ -800,7 +881,7 @@ remote_upload() {
 	# собранном файле стоил бы полного перезалива. Длительность берём отдельной
 	# ручкой: ответа complete у нас в этот раз нет вовсе.
 	if [ -n "$uid" ] && [ "$offset" -eq "$size" ] 2>/dev/null && remote_upload_sidecar_completed; then
-		log_msg "INFO" "Исходник уже принят службой — отправка не нужна: $(basename "$file")"
+		log_msg "INFO" "Исходник уже принят службой — отправка не нужна: ${file##*/}"
 		remote_http GET "/uploads/$uid/probe"
 		[ "$REMOTE_HTTP_CODE" = "200" ] && \
 			REMOTE_UPLOAD_DURATION="$(remote_json_field "$REMOTE_HTTP_BODY" duration)"
@@ -1103,8 +1184,9 @@ REMOTE_RESULT_SIZE=""
 REMOTE_RESULT_VERIFIED="no"
 remote_wait() {
 	local jid="$1" label="$2" polls=0 answer state
-	local last_change limit sig last_sig="" fails=0 maxfails="${REMOTE_POLL_MAX_FAILS:-5}"
-	last_change="$(date +%s)"
+	local last_change limit sig last_sig="" fails=0 maxfails="${REMOTE_POLL_MAX_FAILS:-5}" now
+	# Время — EPOCHSECONDS (bash 5+, без процесса на каждом опросе); bash 3.2 — date.
+	last_change="${EPOCHSECONDS:-$(date +%s)}"
 	limit="$(remote_stall_seconds)"
 	REMOTE_CURRENT_JOB="$jid"
 	while :; do
@@ -1171,13 +1253,14 @@ remote_wait() {
 		sig="${state}|$(remote_json_field "$answer" progress)"
 		if [ "$sig" != "$last_sig" ]; then
 			last_sig="$sig"
-			last_change="$(date +%s)"
+			last_change="${EPOCHSECONDS:-$(date +%s)}"
 		fi
 		polls=$((polls + 1))
 		if [ -n "${REMOTE_WAIT_MAX_POLLS:-}" ] && [ "$polls" -ge "$REMOTE_WAIT_MAX_POLLS" ]; then
 			printf "\n"; REMOTE_CURRENT_JOB=""; return 1
 		fi
-		if [ "$(( $(date +%s) - last_change ))" -ge "$limit" ]; then
+		now="${EPOCHSECONDS:-$(date +%s)}"
+		if [ "$(( now - last_change ))" -ge "$limit" ]; then
 			printf "\n"
 			echo "[ОШИБКА] Задача $jid не подаёт признаков движения $limit с — отменяем и считаем файл неудачным." >&2
 			remote_cancel "$jid"

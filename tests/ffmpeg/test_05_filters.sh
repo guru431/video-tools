@@ -53,7 +53,9 @@ run_script() {
     cat "$dump"; rm -f "$dump"
 }
 
-getv() { echo "$1" | grep "^${2}=" | cut -d= -f2-; }
+# Значения ключа из дампа: все строки «ключ=…», часть после первого «=» — как
+# прежний `echo | grep | cut`, но без трёх процессов на каждое чтение.
+getv() { local l; while IFS= read -r l; do case "$l" in "$2="*) printf '%s\n' "${l#*=}" ;; esac; done <<< "$1"; }
 
 suite "Фильтры: поворот (transpose)"
 OUT=$(run_script 'video_rotation=":+:1"')

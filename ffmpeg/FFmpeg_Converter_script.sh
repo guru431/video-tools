@@ -9,6 +9,56 @@
 # FFmpeg Converter Script (Bash)
 # ============================================================
 
+# --- Без внешних процессов там, где bash справляется сам ---
+# Процесс в Git Bash стоит 30–250 мс (антивирус проверяет каждый запуск), а
+# dirname/basename/date стоят на каждом файле пакета по нескольку раз. Обычный
+# путь (есть '/', нет хвостового '/', '//' и обратного слэша) разбирается
+# раскрытием параметров; любой другой отдаётся настоящим утилитам: у Cygwin они
+# считают '\' разделителем и по-своему разбирают «C:file», и граничные случаи
+# обязаны вести себя ровно как прежде. Результат — в PATH_DIR / PATH_BASE, а не
+# в stdout: вызов через $( ) сам стоил бы процесса.
+path_dir() {
+	case "$1" in
+		*/|*//*|*\\*) PATH_DIR="$(dirname "$1")" ;;
+		*/*) PATH_DIR="${1%/*}"; [ -n "$PATH_DIR" ] || PATH_DIR="/" ;;
+		*) PATH_DIR="$(dirname "$1")" ;;
+	esac
+}
+path_base() {
+	case "$1" in
+		*/|*\\*) PATH_BASE="$(basename "$1")" ;;
+		*/*) PATH_BASE="${1##*/}" ;;
+		*) PATH_BASE="$(basename "$1")" ;;
+	esac
+}
+# LOWER_ASCII ← $1 с латиницей в нижнем регистре — то же, что
+# `LC_ALL=C tr '[:upper:]' '[:lower:]'`, но без двух процессов. ${var,,} не годится:
+# его нет в bash 3.2, и он понижал бы и кириллицу. Класс букв перечислен явно:
+# диапазон [A-Z] в bash 3.2 следует порядку сортировки локали и захватывает строчные.
+_ascii_upper="ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+_ascii_lower="abcdefghijklmnopqrstuvwxyz"
+lower_ascii() {
+	local s="$1" out="" c head i
+	LOWER_ASCII="$s"
+	case "$s" in *[ABCDEFGHIJKLMNOPQRSTUVWXYZ]*) ;; *) return 0 ;; esac
+	for ((i = 0; i < ${#s}; i++)); do
+		c="${s:i:1}"
+		case "$c" in
+			[ABCDEFGHIJKLMNOPQRSTUVWXYZ])
+				head="${_ascii_upper%%"$c"*}"
+				c="${_ascii_lower:${#head}:1}" ;;
+		esac
+		out="$out$c"
+	done
+	LOWER_ASCII="$out"
+}
+# Время — встроенными средствами: EPOCHSECONDS есть с bash 5, printf %(…)T — с
+# bash 4.2. Системный bash 3.2 на macOS не знает ни того, ни другого — там date.
+now_s() {
+	NOW_S="${EPOCHSECONDS:-}"
+	[ -n "$NOW_S" ] || NOW_S=$(date +%s)
+}
+
 # --- F-path. Нормализация корневых путей ---
 # Хвостовой разделитель в [folders] source/destination — обычный пользовательский ввод,
 # но относительный путь подпапки считается ВЫЧИТАНИЕМ строки folder_sources из каталога
@@ -21,10 +71,10 @@ norm_folder() {
 		case "$p" in ?:/) break ;; esac
 		p="${p%/}"
 	done
-	printf '%s' "$p"
+	NORM_FOLDER="$p"
 }
-folder_sources="$(norm_folder "$folder_sources")"
-folder_destination="$(norm_folder "$folder_destination")"
+norm_folder "$folder_sources"; folder_sources="$NORM_FOLDER"
+norm_folder "$folder_destination"; folder_destination="$NORM_FOLDER"
 
 # --- Пауза «нажмите Enter» — только при интерактивном stdin ---
 # Скрипт отдаёт exit code для cron/CI, но безусловный `read` ждал EOF: неинтерактивная
@@ -58,12 +108,12 @@ fi
 # сравнение не находило совпадения — конфликт печатался, но второй вход всё равно
 # кодировался поверх первого. Канонизация одна на прогон снимает весь класс.
 _canon_root() {
-	local p="$1"
-	[ -d "$p" ] || { printf '%s' "$p"; return; }
-	( cd "$p" 2>/dev/null && pwd -P ) || printf '%s' "$p"
+	CANON_ROOT="$1"
+	[ -d "$1" ] || return 0
+	CANON_ROOT="$(cd "$1" 2>/dev/null && pwd -P)" || CANON_ROOT="$1"
 }
-folder_sources="$(norm_folder "$(_canon_root "$folder_sources")")"
-folder_destination="$(norm_folder "$(_canon_root "$folder_destination")")"
+_canon_root "$folder_sources"; norm_folder "$CANON_ROOT"; folder_sources="$NORM_FOLDER"
+_canon_root "$folder_destination"; norm_folder "$CANON_ROOT"; folder_destination="$NORM_FOLDER"
 
 # ffmpeg обязателен ровно тогда, когда именно он и считает. При
 # [remote] enabled = yes считает служба, и требовать локальный ffmpeg значило бы
@@ -88,7 +138,8 @@ fi
 # сам, только объявляет функции, а условие включения проверяется ниже.
 # BASH_SOURCE, а не $0: скрипт дот-сорсится и из run.sh, и из тестов — $0 там
 # указывает на вызывающий файл, и модуль искался бы не в той папке.
-_ffconv_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+path_dir "${BASH_SOURCE[0]}"
+_ffconv_script_dir="$(cd "$PATH_DIR" && pwd)"
 if [ -f "${_ffconv_script_dir}/remote_client.sh" ]; then
 	source "${_ffconv_script_dir}/remote_client.sh"
 fi
@@ -245,7 +296,8 @@ fi
 if [ "$audio_only" = "yes" ]; then
 	# Контейнер и аудио-кодек выводятся из настроенного [audio] codec, а не жёстко mp3.
 	# Сравнение регистронезависимо (паритет с PS1 switch): AAC/FLAC не падают в дефолт.
-	case "$(printf '%s' "$audio_codec_value" | tr '[:upper:]' '[:lower:]')" in
+	lower_ascii "$audio_codec_value"
+	case "$LOWER_ASCII" in
 		libmp3lame|mp3) format_files_out="mp3";  set_audio_codec="-c:a libmp3lame" ;;
 		aac)            format_files_out="m4a";  set_audio_codec="-c:a aac" ;;
 		libopus|opus)   format_files_out="opus"; set_audio_codec="-c:a libopus" ;;
@@ -449,7 +501,8 @@ if [ "$audio_only" != "yes" ] && [ "$copy_codecs" != "yes" ] && [ "$merge_files"
 			# при `codec = -aac` статус '-' и `-c:a` в ffmpeg не передаётся вовсе —
 			# контейнер выберет дефолт сам, отклонять такую конфигурацию не за что.
 			_eff_audio_codec="${set_audio_codec#-c:a }"
-			case "$(printf '%s' "$_eff_audio_codec" | tr '[:upper:]' '[:lower:]')" in
+			lower_ascii "$_eff_audio_codec"
+			case "$LOWER_ASCII" in
 				""|libopus|opus|libvorbis|vorbis) ;;
 				*) _incompat="${_incompat:+$_incompat$'\n'}  • WebM не поддерживает аудиокодек '$_eff_audio_codec' — нужен Opus/Vorbis (смените [audio] codec или [video] container)." ;;
 			esac
@@ -541,7 +594,10 @@ find_inputs() {
 log_msg() {
 	local level="$1"
 	local msg="$2"
-	local timestamp; timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+	local timestamp
+	# printf %(…)T — bash 4.2+; bash 3.2 (macOS) его не знает и уходит в date.
+	printf -v timestamp '%(%Y-%m-%d %H:%M:%S)T' -1 2>/dev/null \
+		|| timestamp=$(date '+%Y-%m-%d %H:%M:%S')
 	echo "[$timestamp] [$level] $msg"
 	if [ "$enable_log" = "yes" ] && [ -n "$log_file" ]; then
 		echo "[$timestamp] [$level] $msg" >> "$log_file"
@@ -550,7 +606,7 @@ log_msg() {
 
 # --- J2. Счётчики и хелперы ---
 results_dir=$(mktemp -d "${TMPDIR:-/tmp}/ffconv.XXXXXXXX")
-start_time_global=$(date +%s)
+now_s; start_time_global=$NOW_S
 _any_input="no"
 
 # Cleanup при Ctrl-C/SIGTERM: убить текущий ffmpeg-процесс и удалить temp-каталог
@@ -564,6 +620,29 @@ _current_out_tmp=""
 # по мере создания — иначе Ctrl+C оставлял их в /tmp и в destination.
 _tmp_files=()
 _register_tmp() { [ -n "$1" ] && _tmp_files+=("$1"); }
+
+# Файл прогона — в $results_dir (свой каталог mktemp -d): итоги файлов и временные
+# файлы кодирования. Имя строится без mktemp (процесс на каждый файл пакета), а
+# уникальность держит noclobber: `>` под `set -C` создаёт файл через O_EXCL и не
+# перезапишет чужой, даже если параллельные подоболочки сошлись в имени (bash 3.2
+# без BASHPID, переиспользованный PID в Windows) — тогда берётся следующее имя.
+# NEW_FILE ← путь (пусто, если каталога уже нет); $1 — префикс, $2 — содержимое.
+new_run_file() {
+	local f set_c=""
+	NEW_FILE=""
+	case "$-" in *C*) ;; *) set -C; set_c=1 ;; esac
+	while :; do
+		_put_seq=$(( ${_put_seq:-0} + 1 ))
+		f="$results_dir/${1}_${BASHPID:-$$}_${_put_seq}_${RANDOM}"
+		if { printf '%s' "$2" > "$f"; } 2>/dev/null; then NEW_FILE="$f"; break; fi
+		# Файла нет, а записать не вышло — каталог пропал; не крутиться вечно.
+		[ -e "$f" ] || break
+	done
+	[ -n "$set_c" ] && set +C
+	return 0
+}
+# Итог файла для сводки. $1 — содержимое, $2 — префикс (r — итог, lf — откат на локальный).
+put_result() { new_run_file "${2:-r}" "$1"$'\n'; }
 _cleanup_on_int() {
 	# Брошенная задача продолжила бы держать карту на сервере до своего таймаута.
 	[ -n "${REMOTE_CURRENT_JOB:-}" ] && remote_cancel "$REMOTE_CURRENT_JOB"
@@ -609,7 +688,7 @@ file_size() { stat -c%s "$1" 2>/dev/null || stat -f%z "$1" 2>/dev/null || echo 0
 # сохраниться: без -f ffmpeg выводит muxer из расширения, а режимы copy_codecs и
 # merge как раз идут с `-c copy` без -f. Суффиксное `.movie.mp4.partial` давало
 # "Error initializing the muxer ... Invalid argument" на настоящем ffmpeg.
-partial_path() { printf '%s/.ffconv-partial-%s' "$(dirname "$1")" "$(basename "$1")"; }
+partial_path() { path_dir "$1"; path_base "$1"; printf '%s/.ffconv-partial-%s' "$PATH_DIR" "$PATH_BASE"; }
 
 # --- Публикация результата: общая для локального и удалённого путей ---
 # Вынесена, чтобы переименование, лог и учёт байтов существовали в ОДНОМ
@@ -623,7 +702,8 @@ partial_path() { printf '%s/.ffconv-partial-%s' "$(dirname "$1")" "$(basename "$
 # вторым проходом — на многогигабайтном пакете это минуты на файл ни за что.
 publish_result() {
 	local src="$1" tmp="$2" dst="$3" started="$4" verify="${5:-no}"
-	local elapsed=$(( $(date +%s) - started ))
+	now_s
+	local elapsed=$(( NOW_S - started ))
 	# Без локального ffmpeg декодировать нечем: остаётся проверка на непустой
 	# файл. Пропускать её молча нельзя — оборванная загрузка выглядит успехом.
 	# Служба сообщила sha256 (или размер) результата, и скачанное с ним сошлось —
@@ -635,28 +715,28 @@ publish_result() {
 	fi
 	if [ "$verify" = "yes" ] && [ "$ffmpeg_available" != "yes" ]; then
 		verify="size-only"
-		log_msg "WARN" "$(basename "$src"): без локального ffmpeg результат проверен только по размеру"
+		log_msg "WARN" "${src##*/}: без локального ffmpeg результат проверен только по размеру"
 	fi
 	if [ "$verify" = "hash-ok" ] && [ ! -s "$tmp" ]; then
-		log_msg "FAIL" "$(basename "$src"): скачан пустой результат"
+		log_msg "FAIL" "${src##*/}: скачан пустой результат"
 		rm -f "$tmp"
 		any_fail="yes"
-		echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+		put_result "fail"
 		return 1
 	fi
 	if [ "$verify" = "size-only" ] && [ ! -s "$tmp" ]; then
-		log_msg "FAIL" "$(basename "$src"): скачан пустой результат"
+		log_msg "FAIL" "${src##*/}: скачан пустой результат"
 		rm -f "$tmp"
 		any_fail="yes"
-		echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+		put_result "fail"
 		return 1
 	fi
 	if [ "$verify" = "yes" ]; then
 		if [ ! -s "$tmp" ] || ! "$ffmpeg" -nostdin -v error -i "$tmp" -f null - 2>/dev/null; then
-			log_msg "FAIL" "$(basename "$src"): результат не прошёл проверку"
+			log_msg "FAIL" "${src##*/}: результат не прошёл проверку"
 			rm -f "$tmp"
 			any_fail="yes"
-			echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+			put_result "fail"
 			return 1
 		fi
 	fi
@@ -664,19 +744,21 @@ publish_result() {
 	# провал rename (цель заблокирована, нет места) иначе выдал бы отсутствующий или
 	# старый результат за успех — с записью manifest поверх него.
 	if mv -f "$tmp" "$dst" 2>/dev/null && [ -f "$dst" ]; then
-		log_msg "OK" "$(basename "$src") -> $(basename "$dst") ($((elapsed / 60))m $((elapsed % 60))s)"
+		log_msg "OK" "${src##*/} -> ${dst##*/} ($((elapsed / 60))m $((elapsed % 60))s)"
 		local out_sz in_sz=0
 		out_sz=$(file_size "$dst")
 		# F29. Вход — только с первой удавшейся части (см. in_reported выше).
-		if [ "$in_reported" -eq 0 ]; then in_sz=$(file_size "$src"); in_reported=1; fi
-		produced+=("$dst")
-		echo "ok:${out_sz}:${in_sz}" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+		if [ "$in_reported" -eq 0 ]; then in_sz=$(file_size "$src"); in_reported=1; produced_src_sz="$in_sz"; fi
+		# Размеры уходят в manifest вместе с путём: пересчитывать их там же, где
+		# они только что получены, — лишний stat на каждый выход.
+		produced+=("${out_sz}|${dst}")
+		put_result "ok:${out_sz}:${in_sz}"
 		return 0
 	fi
-	log_msg "FAIL" "$(basename "$src"): не удалось опубликовать результат (rename)"
+	log_msg "FAIL" "${src##*/}: не удалось опубликовать результат (rename)"
 	rm -f "$tmp"
 	any_fail="yes"
-	echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+	put_result "fail"
 	return 1
 }
 
@@ -695,22 +777,22 @@ remote_fallback_allowed() {
 	[ "${remote_on_failure:-abort}" = "local" ] || return 1
 	# Тонкий клиент без ffmpeg откатываться некуда — честнее сказать это вслух.
 	if ! command -v "$ffmpeg" >/dev/null 2>&1; then
-		log_msg "WARN" "$(basename "$src"): $reason, а локального ffmpeg нет — откат невозможен"
+		log_msg "WARN" "${src##*/}: $reason, а локального ffmpeg нет — откат невозможен"
 		return 1
 	fi
 	# Отмена пользователем (Stop/Ctrl+C) — не «служба недоступна»: считать файл
 	# локально после явной остановки значит проигнорировать саму остановку.
 	if [ -n "${guiCancelFile:-}" ] && [ -f "${guiCancelFile:-/dev/null}" ]; then
-		log_msg "WARN" "$(basename "$src"): $reason, но прогон остановлен — локально не считаем"
+		log_msg "WARN" "${src##*/}: $reason, но прогон остановлен — локально не считаем"
 		return 1
 	fi
-	echo "[ПРЕДУПРЕЖДЕНИЕ] $(basename "$src"): $reason — считаем локально (on_failure = local)."
-	log_msg "WARN" "$(basename "$src"): $reason — откат на локальный ffmpeg"
+	echo "[ПРЕДУПРЕЖДЕНИЕ] ${src##*/}: $reason — считаем локально (on_failure = local)."
+	log_msg "WARN" "${src##*/}: $reason — откат на локальный ffmpeg"
 	# Маркер пишется ЗДЕСЬ, до локального кодирования, и это осознанно: строка сводки
 	# называется «Посчитано локально», то есть считает ПЕРЕВЕДЁННЫЕ на локальный путь
 	# файлы, а не успешные. Провалившийся откат отдельно попадёт в «Ошибки» — двойного
 	# учёта нет, потому что счётчики разные и печатаются разными строками.
-	echo "local" > "$(mktemp "$results_dir/lf_XXXXXXXX")"
+	put_result "local" lf
 	return 0
 }
 
@@ -725,15 +807,17 @@ remote_fallback_allowed() {
 # поэтому оборванная запись не может выдать себя за готовый результат.
 # Сверяем размеры, а не хеши: чтение гигабайтов ради контрольной суммы стоило бы
 # сопоставимо с самим перекодированием, а размер ловит обрыв и подмену источника.
+# Аргументы: manifest, источник, его размер, подпись настроек, затем выходы в
+# виде «<байты>|<путь>» — размеры уже посчитаны при публикации (publish_result).
 manifest_write() {
-	local mf="$1" src="$2" sig="$3"; shift 3
+	local mf="$1" src="$2" src_size="$3" sig="$4"; shift 4
 	local tmp="${mf}.tmp" o
 	{
 		echo "# ffconv-manifest v1"
 		echo "source=$src"
-		echo "source_size=$(file_size "$src")"
+		echo "source_size=$src_size"
 		echo "settings=$sig"
-		for o in "$@"; do echo "output=$(file_size "$o")|$o"; done
+		for o in "$@"; do echo "output=$o"; done
 		echo "state=complete"
 	} > "$tmp" && mv -f "$tmp" "$mf"
 }
@@ -741,14 +825,26 @@ manifest_write() {
 manifest_is_complete() {
 	local mf="$1" src="$2" sig="$3"
 	[ -f "$mf" ] || return 1
-	grep -q '^state=complete$' "$mf" 2>/dev/null || return 1
-	local rec
-	rec=$(grep '^source_size=' "$mf" 2>/dev/null | head -1 | cut -d= -f2)
-	[ "$rec" = "$(file_size "$src")" ] || return 1
+	# Один проход чтением самого bash вместо трёх grep-конвейеров: проверка стоит
+	# на каждом файле повторного прогона. Берутся ПЕРВЫЕ строки source_size= и
+	# settings= (как у прежнего `grep | head -1`), state=complete — в любом месте.
+	local line complete="no" rec_size="" rec_sig="" seen_size="no" seen_sig="no"
+	while IFS= read -r line || [ -n "$line" ]; do
+		case "$line" in
+			state=complete) complete="yes" ;;
+			source_size=*)
+				if [ "$seen_size" = "no" ]; then
+					rec_size="${line#source_size=}"; rec_size="${rec_size%%=*}"; seen_size="yes"
+				fi ;;
+			settings=*)
+				if [ "$seen_sig" = "no" ]; then rec_sig="${line#settings=}"; seen_sig="yes"; fi ;;
+		esac
+	done < "$mf"
+	[ "$complete" = "yes" ] || return 1
+	[ "$rec_size" = "$(file_size "$src")" ] || return 1
 	# Подпись настроек: смена контейнера/кодека/фильтров обязана обесценить manifest.
-	rec=$(grep '^settings=' "$mf" 2>/dev/null | head -1)
-	[ "${rec#settings=}" = "$sig" ] || return 1
-	local line sz path
+	[ "$rec_sig" = "$sig" ] || return 1
+	local sz path
 	while IFS= read -r line; do
 		case "$line" in output=*) ;; *) continue ;; esac
 		line="${line#output=}"
@@ -775,29 +871,46 @@ human_size() {
 # этого не видело: SH кодировал оба в один файл и отчитывался «Обработано: 2», тогда как
 # PS1 и CMD давали обоим FAIL. Регистр опускаем ровно там, где ФС его игнорирует, —
 # на Linux (case-sensitive) это дало бы ложные конфликты.
+# Платформа — по OSTYPE (bash знает её сам), а не по `uname -s` в подоболочке:
+# msys/cygwin/darwin — ровно те системы, где uname давал MINGW/MSYS/CYGWIN/Darwin.
 _fs_case_insensitive="no"
-case "$(uname -s 2>/dev/null)" in
-	MINGW*|MSYS*|CYGWIN*|Darwin) _fs_case_insensitive="yes" ;;
+case "${OSTYPE:-$(uname -s 2>/dev/null)}" in
+	msys*|cygwin*|darwin*|MINGW*|MSYS*|CYGWIN*|Darwin) _fs_case_insensitive="yes" ;;
 esac
+# COLLISION_KEY ← ключ для $1. Регистр опускается только у ASCII — как у прежнего
+# `LC_ALL=C tr '[:upper:]' '[:lower:]'` (см. lower_ascii).
 collision_key() {
-	if [ "$_fs_case_insensitive" = "yes" ]; then
-		printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]'
-	else
-		printf '%s' "$1"
-	fi
+	COLLISION_KEY="$1"
+	[ "$_fs_case_insensitive" = "yes" ] || return 0
+	lower_ascii "$1"
+	COLLISION_KEY="$LOWER_ASCII"
 }
 
 # --- Канонизация пути для сравнения input/output ---
 # Файл назначения может ещё не существовать, поэтому канонизируем только каталог
 # (он гарантированно создан выше через mkdir -p) и приклеиваем basename.
+# Результат — в CANON_PATH. Канонический вид СУЩЕСТВУЮЩЕГО каталога за прогон не
+# меняется, поэтому два последних запоминаются: encode_file канонизирует по очереди
+# каталог выхода и каталог входа, и каждая канонизация — это подоболочка с `cd`.
+# Несуществующий каталог не запоминается: его создадут, и тогда ответ станет другим.
+_cp_k1=""; _cp_v1=""; _cp_k2=""; _cp_v2=""
 canon_path() {
-	local p="$1" d b
-	d="$(dirname "$p")"
-	b="$(basename "$p")"
+	local d b k
+	path_dir "$1"; d="$PATH_DIR"
+	path_base "$1"; b="$PATH_BASE"
 	if [ -d "$d" ]; then
-		d="$(cd "$d" 2>/dev/null && pwd -P)" || d="$(dirname "$p")"
+		if [ "$d" = "$_cp_k1" ]; then
+			d="$_cp_v1"
+		elif [ "$d" = "$_cp_k2" ]; then
+			d="$_cp_v2"
+		else
+			k="$d"
+			d="$(cd "$d" 2>/dev/null && pwd -P)" || d="$k"
+			_cp_k2="$_cp_k1"; _cp_v2="$_cp_v1"
+			_cp_k1="$k"; _cp_v1="$d"
+		fi
 	fi
-	printf '%s/%s' "${d%/}" "$b"
+	CANON_PATH="${d%/}/$b"
 }
 
 # F-collision. Каталоги источника и назначения в каноническом виде. Если dest лежит
@@ -806,8 +919,8 @@ canon_path() {
 # Важно: dest == source (in-place) НЕ считается вложенностью — там файлы это легитимные
 # источники, а коллизию «выход совпал со входом» снимает пофайловая проверка F12.
 # Канонизация снимает ../ и различия форм пути на всех платформах.
-canon_destination="$(canon_path "$folder_destination")"
-canon_sources="$(canon_path "$folder_sources")"
+canon_path "$folder_destination"; canon_destination="$CANON_PATH"
+canon_path "$folder_sources"; canon_sources="$CANON_PATH"
 dest_inside_source="no"
 case "$canon_destination" in
 	"$canon_sources"/*) dest_inside_source="yes" ;;
@@ -838,18 +951,62 @@ show_progress_bar() {
 	# файла целиком. Тогда переходим на построчный вывод и печатаем не чаще, чем раз
 	# в REPORT-секунд на файл: это читаемо и не заливает лог.
 	if [ "${parallel_count:-1}" -gt 1 ] 2>/dev/null; then
-		local now; now=$(date +%s)
+		now_s; local now=$NOW_S
 		local every="${FFCONV_PARALLEL_REPORT_SECONDS:-5}"
 		if [ "$pct" -ge 100 ] || [ -z "${_pp_last:-}" ] || [ $((now - _pp_last)) -ge "$every" ]; then
 			_pp_last="$now"
-			printf '  %s: %d%%%s\n' "$(basename "$label")" "$pct" "${phase:+  · $phase}"
+			printf '  %s: %d%%%s\n' "${label##*/}" "$pct" "${phase:+  · $phase}"
 		fi
 		return
 	fi
 	local filled=$((pct / 2)) empty=$((50 - pct / 2)) bar=""
 	for ((j=0; j<filled; j++)); do bar="${bar}#"; done
 	for ((j=0; j<empty; j++)); do bar="${bar}."; done
-	printf "\r  [%s] %3d%%  %s%s" "$bar" "$pct" "$(basename "$label")" "${phase:+  · $phase}"
+	printf "\r  [%s] %3d%%  %s%s" "$bar" "$pct" "${label##*/}" "${phase:+  · $phase}"
+}
+
+# --- Разбор вывода `ffmpeg -i` ---
+# Без процессов: прежде здесь стояли конвейеры из echo/grep/head/sed — около
+# дюжины процессов на каждый файл пакета. Семантика прежних конвейеров сохранена:
+#   MI_VBR    — первое «N kb/s» в ПЕРВОЙ строке «Stream #…Video:» (строка ищется без
+#               учёта регистра, как grep -i; «kb/s» — с учётом, как grep -o);
+#   MI_CBR    — все «bitrate: N» первой строки с «bitrate:» (строка — без учёта
+#               регистра), по одному на строку, как `grep -o | sed`;
+#   MI_DUR    — первое чч:мм:сс среди строк «Duration:», где оно есть;
+#   MI_ACODEC — кодек из последнего «Audio: <имя>» первой строки с «Audio:»; если
+#               такого вхождения с учётом регистра нет — вся строка (как у sed).
+parse_media_info() {
+	local line rest ncm="no" vline="" cline="" aline="" n=0
+	local re_v='([0-9]+) kb/s' re_c='bitrate: ([0-9]*)' re_d='[0-9]+:[0-9]+:[0-9]+' re_a='^[a-z0-9_]*'
+	MI_VBR=""; MI_CBR=""; MI_DUR=""; MI_ACODEC=""
+	shopt -q nocasematch && ncm="yes"
+	shopt -s nocasematch
+	while IFS= read -r line; do
+		[ -z "$vline" ] && [[ $line == *"Stream #"*"Video:"* ]] && vline="$line"
+		[ -z "$cline" ] && [[ $line == *"bitrate:"* ]] && cline="$line"
+		[ -z "$aline" ] && [[ $line == *"Audio:"* ]] && aline="$line"
+		if [ -z "$MI_DUR" ] && [[ $line == *"Duration:"* ]] && [[ $line =~ $re_d ]]; then
+			MI_DUR="${BASH_REMATCH[0]}"
+		fi
+	done <<< "$1"
+	shopt -u nocasematch
+	[[ $vline =~ $re_v ]] && MI_VBR="${BASH_REMATCH[1]}"
+	rest="$cline"
+	while [[ $rest =~ $re_c ]]; do
+		if [ "$n" -eq 0 ]; then MI_CBR="${BASH_REMATCH[1]}"; else MI_CBR="$MI_CBR"$'\n'"${BASH_REMATCH[1]}"; fi
+		n=$((n + 1))
+		rest="${rest#*"${BASH_REMATCH[0]}"}"
+	done
+	# $( ) срезал хвостовые переводы строк — так же и здесь.
+	while [[ $MI_CBR == *$'\n' ]]; do MI_CBR="${MI_CBR%$'\n'}"; done
+	if [[ $aline == *"Audio: "* ]]; then
+		rest="${aline##*Audio: }"
+		[[ $rest =~ $re_a ]] && MI_ACODEC="${BASH_REMATCH[0]}"
+	else
+		MI_ACODEC="$aline"
+	fi
+	[ "$ncm" = "yes" ] && shopt -s nocasematch
+	return 0
 }
 
 # --- Функция кодирования одного файла ---
@@ -858,14 +1015,16 @@ encode_file() {
 	# F-collision. Файл внутри каталога назначения — это наш собственный выход
 	# (dest строго внутри source). Пропускаем, иначе перекодируем результаты по кругу.
 	if [ "$dest_inside_source" = "yes" ]; then
-		case "$(canon_path "$full_path")" in
+		canon_path "$full_path"
+		case "$CANON_PATH" in
 			"$canon_destination"/*)
-				log_msg "SKIP" "внутри каталога назначения (собственный выход): $(basename "$full_path")"
-				echo "skip" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+				log_msg "SKIP" "внутри каталога назначения (собственный выход): ${full_path##*/}"
+				put_result "skip"
 				return ;;
 		esac
 	fi
-	local file_path; file_path="$(dirname "$full_path")/"
+	path_dir "$full_path"
+	local file_path="$PATH_DIR/"
 	# F32. Два РАЗНЫХ имени, их нельзя смешивать:
 	#   input_stem — имя источника без расширения; по нему ищутся sidecar-субтитры;
 	#   file_name  — базовое имя ВЫХОДА (при save_old_extension=yes несёт расширение
@@ -873,9 +1032,12 @@ encode_file() {
 	# Раньше переменная была одна: при save_old_extension=yes она становилась
 	# "movie.mp4", и sidecar искался как "movie.mp4.srt" вместо "movie.srt" —
 	# burn/meta молча пропускались.
-	local input_stem; input_stem="$(basename "$full_path" | sed 's/\.[^.]*$//')"
+	# Стем — раскрытием параметров, а не `basename | sed 's/\.[^.]*$//'`: результат тот
+	# же (срезается последняя «.расширение»), но без двух процессов на каждый файл.
+	local input_stem="${full_path##*/}"
+	input_stem="${input_stem%.*}"
 	local file_name="$input_stem"
-	if [ "$save_old_extension" = "yes" ]; then file_name="$(basename "$full_path")"; fi
+	if [ "$save_old_extension" = "yes" ]; then file_name="${full_path##*/}"; fi
 	file_path="${file_path:$_src_prefix_len}"
 	# D7. Dry-run только печатает команды — каталоги зеркала не создаём. Иначе
 	# «безопасный» прогон оставлял дерево пустых подпапок в destination (и маскировал
@@ -885,7 +1047,8 @@ encode_file() {
 	# --- I. Извлечение аудио без перекодирования ---
 	if [ "$extract_audio_copy" = "yes" ]; then
 		local codec ext out_audio
-		codec=$("$ffmpeg" -i "$full_path" 2>&1 | grep -i 'Audio:' | head -1 | sed 's/.*Audio: \([a-z0-9_]*\).*/\1/')
+		parse_media_info "$("$ffmpeg" -i "$full_path" 2>&1)"
+		codec="$MI_ACODEC"
 		case "$codec" in
 			aac)    ext="m4a"  ;;
 			mp3)    ext="mp3"  ;;
@@ -901,9 +1064,12 @@ encode_file() {
 		# даёт выход, равный входу. Дальше overwrite_existing=yes удалял этот файл ДО
 		# запуска ffmpeg — и ffmpeg падал на несуществующем входе, а исходник был потерян
 		# безвозвратно. Проверка стоит ДО overwrite-блока и до любой мутации.
-		if [ "$(canon_path "$out_audio")" = "$(canon_path "$full_path")" ]; then
-			log_msg "FAIL" "$(basename "$full_path"): выход совпадает с входом (извлечение аудио в тот же файл)"
-			echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+		local canon_audio
+		canon_path "$out_audio"; canon_audio="$CANON_PATH"
+		canon_path "$full_path"
+		if [ "$canon_audio" = "$CANON_PATH" ]; then
+			log_msg "FAIL" "${full_path##*/}: выход совпадает с входом (извлечение аудио в тот же файл)"
+			put_result "fail"
 			return
 		fi
 		# Единый overwrite-контракт: как и обычный режим, extract при overwrite_existing=yes
@@ -916,7 +1082,7 @@ encode_file() {
 			if [ "$overwrite_existing" = "yes" ]; then
 				[ "$dry_run" = "yes" ] || rm -f "$out_audio"
 			else
-				echo "skip" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+				put_result "skip"
 				return
 			fi
 		fi
@@ -925,18 +1091,18 @@ encode_file() {
 			echo "[DRY-RUN] $ffmpeg -nostdin -hide_banner -strict -2 -i \"$full_path\" -vn -c:a copy \"$out_audio\" -y"
 			return
 		fi
-		log_msg "INFO" "Извлечение аудио: $(basename "$full_path")"
+		log_msg "INFO" "Извлечение аудио: ${full_path##*/}"
 		"$ffmpeg" -nostdin -hide_banner -strict -2 -i "$full_path" -vn -c:a copy "$out_audio" -y
 		if [ $? -ne 0 ]; then
-			log_msg "FAIL" "$(basename "$full_path")"
+			log_msg "FAIL" "${full_path##*/}"
 			rm -f "$out_audio"
-			echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+			put_result "fail"
 		else
 			local out_sz in_sz
 			out_sz=$(stat -c%s "$out_audio" 2>/dev/null || stat -f%z "$out_audio" 2>/dev/null || echo 0)
 			in_sz=$(stat -c%s "$full_path" 2>/dev/null || stat -f%z "$full_path" 2>/dev/null || echo 0)
-			log_msg "OK" "$(basename "$full_path") -> $(basename "$out_audio")"
-			echo "ok:${out_sz}:${in_sz}" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+			log_msg "OK" "${full_path##*/} -> ${out_audio##*/}"
+			put_result "ok:${out_sz}:${in_sz}"
 		fi
 		return
 	fi
@@ -948,7 +1114,7 @@ encode_file() {
 		# существования: прерванный прогон оставлял частичный каталог, который молча
 		# пропускался при повторном запуске (кадры так и не догружались).
 		if [ -f "$frame_done" ] && [ "$overwrite_existing" != "yes" ]; then
-			echo "skip" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+			put_result "skip"
 			return
 		fi
 		# F-percent. `%` в имени файла ИЛИ в пути ломает image2-мультиплексор: после `%`
@@ -970,8 +1136,8 @@ encode_file() {
 			if [ -f "$frame_partial" ] || [ -f "$frame_done" ]; then
 				rm -rf "$frame_dir"
 			elif [ -n "$(ls -A "$frame_dir" 2>/dev/null)" ]; then
-				log_msg "FAIL" "$(basename "$full_path"): каталог кадров занят посторонними файлами: $frame_dir"
-				echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+				log_msg "FAIL" "${full_path##*/}: каталог кадров занят посторонними файлами: $frame_dir"
+				put_result "fail"
 				return
 			fi
 		fi
@@ -980,14 +1146,14 @@ encode_file() {
 		log_msg "INFO" "Извлечение кадров: $full_path"
 		"$ffmpeg" -nostdin -hide_banner -strict -2 -i "$full_path" -r 1/1 "$frame_out"
 		if [ $? -ne 0 ]; then
-			log_msg "FAIL" "$(basename "$full_path")"
+			log_msg "FAIL" "${full_path##*/}"
 			rm -rf "$frame_dir"
-			echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+			put_result "fail"
 		else
 			rm -f "$frame_partial"
 			: > "$frame_done"
-			log_msg "OK" "Кадры: $(basename "$full_path")"
-			echo "ok:0:0" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+			log_msg "OK" "Кадры: ${full_path##*/}"
+			put_result "ok:0:0"
 		fi
 		return
 	fi
@@ -1005,10 +1171,12 @@ encode_file() {
 	# число частей зависит от длительности и здесь ещё неизвестно, поэтому сверяем
 	# базовое имя — сознательный консерватизм: лучше отклонить файл, чем закодировать
 	# его поверх самого себя.
-	local canon_out; canon_out="$(canon_path "${folder_destination}${file_path}${file_name}${part_suffix_known}.${current_format_out}")"
-	if [ "$canon_out" = "$(canon_path "$full_path")" ]; then
-		log_msg "FAIL" "$(basename "$full_path"): выход совпадает с входом — файл пропущен (задайте другой destination, префикс или формат; при [split] length имя частей заранее неизвестно, поэтому in-place отклоняется)"
-		echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+	canon_path "${folder_destination}${file_path}${file_name}${part_suffix_known}.${current_format_out}"
+	local canon_out="$CANON_PATH"
+	canon_path "$full_path"
+	if [ "$canon_out" = "$CANON_PATH" ]; then
+		log_msg "FAIL" "${full_path##*/}: выход совпадает с входом — файл пропущен (задайте другой destination, префикс или формат; при [split] length имя частей заранее неизвестно, поэтому in-place отклоняется)"
+		put_result "fail"
 		return
 	fi
 
@@ -1023,16 +1191,16 @@ encode_file() {
 	local manifest="${folder_destination}${file_path}.${file_name}.ffconv"
 	local file_sig="${settings_sig}|fmt=${current_format_out}|copy=${copy_codecs}"
 	if [ "$overwrite_existing" != "yes" ] && manifest_is_complete "$manifest" "$full_path" "$file_sig"; then
-		echo "skip" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+		put_result "skip"
 		return
 	fi
 
 	# F-collision-map. Выход этого файла оспаривается другим входом (карта построена
 	# до кодирования). Обрабатывать нельзя: кто-то из группы затрёт чужой результат.
 	if [ -n "${collisions_file:-}" ] && [ -s "${collisions_file:-/dev/null}" ] \
-		&& LC_ALL=C grep -qxF -- "$(collision_key "$canon_out")" "$collisions_file"; then
-		log_msg "FAIL" "$(basename "$full_path"): конфликт выходов — файл пропущен"
-		echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+		&& collision_key "$canon_out" && LC_ALL=C grep -qxF -- "$COLLISION_KEY" "$collisions_file"; then
+		log_msg "FAIL" "${full_path##*/}: конфликт выходов — файл пропущен"
+		put_result "fail"
 		return
 	fi
 
@@ -1044,10 +1212,10 @@ encode_file() {
 			# проверить нечем, и «не прошёл проверку» означало бы УДАЛЕНИЕ готового
 			# файла из-за отсутствия инструмента — считаем такой файл готовым.
 			if [ "$ffmpeg_available" != "yes" ]; then
-				echo "skip" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+				put_result "skip"
 				return
 			elif "$ffmpeg" -nostdin -v error -i "${folder_destination}${file_path}${file_name}${part_suffix_known}.${current_format_out}" -f null - 2>/dev/null; then
-				echo "skip" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+				put_result "skip"
 				return
 			elif [ "$dry_run" = "yes" ]; then
 				# D7. Dry-run обещает «только показать команды». Удаление битого выхода —
@@ -1071,18 +1239,17 @@ encode_file() {
 	# Раньше брали `Duration: ..., bitrate: 2000 kb/s` — это битрейт КОНТЕЙНЕРА
 	# (видео + аудио + overhead). Настройка обещает не повышать исходный видеобитрейт,
 	# а сравнивала с завышенным числом и потому всё равно его повышала.
-	local src_video_bitrate=""
-	src_video_bitrate=$(echo "$ffmpeg_info" | grep -i 'Stream #.*Video:' | head -1 \
-		| grep -o '[0-9]\+ kb/s' | head -1 | grep -o '[0-9]\+')
+	parse_media_info "$ffmpeg_info"
+	local src_video_bitrate="$MI_VBR"
 
 	# Часть контейнеров (MKV/WebM) per-stream битрейт не сообщает. Тогда откатываемся
 	# на битрейт контейнера — это верхняя оценка, а не битрейт видео, поэтому говорим
 	# об этом в лог, а не выдаём молча за исходный видеобитрейт.
 	local src_cap="$src_video_bitrate"
 	if [ -z "$src_cap" ]; then
-		src_cap=$(echo "$ffmpeg_info" | grep -i 'bitrate:' | head -1 | grep -o 'bitrate: [0-9]*' | sed 's/bitrate: //')
+		src_cap="$MI_CBR"
 		if [ -n "$src_cap" ] && [ "$video_bitrate_status" = "+" ] && [ "$audio_only" != "yes" ]; then
-			log_msg "WARN" "$(basename "$full_path"): битрейт видеопотока не сообщён, используется битрейт контейнера (${src_cap}k) — верхняя оценка"
+			log_msg "WARN" "${full_path##*/}: битрейт видеопотока не сообщён, используется битрейт контейнера (${src_cap}k) — верхняя оценка"
 		fi
 	fi
 
@@ -1107,11 +1274,11 @@ encode_file() {
 	# Идентификатор загрузки объявляем ЗДЕСЬ, до расчёта границ частей: тонкому
 	# клиенту без локального ffmpeg длительность известна только из ответа службы,
 	# а нужна она раньше — иначе «запасной источник длительности», обещанный
-	# CLAUDE.md, мёртв, и [split] length у тонкого клиента не работает вовсе.
+	# docs/constraints.md, мёртв, и [split] length у тонкого клиента не работает вовсе.
 	# Загрузка одна на исходный файл; блок в цикле по частям её не повторит.
 	local remote_upload_id="" remote_sub_id=""
 	local file_duration=0
-	local dur_str; dur_str=$(echo "$ffmpeg_info" | grep -i Duration: | grep -o '[0-9][0-9]*:[0-9][0-9]*:[0-9][0-9]*')
+	local dur_str="$MI_DUR"
 	if [ -n "$dur_str" ]; then
 		IFS=':' read -r x y z <<< "$dur_str"
 		# 10#, а не ${x#0}: на однозначном поле срез ведущего нуля даёт пустую
@@ -1127,7 +1294,7 @@ encode_file() {
 	# dry_run не грузит байты по определению.
 	if [ "$remote_active" = "yes" ] && [ "$dry_run" != "yes" ] && \
 	   [ "${file_duration:-0}" -le 0 ] 2>/dev/null && [ "$length_coding_status" = "+" ]; then
-		log_msg "INFO" "Длительность неизвестна локально — берём её у службы: $(basename "$full_path")"
+		log_msg "INFO" "Длительность неизвестна локально — берём её у службы: ${full_path##*/}"
 		REMOTE_UPLOAD_SIDECAR="${manifest}.upload"
 		if remote_upload "$full_path"; then
 			remote_upload_id="$REMOTE_UPLOAD_ID"
@@ -1223,7 +1390,7 @@ encode_file() {
 			num+=("$bnd")
 		done
 		if (( i >= max_parts )); then
-			log_msg "WARN" "Достигнут предел $max_parts частей — хвост файла не обработан: $(basename "$full_path")"
+			log_msg "WARN" "Достигнут предел $max_parts частей — хвост файла не обработан: ${full_path##*/}"
 		fi
 		# Длительности = разности соседних границ. Последняя часть идёт ДО КОНЦА файла:
 		# фиксированный -t обрезал бы хвост, если граница сдвинулась к тишине назад.
@@ -1251,17 +1418,19 @@ encode_file() {
 	if [ ${#num[@]} -eq 0 ]; then
 		num=(0)
 		if [ -n "$set_length_coding" ]; then
-			log_msg "WARN" "Длительность неизвестна: разбиение пропущено И ограничение длительности снято, файл обрабатывается целиком: $(basename "$full_path")"
+			log_msg "WARN" "Длительность неизвестна: разбиение пропущено И ограничение длительности снято, файл обрабатывается целиком: ${full_path##*/}"
 			length_disabled="yes"
 		else
-			log_msg "WARN" "Длительность неизвестна, разбиение пропущено: $(basename "$full_path")"
+			log_msg "WARN" "Длительность неизвестна, разбиение пропущено: ${full_path##*/}"
 		fi
 	fi
 
 	if [ "$start_coding_status" = "+" ]; then num=("$start_coding_value"); fi
 
-	# Готовые выходы копим, чтобы записать manifest одной транзакцией после цикла.
+	# Готовые выходы («<байты>|<путь>») копим, чтобы записать manifest одной
+	# транзакцией после цикла; размер источника — с первой удавшейся части.
 	local -a produced=()
+	local produced_src_sz=""
 	local any_fail="no"
 	# F29. Размер входа засчитываем ОДИН раз на исходный файл. Раньше запись "ok"
 	# писалась на каждую часть и несла полный размер источника, поэтому при разбиении
@@ -1400,13 +1569,14 @@ encode_file() {
 			# Третий аргумент — «sidecar найден»: без него поле subtitles уезжало
 			# службе и при отсутствующем файле титров.
 			r_out="$(remote_op_for_config "${b:-0}" "$r_len" "${sub_found:-0}")" || {
-				log_msg "FAIL" "$(basename "$full_path"): кодек $set_video_codec служба не поддерживает"
+				log_msg "FAIL" "${full_path##*/}: кодек $set_video_codec служба не поддерживает"
 				any_fail="yes"
-				echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+				put_result "fail"
 				((c+=1)); continue
 			}
-			r_op="$(printf '%s' "$r_out" | head -1)"
-			r_params="$(printf '%s' "$r_out" | tail -1)"
+			# Первая и последняя строки — раскрытием параметров (как head -1 / tail -1).
+			r_op="${r_out%%$'\n'*}"
+			r_params="${r_out##*$'\n'}"
 
 			# Задача прошлой попытки: после падения клиента на ожидании или
 			# скачивании продолжаем её, а не отправляем гигабайты заново. Ключ в
@@ -1423,7 +1593,7 @@ encode_file() {
 					r_job_saved=""
 				fi
 				[ -n "$r_job_saved" ] && \
-					log_msg "INFO" "Продолжаем прежнюю задачу службы: $(basename "$full_path")${pref} — исходник заново не отправляется"
+					log_msg "INFO" "Продолжаем прежнюю задачу службы: ${full_path##*/}${pref} — исходник заново не отправляется"
 			fi
 
 			# Загрузка одна на файл, задач — по одной на часть. Второй раз те же
@@ -1441,7 +1611,7 @@ encode_file() {
 			elif [ "$part_remote" = "yes" ] && [ -n "$r_job_saved" ]; then
 				: # исходник уже у службы, и задача по нему жива — загрузка не нужна
 			elif [ "$part_remote" = "yes" ] && [ -z "${remote_upload_id:-}" ]; then
-				log_msg "INFO" "Отправка на сервер: $(basename "$full_path")"
+				log_msg "INFO" "Отправка на сервер: ${full_path##*/}"
 				# Sidecar рядом с manifest'ом: повторный запуск после обрыва
 				# доходит до GET /uploads/<id> с настоящим смещением вместо того,
 				# чтобы просить новую загрузку и лить гигабайты заново.
@@ -1460,9 +1630,9 @@ encode_file() {
 					if remote_fallback_allowed "$full_path" "загрузка не удалась"; then
 						part_remote="no"
 					else
-						log_msg "FAIL" "$(basename "$full_path"): загрузка не удалась"
+						log_msg "FAIL" "${full_path##*/}: загрузка не удалась"
 						any_fail="yes"
-						echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+						put_result "fail"
 						REMOTE_UPLOAD_SIDECAR=""
 						((c+=1)); continue
 					fi
@@ -1487,9 +1657,9 @@ encode_file() {
 					if remote_fallback_allowed "$full_path" "загрузка файла субтитров не удалась"; then
 						part_remote="no"
 					else
-						log_msg "FAIL" "$(basename "$full_path"): загрузка файла субтитров не удалась"
+						log_msg "FAIL" "${full_path##*/}: загрузка файла субтитров не удалась"
 						any_fail="yes"
-						echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+						put_result "fail"
 						((c+=1)); continue
 					fi
 				fi
@@ -1517,7 +1687,7 @@ encode_file() {
 				local out_tmp; out_tmp="$(partial_path "$out_file")"
 				rm -f "$out_tmp"
 				_current_out_tmp="$out_tmp"
-				local encode_start; encode_start=$(date +%s)
+				now_s; local encode_start=$NOW_S
 				if remote_wait "$r_job" "$full_path" && remote_fetch "$r_job" "$out_tmp" "$full_path"; then
 					publish_result "$full_path" "$out_tmp" "$out_file" "$encode_start" "yes"
 					part_done="yes"
@@ -1532,9 +1702,9 @@ encode_file() {
 				if remote_fallback_allowed "$full_path" "удалённое кодирование не удалось"; then
 					part_remote="no"
 				else
-					log_msg "FAIL" "$(basename "$full_path")"
+					log_msg "FAIL" "${full_path##*/}"
 					any_fail="yes"
-					echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+					put_result "fail"
 					((c+=1)); continue
 				fi
 			fi
@@ -1546,13 +1716,15 @@ encode_file() {
 		elif [ "$dry_run" = "yes" ]; then
 			echo "[DRY-RUN] $ffmpeg -nostdin -hide_banner -strict -2 $hw_decode_args $in_seek -i \"$full_path\" ${subtitles_params[*]} $convert_settings $thread_args ${vf_args[*]} ${af_args[*]} $current_set_length $out_seek \"$out_file\""
 		else
-			log_msg "INFO" "Кодирование: $(basename "$full_path") -> $(basename "$out_file")"
-			local encode_start; encode_start=$(date +%s)
+			log_msg "INFO" "Кодирование: ${full_path##*/} -> ${out_file##*/}"
+			now_s; local encode_start=$NOW_S
 
 			# J1. Запуск ffmpeg в фоне с прогресс-файлом
 			local progress_file err_file
-			progress_file=$(mktemp "${TMPDIR:-/tmp}/ffconv.XXXXXXXX")
-			err_file=$(mktemp "${TMPDIR:-/tmp}/ffconv.XXXXXXXX")
+			new_run_file progress ""; progress_file="$NEW_FILE"
+			[ -n "$progress_file" ] || progress_file=$(mktemp "${TMPDIR:-/tmp}/ffconv.XXXXXXXX")
+			new_run_file err ""; err_file="$NEW_FILE"
+			[ -n "$err_file" ] || err_file=$(mktemp "${TMPDIR:-/tmp}/ffconv.XXXXXXXX")
 			_register_tmp "$progress_file"; _register_tmp "$err_file"
 
 			# Пишем в соседний temp и переименовываем только после rc=0. Прямая запись в
@@ -1562,7 +1734,8 @@ encode_file() {
 			# атомарно, поэтому имя цели появляется только у полностью записанного файла.
 			local out_tmp
 			out_tmp="$(partial_path "$out_file")"
-			rm -f "$out_tmp"
+			# Остаток прерванного прогона бывает редко — rm только когда есть что удалять.
+			{ [ -e "$out_tmp" ] || [ -L "$out_tmp" ]; } && rm -f "$out_tmp"
 			# Регистрируем temp для trap'а: при INT/TERM он удаляет недобитый файл,
 			# иначе .ffconv-partial-* остаётся в destination после прерванного прогона.
 			_current_out_tmp="$out_tmp"
@@ -1576,17 +1749,33 @@ encode_file() {
 			local ffmpeg_pid=$!
 			_current_ffmpeg_pid=$ffmpeg_pid
 
-			# Показываем прогресс-бар пока ffmpeg работает
+			# Показываем прогресс-бар пока ffmpeg работает. Интервал опроса растёт от
+			# 0.05 до 0.4 с: короткий файл не ждёт полных 0.4 с ради первой проверки.
+			local poll_s=0.05
 			while kill -0 $ffmpeg_pid 2>/dev/null; do
-				sleep 0.4
+				sleep "$poll_s"
+				case "$poll_s" in 0.05) poll_s=0.1 ;; 0.1) poll_s=0.2 ;; *) poll_s=0.4 ;; esac
 				if [ "$progress_dur" -gt 0 ] 2>/dev/null; then
-					local out_time_str
-					out_time_str=$(grep "^out_time=" "$progress_file" 2>/dev/null | tail -1 | cut -d= -f2)
+					# Последняя строка out_time= в файле прогресса. Блок ffmpeg — около
+					# дюжины строк, поэтому хватает хвоста; целиком файл не читаем: на
+					# часовом кодировании в нём десятки тысяч строк.
+					local out_time_str="" _pl _ptail
+					_ptail=$(tail -n 40 "$progress_file" 2>/dev/null)
+					while IFS= read -r _pl; do
+						case "$_pl" in out_time=*) out_time_str="${_pl#out_time=}"; out_time_str="${out_time_str%%=*}" ;; esac
+					done <<< "$_ptail"
 					if [ -n "$out_time_str" ]; then
 						local oh om os out_sec pct
-						oh=$(echo "$out_time_str" | cut -d: -f1)
-						om=$(echo "$out_time_str" | cut -d: -f2)
-						os=$(echo "$out_time_str" | cut -d: -f3 | cut -d. -f1)
+						# Поля чч:мм:сс.мкс — раскрытием параметров, как прежние `cut -d:`
+						# (строка без ':' у cut отдаётся целиком в любое поле).
+						oh="${out_time_str%%:*}"
+						om="${out_time_str#*:}"; om="${om%%:*}"
+						case "$out_time_str" in
+							*:*:*) os="${out_time_str#*:*:}"; os="${os%%:*}" ;;
+							*:*)   os="" ;;
+							*)     os="$out_time_str" ;;
+						esac
+						os="${os%%.*}"
 						if [[ "$oh$om$os" =~ ^[0-9]+$ ]] && [ "$progress_dur" -gt 0 ]; then
 							out_sec=$(( 10#$oh * 3600 + 10#$om * 60 + 10#$os ))
 							if [ "$out_sec" -gt 0 ]; then
@@ -1603,16 +1792,15 @@ encode_file() {
 			_current_ffmpeg_pid=""
 			_current_out_tmp=""
 			printf "\n"
-			rm -f "$progress_file"
 
-			local encode_end; encode_end=$(date +%s)
+			now_s; local encode_end=$NOW_S
 			local elapsed=$((encode_end - encode_start))
 			local elapsed_min=$((elapsed / 60))
 			local elapsed_sec=$((elapsed % 60))
 
 			# E2. Обработка ошибок
 			if [ $exit_code -ne 0 ]; then
-				log_msg "FAIL" "$(basename "$full_path") (exit code $exit_code, ${elapsed_min}m ${elapsed_sec}s)"
+				log_msg "FAIL" "${full_path##*/} (exit code $exit_code, ${elapsed_min}m ${elapsed_sec}s)"
 				# Показать последние строки ошибки
 				if [ -s "$err_file" ]; then
 					tail -3 "$err_file" | while IFS= read -r errline; do
@@ -1621,12 +1809,13 @@ encode_file() {
 				fi
 				rm -f "$out_tmp"
 				any_fail="yes"
-				echo "fail" > "$(mktemp "$results_dir/r_XXXXXXXX")"
+				put_result "fail"
 			# Публикация — общая с удалённым путём (см. publish_result выше).
 			else
 				publish_result "$full_path" "$out_tmp" "$out_file" "$encode_start"
 			fi
-			rm -f "$err_file"
+			# Оба временных файла — одним rm: каждый процесс здесь на счету.
+			rm -f "$progress_file" "$err_file"
 		fi
 		((c+=1))
 	done
@@ -1635,7 +1824,7 @@ encode_file() {
 	# следующий запуск доделать файл, вместо того чтобы принять уцелевшую (part.1) за
 	# готовый результат. Частичный успех manifest'а не получает намеренно.
 	if [ "$dry_run" != "yes" ] && [ "$any_fail" = "no" ] && [ ${#produced[@]} -gt 0 ]; then
-		manifest_write "$manifest" "$full_path" "$file_sig" "${produced[@]}"
+		manifest_write "$manifest" "$full_path" "$produced_src_sz" "$file_sig" "${produced[@]}"
 		# Файл доделан — возобновлять нечего, и sidecar (upload_id, подпись, задачи
 		# частей) не имеет права переживать успешный прогон: иначе следующий заход
 		# по тому же файлу нашёл бы в нём идентификаторы задач, которые уже
@@ -1653,15 +1842,20 @@ encode_file() {
 # в поддержке. Проверяем поддержку один раз. Fallback сортирует по \n: имена с
 # переводом строки в нём не поддерживаются, и об этом честнее предупредить, чем
 # молча выдать другой порядок склейки.
-if printf 'a\0' | sort -z >/dev/null 2>&1; then
-	sort_null() { sort -z; }
-else
-	sort_null() {
+# Проба — при первом вызове, а не на загрузке: sort_null нужен только merge, а
+# проба стоила процессов каждому прогону.
+sort_null() {
+	if [ -z "${_sort_z_ok:-}" ]; then
+		if printf 'a\0' | sort -z >/dev/null 2>&1; then _sort_z_ok="yes"; else _sort_z_ok="no"; fi
+	fi
+	if [ "$_sort_z_ok" = "yes" ]; then
+		sort -z
+	else
 		[ -n "${_sort_z_warned:-}" ] || log_msg "WARN" "sort без -z (не GNU): порядок объединения не гарантирован для имён с переводом строки"
 		_sort_z_warned=1
 		tr '\0' '\n' | LC_ALL=C sort | tr '\n' '\0'
-	}
-fi
+	fi
+}
 
 # F-modes. Спецрежимы (merge/extract/frame/copy/audio) взаимоисключающи по построению:
 # при нескольких включённых часть опций молча игнорируется. Определяем ЭФФЕКТИВНЫЙ режим
@@ -1674,7 +1868,9 @@ _active_modes=""
 [ "$copy_codecs" = "yes" ]        && _active_modes="${_active_modes} copy"
 [ "$audio_only" = "yes" ]         && _active_modes="${_active_modes} audio"
 _active_modes="${_active_modes# }"
-if [ "$(printf '%s' "$_active_modes" | wc -w)" -gt 1 ]; then
+_n_modes=0
+for _m in $_active_modes; do _n_modes=$((_n_modes + 1)); done
+if [ "$_n_modes" -gt 1 ]; then
 	_mode_winner="${_active_modes%% *}"
 	# Здесь и в F-collision-map подстановка обязана быть в скобках: следом идёт «»», и в
 	# локали, где старший байт считается буквой (macOS + bash 3.2), он утягивается в имя
@@ -1693,34 +1889,46 @@ fi
 # файла) и frame (выход — каталог) сюда не попадают: там формула выхода другая.
 collisions_file=""
 if [ "$merge_files" != "yes" ] && [ "$extract_audio_copy" != "yes" ] && [ "$create_frame" != "yes" ]; then
-	_cmap=$(mktemp "${TMPDIR:-/tmp}/ffconv_map.XXXXXXXX")
-	collisions_file=$(mktemp "${TMPDIR:-/tmp}/ffconv_col.XXXXXXXX")
+	# Оба файла — в своём каталоге прогона (results_dir), а не через mktemp: тот
+	# стоил процессов каждому запуску, а каталог и так удаляется в конце.
+	new_run_file map ""; _cmap="$NEW_FILE"
+	new_run_file col ""; collisions_file="$NEW_FILE"
 	_register_tmp "$_cmap"
+	_cmap_n=0
 	while IFS= read -r -d '' _pf_path; do
 		# dest строго внутри source — собственные выходы в карту не берём (их и так пропустят).
 		if [ "$dest_inside_source" = "yes" ]; then
-			case "$(canon_path "$_pf_path")" in "$canon_destination"/*) continue ;; esac
+			canon_path "$_pf_path"
+			case "$CANON_PATH" in "$canon_destination"/*) continue ;; esac
 		fi
 		# Формула обязана совпадать с encode_file, иначе карта врёт.
-		_pf_dir="$(dirname "$_pf_path")/"
+		path_dir "$_pf_path"
+		_pf_dir="$PATH_DIR/"
 		_pf_dir="${_pf_dir:$_src_prefix_len}"
-		_pf_name="$(basename "$_pf_path" | sed 's/\.[^.]*$//')"
-		[ "$save_old_extension" = "yes" ] && _pf_name="$(basename "$_pf_path")"
+		_pf_name="${_pf_path##*/}"
+		_pf_name="${_pf_name%.*}"
+		[ "$save_old_extension" = "yes" ] && _pf_name="${_pf_path##*/}"
 		_pf_fmt="$format_files_out"
 		[ "$copy_codecs" = "yes" ] && _pf_fmt="${_pf_path##*.}"
-		_pf_out="$(canon_path "${folder_destination}${_pf_dir}${_pf_name}${part_suffix_known}.${_pf_fmt}")"
+		canon_path "${folder_destination}${_pf_dir}${_pf_name}${part_suffix_known}.${_pf_fmt}"
+		_pf_out="$CANON_PATH"
 		# TAB-разделитель: в путях он практически не встречается, а перевод строки
 		# ломал бы группировку — такие имена отсеиваем явно.
 		case "$_pf_out$_pf_path" in
-			*"$(printf '\t')"*) log_msg "WARN" "Табуляция в имени — файл исключён из карты коллизий: $_pf_path"; continue ;;
+			*$'\t'*) log_msg "WARN" "Табуляция в имени — файл исключён из карты коллизий: $_pf_path"; continue ;;
 		esac
 		# Три колонки: нормализованный ключ (по нему группируем), выход В ИСХОДНОМ
 		# регистре (его показываем человеку) и сам вход.
-		printf '%s\t%s\t%s\n' "$(collision_key "$_pf_out")" "$_pf_out" "$_pf_path" >> "$_cmap"
+		collision_key "$_pf_out"
+		printf '%s\t%s\t%s\n' "$COLLISION_KEY" "$_pf_out" "$_pf_path" >> "$_cmap"
+		_cmap_n=$((_cmap_n + 1))
 	done < <(find_inputs)
 
-	# Ключи, встретившиеся больше одного раза, — и есть коллизии.
-	LC_ALL=C sort "$_cmap" | LC_ALL=C awk -F'\t' '{c[$1]++} END {for (k in c) if (c[k] > 1) print k}' > "$collisions_file"
+	# Ключи, встретившиеся больше одного раза, — и есть коллизии. С одним входом
+	# коллизий не бывает, и sort | awk на нём — два лишних процесса.
+	if [ "$_cmap_n" -gt 1 ]; then
+		LC_ALL=C sort "$_cmap" | LC_ALL=C awk -F'\t' '{c[$1]++} END {for (k in c) if (c[k] > 1) print k}' > "$collisions_file"
+	fi
 	if [ -s "$collisions_file" ]; then
 		while IFS= read -r _col_key; do
 			_col_ins=$(LC_ALL=C awk -F'\t' -v k="$_col_key" '$1 == k {print "    " $3}' "$_cmap")
@@ -1729,7 +1937,6 @@ if [ "$merge_files" != "yes" ] && [ "$extract_audio_copy" != "yes" ] && [ "$crea
 			printf '%s\n' "$_col_ins"
 		done < "$collisions_file"
 	fi
-	rm -f "$_cmap"
 fi
 
 # --- Удалённый бэкенд: включён ли он для ЭТОГО прогона ---
@@ -1814,10 +2021,11 @@ if [ "$merge_files" = "yes" ]; then
 	while IFS= read -r -d '' full_path; do
 		# F-collision: не берём собственные выходы (dest строго внутри source) как имя цели.
 		if [ "$dest_inside_source" = "yes" ]; then
-			case "$(canon_path "$full_path")" in "$canon_destination"/*) continue ;; esac
+			canon_path "$full_path"
+			case "$CANON_PATH" in "$canon_destination"/*) continue ;; esac
 		fi
 		_any_input="yes"
-		if [ -z "$fname" ]; then fname=$(basename "$full_path"); break; fi
+		if [ -z "$fname" ]; then fname=${full_path##*/}; break; fi
 	done < <(find_inputs | sort_null)
 	if [ -z "$fname" ]; then
 		log_msg "WARN" "Нет файлов для объединения в $folder_sources"
@@ -1835,7 +2043,7 @@ if [ "$merge_files" = "yes" ]; then
 		# этот источник СОБОЙ ЖЕ: оригинал теряется, а следующий прогон снова возьмёт
 		# объединённый файл во вход и задублирует содержимое. Такой мерж невозможен без
 		# потери данных — отклоняем его так же явно, как F12 «выход == вход».
-		canon_merge_target="$(canon_path "${folder_destination}/${fname}")"
+		canon_path "${folder_destination}/${fname}"; canon_merge_target="$CANON_PATH"
 		merge_target_collision="no"
 		concat_list=$(mktemp "${TMPDIR:-/tmp}/ffconv.XXXXXXXX")
 		_register_tmp "$concat_list"
@@ -1843,10 +2051,11 @@ if [ "$merge_files" = "yes" ]; then
 		# Имена с ' экранируем для concat-формата ffmpeg: ' -> '\''
 		while IFS= read -r -d '' mf; do
 			# F-collision: собственные выходы (dest строго внутри source) в concat не включаем.
+			canon_path "$mf"
 			if [ "$dest_inside_source" = "yes" ]; then
-				case "$(canon_path "$mf")" in "$canon_destination"/*) continue ;; esac
+				case "$CANON_PATH" in "$canon_destination"/*) continue ;; esac
 			fi
-			[ "$(canon_path "$mf")" = "$canon_merge_target" ] && merge_target_collision="yes"
+			[ "$CANON_PATH" = "$canon_merge_target" ] && merge_target_collision="yes"
 			printf "file '%s'\n" "${mf//\'/\'\\\'\'}" >> "$concat_list"
 		done < <(find_inputs | sort_null)
 		if [ "$merge_target_collision" = "yes" ]; then
@@ -1939,7 +2148,9 @@ total_ok=0; total_fail=0; total_skip=0
 total_out_bytes=0; total_in_bytes=0
 for f in "$results_dir"/r_*; do
 	[ -f "$f" ] || continue
-	content=$(cat "$f")
+	# Итог — одна строка; read вместо $(cat) — без процесса на каждый файл пакета.
+	content=""
+	IFS= read -r content < "$f"
 	case "${content%%:*}" in
 		ok)
 			((total_ok++))
@@ -1958,10 +2169,10 @@ for f in "$results_dir"/lf_*; do
 	[ -f "$f" ] || continue
 	((total_local++))
 done
+# Карта коллизий лежит в results_dir и уходит вместе с ним.
 rm -rf "$results_dir"
-[ -n "$collisions_file" ] && rm -f "$collisions_file"
 
-end_time_global=$(date +%s)
+now_s; end_time_global=$NOW_S
 elapsed_global=$((end_time_global - start_time_global))
 elapsed_global_min=$((elapsed_global / 60))
 elapsed_global_sec=$((elapsed_global % 60))

@@ -211,15 +211,25 @@ assert_contains "deny-stub объясняет причину"             "СЕ�
 
 # 3. Ни один тест не имеет права звать сетевые бинари напрямую по имени.
 #    (Настоящий vot-cli-live/curl/wget мимо мока — это и есть выход в сеть.)
-net_offenders=""
+#
+# Списки тест-файлов собираются один раз, а проверки ниже — одним grep по всем
+# файлам, а не grep на каждую пару «файл × имя»: процесс в Git Bash стоит
+# 30–250 мс, и прежние вложенные циклы занимали больше половины времени файла.
+_all_sh=(); _all_tests=()
 for _t in "$TESTS_DIR"/ffmpeg/*.sh "$TESTS_DIR"/yt-dlp/*.sh "$TESTS_DIR"/common/*.sh; do
     [ -f "$_t" ] || continue
-    case "$(basename "$_t")" in test_guardrails.sh) continue ;; esac
-    # Ищем вызов команды в начале строки/после ; или && — не упоминание в строке/комментарии.
-    if grep -qE '(^|[;&|]|\$\()[[:space:]]*(vot-cli-live|curl|wget)[[:space:]]' "$_t" 2>/dev/null; then
-        net_offenders="$net_offenders $(basename "$_t")"
-    fi
+    case "${_t##*/}" in test_guardrails.sh) continue ;; esac
+    _all_sh+=("$_t")
+    case "${_t##*/}" in test_*.sh) _all_tests+=("$_t") ;; esac
 done
+# Имена файлов из вывода `grep -l` — через пробел, как прежде собирал цикл.
+_basenames() {
+    local _p _out=""
+    while IFS= read -r _p; do [ -n "$_p" ] && _out="$_out ${_p##*/}"; done <<< "$1"
+    printf '%s' "$_out"
+}
+# Ищем вызов команды в начале строки/после ; или && — не упоминание в строке/комментарии.
+net_offenders="$(_basenames "$(grep -lE '(^|[;&|]|\$\()[[:space:]]*(vot-cli-live|curl|wget)[[:space:]]' "${_all_sh[@]}" 2>/dev/null)")"
 assert_empty "ни один тест не зовёт сетевые бинари напрямую" "$net_offenders"
 
 # ══════════════════════════════════════════════════════════════
@@ -236,17 +246,31 @@ suite "Тесты не держат собственных копий production
 # не даёт копиям вернуться: тест обязан дот-сорсить production (main гардится
 # BASH_SOURCE) или вырезать нужный кусок из настоящего файла.
 PROD_FUNCS="read_config to_flag build_cookie_args build_format_args detect_platform resolve_bin canon_path manifest_is_complete manifest_write partial_path"
-copy_offenders=""
-for _t in "$TESTS_DIR"/ffmpeg/test_*.sh "$TESTS_DIR"/yt-dlp/test_*.sh "$TESTS_DIR"/common/test_*.sh; do
-    [ -f "$_t" ] || continue
-    case "$(basename "$_t")" in test_guardrails.sh) continue ;; esac
-    for _fn in $PROD_FUNCS; do
-        # Определение функции в тесте: `name() {` или `function name`.
-        if grep -qE "^[[:space:]]*(function[[:space:]]+)?${_fn}[[:space:]]*\(\)[[:space:]]*\{" "$_t" 2>/dev/null; then
-            copy_offenders="$copy_offenders $(basename "$_t"):${_fn}"
-        fi
-    done
-done
+
+# Нарушители «файл:ПРЕФИКС:имя» по выводу `grep -oHE` с альтернацией имён: один
+# grep на весь набор вместо grep на каждую пару «файл × имя». Имя вынимается из
+# совпадения раскрытием параметров: снимаются отступ, слово `function`, ведущие
+# `\`, `$` и `:`, а конец — по первому пробелу, `(` или `{`. $2 — префикс в отчёте.
+_def_offenders() {
+    local _line _file _m _out=""
+    while IFS= read -r _line; do
+        [ -n "$_line" ] || continue
+        _file="${_line%%:*}"; _m="${_line#*:}"
+        # Windows-путь «C:/…» сам содержит двоеточие — тогда имя файла до второго.
+        case "$_file" in ?) _file="$_file:${_m%%:*}"; _m="${_m#*:}" ;; esac
+        _m="${_m#"${_m%%[![:space:]]*}"}"
+        case "$_m" in function[[:space:]]*) _m="${_m#function}"; _m="${_m#"${_m%%[![:space:]]*}"}" ;; esac
+        _m="${_m#\\}"; _m="${_m#\$}"; _m="${_m#:}"
+        _m="${_m%%[[:space:](\{]*}"
+        case "$_out " in *" ${_file##*/}:$2$_m "*) ;; *) _out="$_out ${_file##*/}:$2$_m" ;; esac
+    done <<< "$1"
+    printf '%s' "$_out"
+}
+
+# Определение функции в тесте: `name() {` или `function name`.
+copy_offenders="$(_def_offenders "$(grep -oHE \
+    "^[[:space:]]*(function[[:space:]]+)?(${PROD_FUNCS// /|})[[:space:]]*\(\)[[:space:]]*\{" \
+    "${_all_tests[@]}" 2>/dev/null)" "")"
 assert_empty "ни один тест не переопределяет production-функцию" "$copy_offenders"
 
 # Та же проверка для PS1 и CMD. Прежняя версия знала только bash-синтаксис `name() {`,
@@ -257,25 +281,19 @@ assert_empty "ни один тест не переопределяет productio
 # Оба «зелёно» проверяли копию. Здесь ловим определения в тестах, а не вызовы.
 PROD_PS_FUNCS="Read-Config To-Flag Parse-Flag Quote-WinArg Join-WinArgs Get-Platform"
 PROD_CMD_LABELS="to_flag resolve_hw build_atempo kbps_from_line trim_val trim_key strip_inline_comment expand_env assign_var log_msg warn_bang_names"
-ps_cmd_offenders=""
-for _t in "$TESTS_DIR"/ffmpeg/test_*.sh "$TESTS_DIR"/yt-dlp/test_*.sh "$TESTS_DIR"/common/test_*.sh; do
-    [ -f "$_t" ] || continue
-    case "$(basename "$_t")" in test_guardrails.sh) continue ;; esac
-    for _fn in $PROD_PS_FUNCS; do
-        # `function Read-Config {` — определение. Вызов `Read-Config 'k' 's'` не совпадёт.
-        if grep -qE "function[[:space:]]+\\\\?\$?${_fn}[[:space:]]*\{" "$_t" 2>/dev/null; then
-            ps_cmd_offenders="$ps_cmd_offenders $(basename "$_t"):PS1:${_fn}"
-        fi
-    done
-    for _lb in $PROD_CMD_LABELS; do
-        # Определение метки в теле теста (`:to_flag` в начале строки). Вырезание
-        # настоящей подпрограммы через awk из production-файла сюда не попадает:
-        # там метка приходит из переменной, а не написана literal'ом в тесте.
-        if grep -qE "^[[:space:]]*:${_lb}[[:space:]]*\$" "$_t" 2>/dev/null; then
-            ps_cmd_offenders="$ps_cmd_offenders $(basename "$_t"):CMD:${_lb}"
-        fi
-    done
-done
+# `function Read-Config {` — определение. Вызов `Read-Config 'k' 's'` не совпадёт.
+# Перед именем допустимы `\` и `$` — оба ЛИТЕРАЛОМ (`\$?`). Голый `$?` GNU grep
+# читает как якорь конца строки: с -q такое выражение ещё совпадает, а с -o не
+# печатает ничего, и нарушитель пропал бы из отчёта.
+ps_cmd_offenders="$(_def_offenders "$(grep -oHE \
+    "function[[:space:]]+\\\\?\\\$?(${PROD_PS_FUNCS// /|})[[:space:]]*\{" \
+    "${_all_tests[@]}" 2>/dev/null)" "PS1:")"
+# Определение метки в теле теста (`:to_flag` в начале строки). Вырезание
+# настоящей подпрограммы через awk из production-файла сюда не попадает:
+# там метка приходит из переменной, а не написана literal'ом в тесте.
+ps_cmd_offenders="$ps_cmd_offenders$(_def_offenders "$(grep -oHE \
+    "^[[:space:]]*:(${PROD_CMD_LABELS// /|})[[:space:]]*\$" \
+    "${_all_tests[@]}" 2>/dev/null)" "CMD:")"
 assert_empty "ни один тест не держит PS1/CMD-копию production-подпрограммы" "$ps_cmd_offenders"
 
 # PS1-тесты парсера обязаны дот-сорсить production под гардом FFCONV_TEST/YTDLP_TEST.
@@ -320,14 +338,7 @@ done
 # Ссылки на исчезнувшие версии: тест на v11 молча «проверял» несуществующий файл.
 # Диапазон растёт вместе с текущей версией: иначе после бампа ссылка на прежнюю
 # версию перестаёт ловиться — ровно та дыра, ради которой проверка и написана.
-stale_refs=""
-for _t in "$TESTS_DIR"/ffmpeg/test_*.sh "$TESTS_DIR"/yt-dlp/test_*.sh "$TESTS_DIR"/common/test_*.sh; do
-    [ -f "$_t" ] || continue
-    case "$(basename "$_t")" in test_guardrails.sh) continue ;; esac
-    if grep -qE '_v1[0-7]\.(sh|ps1|cmd)' "$_t" 2>/dev/null; then
-        stale_refs="$stale_refs $(basename "$_t")"
-    fi
-done
+stale_refs="$(_basenames "$(grep -lE '_v1[0-7]\.(sh|ps1|cmd)' "${_all_tests[@]}" 2>/dev/null)")"
 assert_empty "нет ссылок на устаревшие версии скриптов (v11..v17)" "$stale_refs"
 
 # Подстановка вплотную к не-ASCII символу («$var»). В локали, где старший байт считается
@@ -775,15 +786,15 @@ suite "mktemp: шаблон обязан оканчиваться на XXXXXX"
 # проверяет не то, что собирался. GNU mktemp такой шаблон принимает, поэтому на
 # Linux/Windows дефект невидим и всплывает только на macOS-джобе CI.
 # Расширение добавляет mktemp_suffix из framework.sh.
-mktemp_offenders=""
-for _t in "$TESTS_DIR"/lib/*.sh "$TESTS_DIR"/ffmpeg/*.sh "$TESTS_DIR"/yt-dlp/*.sh "$TESTS_DIR"/common/*.sh "$TESTS_DIR"/run_tests.sh; do
-    [ -f "$_t" ] || continue
-    case "$(basename "$_t")" in test_guardrails.sh) continue ;; esac
-    # Код, а не комментарии: те цитируют дефектный шаблон, объясняя его.
-    if grep -v '^[[:space:]]*#' "$_t" | grep -qE 'mktemp( -d)? "?[^"]*XXXXXX\.' 2>/dev/null; then
-        mktemp_offenders="$mktemp_offenders $(basename "$_t")"
-    fi
+_mt_files=("${_all_sh[@]}")
+for _t in "$TESTS_DIR"/lib/*.sh "$TESTS_DIR"/run_tests.sh; do
+    [ -f "$_t" ] && _mt_files+=("$_t")
 done
+# Код, а не комментарии: те цитируют дефектный шаблон, объясняя его. Строка-
+# комментарий отсекается самим выражением (первый непробельный символ строки —
+# не `#`), поэтому хватает одного grep на все файлы вместо пары на каждый.
+mktemp_offenders="$(_basenames "$(grep -lE \
+    '^[[:space:]]*([^#[:space:]].*)?mktemp( -d)? "?[^"]*XXXXXX\.' "${_mt_files[@]}" 2>/dev/null)")"
 assert_empty "ни один тест не ставит расширение после XXXXXX" "$mktemp_offenders"
 assert_contains "framework отдаёт хелпер mktemp_suffix" "mktemp_suffix()" "$(cat "$TESTS_DIR/lib/framework.sh")"
 

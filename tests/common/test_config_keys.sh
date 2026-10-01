@@ -35,14 +35,32 @@ assert_nonempty_keys() {
 # start, enabled, file, format, prefer встречаются в тексте на каждой странице, и
 # для них проверка была вечнозелёной. Ищем формы, которыми ридеры реально
 # обращаются к ключу на каждой платформе.
+#
+# Обращения собираются ОДНИМ `grep -o` на файл (ключ в них — [a-z_]+, ровно как у
+# keys_of), а дальше ключ ищется в готовом списке: прежде здесь был grep на каждую
+# пару «ключ × платформа», то есть сотни процессов.
+_rk_files=(); _rk_lists=()
 key_is_read() {
-    local file="$1" key="$2"
-    case "$file" in
-        *.sh)  grep -qE "read_config[[:space:]]+\"$key\"" "$file" ;;
-        *.ps1) grep -qE "Read-Config[[:space:]]+\"$key\"" "$file" ;;
-        *.cmd) grep -qE "_key!\"==\"$key\"" "$file" ;;
-        *)     grep -qw -- "$key" "$file" ;;
-    esac
+    local file="$1" key="$2" pat m list="" i
+    for i in "${!_rk_files[@]}"; do
+        [ "${_rk_files[i]}" = "$file" ] && { list="${_rk_lists[i]}"; break; }
+    done
+    if [ -z "$list" ]; then
+        case "$file" in
+            *.sh)  pat='read_config[[:space:]]+"[a-z_]+"' ;;
+            *.ps1) pat='Read-Config[[:space:]]+"[a-z_]+"' ;;
+            *.cmd) pat='_key!"=="[a-z_]+"' ;;
+        esac
+        list=$'\n'
+        while IFS= read -r m; do
+            [ -n "$m" ] || continue
+            m="${m%\"}"; m="${m##*\"}"
+            list="$list$m"$'\n'
+        done <<< "$(grep -oE "$pat" "$file" 2>/dev/null)"
+        _rk_files+=("$file"); _rk_lists+=("$list")
+    fi
+    case "$list" in *$'\n'"$key"$'\n'*) return 0 ;; esac
+    return 1
 }
 
 # ── ffmpeg: строгий трёхплатформенный паритет ─────────────────────────────

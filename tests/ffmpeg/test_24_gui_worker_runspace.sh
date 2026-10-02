@@ -53,6 +53,7 @@ assert_contains "GUI передаёт guiAppDir в runspace" 'SetVariable("guiAp
 assert_contains "воркер берёт каталог из guiAppDir" '$guiAppDir' "$worker_src"
 assert_contains "модуль подключается по отсутствию функции, а не по пути" \
     'Get-Command Set-RemoteActive' "$worker_src"
+assert_contains "модуль ASR подключается по отсутствию функции" 'Get-Command Invoke-AsrRun' "$worker_src"
 # stderr нативных команд обязан уходить в конвейер, иначе он оседает в Streams.Error.
 for _m in "-vn -c:a copy" "-r 1/1" "-f concat -safe 0"; do
     _line=$(grep -F -- "$_m" "$WORKER" | grep -F '& $ffmpeg' | head -1)
@@ -106,6 +107,26 @@ if ($EmbedRemote) {
     $remote = [System.IO.File]::ReadAllText((Join-Path $AppDir 'remote_client.ps1'), [System.Text.Encoding]::UTF8)
     $script = $remote + "`n" + $script
 }
+if ($Mode -eq 'asr') {
+    # EXE layout plus a fake network: the module and an Invoke-AsrCurl override are
+    # glued in front of the worker, so the worker does not dot-source the module.
+    $asr = [System.IO.File]::ReadAllText((Join-Path $AppDir 'asr_client.ps1'), [System.Text.Encoding]::UTF8)
+    $override = @'
+function Invoke-AsrCurl {
+    param([string]$Dir, [string[]]$CurlArgs)
+    $i = [array]::IndexOf($CurlArgs, '-o')
+    $out = Join-Path $Dir $CurlArgs[$i + 1]
+    if ($CurlArgs[-1] -like '*/speech/limits') {
+        $body = '{"max_seconds":3600.0,"max_bytes":524288000,"languages":["en","ru"],"device":"cpu","job_timeout_sec":1800.0,"diarization":true,"asr_ver":"mock"}'
+    } else {
+        $body = '{"asr_ver":"mock","segments":[{"start":0.5,"end":1.0,"text":" test","speaker":"SPEAKER_00","confidence":0.9}],"stages":{"transcribe":{"status":"ok"}},"warnings":[],"audio_seconds":60.0,"processing_seconds":3.0}'
+    }
+    [System.IO.File]::WriteAllText($out, $body)
+    return [pscustomobject]@{ Rc = 0; Code = '200'; Err = ''; Cancelled = $false }
+}
+'@
+    $script = $asr + "`n" + $override + "`n" + $script
+}
 
 $progress = Join-Path $Work 'progress.json'
 $vars = @{
@@ -128,12 +149,15 @@ $vars = @{
     remote_enabled = 'no'; remote_endpoint = ''; remote_api_key = ''
     remote_api_key_command = ''; remote_prefer = 'auto'; remote_wait_timeout = '1800'
     remote_stall_timeout = '900'; remote_on_failure = 'abort'
+    asr_enabled = 'no'; asr_endpoint = ''; asr_api_key = ''; asr_api_key_command = ''
+    asr_pinned_pubkey = ''; asr_language = 'ru'; asr_diarize = 'yes'; asr_num_speakers = ''
 }
 switch ($Mode) {
     'extract' { $vars.extract_audio_copy = 'yes' }
     'frames'  { $vars.create_frame = 'yes' }
     'merge'   { $vars.merge_files = 'yes' }
     'audio'   { $vars.audio_only = 'yes' }
+    'asr'     { $vars.asr_enabled = 'yes'; $vars.asr_endpoint = 'https://asr.example:30010'; $vars.asr_api_key = 'k' }
 }
 
 $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
@@ -160,6 +184,8 @@ if (Test-Path -LiteralPath $progress) {
     try { $state = ([System.IO.File]::ReadAllText($progress) | ConvertFrom-Json).state } catch {}
 }
 Write-Output ("STATE=" + $state)
+$asrTxt = Join-Path $Work 'out\clip.txt'
+if (Test-Path -LiteralPath $asrTxt) { Write-Output ("ASRLINE=" + ([System.IO.File]::ReadAllLines($asrTxt))[-1]) }
 $ps.Dispose(); $rs.Close()
 PSEOF
 HARNESS_WIN=$(cygpath -w "$HARNESS" 2>/dev/null || echo "$HARNESS")
@@ -189,6 +215,14 @@ suite "GUI-путь: раскладка EXE (remote_client вклеен в ту 
 out=$(run_mode "transcode" "embed")
 assert_eq "EXE-раскладка: state=success"      "success" "$(get_field "$out" STATE)"
 assert_eq "EXE-раскладка: Streams.Error пуст" "0"       "$(get_field "$out" ERRCOUNT)"
+
+# ══════════════════════════════════════════════════════════════
+suite "GUI-путь: режим распознавания речи (модуль вклеен, сеть подменена)"
+# ══════════════════════════════════════════════════════════════
+out=$(run_mode "asr" "")
+assert_eq "ASR: state=success"      "success" "$(get_field "$out" STATE)"
+assert_eq "ASR: Streams.Error пуст" "0"       "$(get_field "$out" ERRCOUNT)"
+assert_eq "ASR: расшифровка собрана" "[00:00:00] SPEAKER_00: test" "$(get_field "$out" ASRLINE)"
 
 rm -f "$HARNESS"
 summary

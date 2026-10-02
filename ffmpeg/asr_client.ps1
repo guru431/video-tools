@@ -426,7 +426,7 @@ function Invoke-AsrPreflight {
 	if (-not (Resolve-AsrApiKey)) { return $false }
 	if (-not $asr_api_key) { return (Set-AsrPreflightError '[asr] ключ не задан: api_key, api_key_command или ${ASR_API_KEY}.') }
 	$script:AsrRunDir = Join-Path ([System.IO.Path]::GetTempPath()) ('ffconv_asr_' + [guid]::NewGuid().ToString('N'))
-	New-Item -ItemType Directory -Path $script:AsrRunDir -Force | Out-Null
+	[void][System.IO.Directory]::CreateDirectory($script:AsrRunDir)
 	if (-not (Select-AsrEndpoint)) { Remove-AsrRunDir; return (Set-AsrPreflightError $script:AsrStopReason) }
 	$langs = $script:AsrLimits.Languages
 	if ($langs -and (" $langs " -cnotlike "* $asr_language *")) {

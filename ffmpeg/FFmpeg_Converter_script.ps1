@@ -601,6 +601,13 @@ if (-not (Get-Command Set-RemoteActive -ErrorAction SilentlyContinue)) {
 	$_remoteModule = Join-Path $_appRoot 'remote_client.ps1'
 	if (Test-Path -LiteralPath $_remoteModule) { . $_remoteModule }
 }
+# Распознавание речи — второй модуль того же устройства и по тем же правилам:
+# каталог из $guiAppDir, в EXE функции уже вклеены (проверка по объявленной функции).
+if (-not (Get-Command Invoke-AsrRun -ErrorAction SilentlyContinue)) {
+	$_appRoot = if ($guiAppDir) { $guiAppDir } elseif ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+	$_asrModule = Join-Path $_appRoot 'asr_client.ps1'
+	if (Test-Path -LiteralPath $_asrModule) { . $_asrModule }
+}
 
 # --- Откат на локальный ffmpeg: только по ключу и только шумно ---
 # Отказ от МОЛЧАЛИВОГО отката остаётся в силе и обоснован: тихий переход на
@@ -615,6 +622,15 @@ $script:countLocalFallback = 0
 # Проверку отмены отдаём модулю: длинные фазы (отправка гигабайтов, скачивание
 # результата) шли до конца, сколько бы раз пользователь ни нажал «Остановить».
 $script:RemoteCancelCheck = { [bool]($guiCancelFile -and (Test-Path -LiteralPath $guiCancelFile)) }
+# Распознавание: запрос молчит до получаса — модулю отдаём проверку отмены и
+# «тик» для строки прогресса GUI (раз в 5 с: «ждём сервер мм:сс»).
+$script:AsrCancelCheck = { [bool]($guiCancelFile -and (Test-Path -LiteralPath $guiCancelFile)) }
+$script:AsrTick = {
+	param([int]$Elapsed)
+	if ($guiProgressFile) {
+		Write-GUIProgress -FilePercent $script:AsrTickPercent -CurrentFile $script:AsrTickFile -Phase ("{0}, ждём сервер {1}" -f $script:AsrTickPhase, (Format-AsrTs $Elapsed))
+	}
+}
 
 function Test-RemoteFallbackAllowed {
 	param([string]$Name, [string]$Reason)
@@ -843,7 +859,8 @@ function Write-GUIProgress {
 # Режимы merge (один выход), extract (расширение известно только после probe каждого
 # файла) и frame (выход — каталог) сюда не попадают: там формула выхода другая.
 $collision_outputs = @{}
-if ($merge_files -ne "yes" -and $extract_audio_copy -ne "yes" -and $create_frame -ne "yes") {
+# У распознавания своя проверка коллизий (Invoke-AsrFile): выход — .txt.
+if ($merge_files -ne "yes" -and $extract_audio_copy -ne "yes" -and $create_frame -ne "yes" -and $asr_enabled -ne 'yes') {
 	$_cmap = @{}
 	foreach ($_f in $format_files_in_list) {
 		# Формула обязана совпадать с Encode-File, иначе карта врёт.
@@ -1688,8 +1705,29 @@ if ($extract_audio_copy -eq "yes") { $_activeModes += "extract" }
 if ($create_frame -eq "yes")       { $_activeModes += "frame" }
 if ($copy_codecs -eq "yes")        { $_activeModes += "copy" }
 if ($audio_only -eq "yes")         { $_activeModes += "audio" }
-if ($_activeModes.Count -gt 1) {
+if ($_activeModes.Count -gt 1 -and $asr_enabled -ne 'yes') {
 	Log-Msg "WARN" "Включено несколько взаимоисключающих режимов ($($_activeModes -join ' ')). Активен «$($_activeModes[0])» (приоритет merge>extract>frame>copy>audio), остальные проигнорированы."
+}
+
+# --- Распознавание речи: отдельный режим вместо конвертации ---
+$asr_active = 'no'
+if ($asr_enabled -eq 'yes') {
+	if (-not (Get-Command Invoke-AsrPreflight -ErrorAction SilentlyContinue)) {
+		Write-Host "[ОШИБКА] [asr] enabled = yes, но рядом со скриптом нет asr_client.ps1."
+		Write-GUIProgress -FilePercent 100 -CurrentFile "Ошибка" -State "failed" -ExitCode 1 -Message "Нет модуля asr_client.ps1"
+		Pause-Prompt "Нажмите [Enter], чтобы выйти..."
+		exit 1
+	}
+	if ($remote_enabled -eq 'yes') {
+		Log-Msg "INFO" "[remote] в режиме распознавания не используется: конвертации нет"
+		$remote_enabled = 'no'
+	}
+	if (-not (Invoke-AsrPreflight)) {
+		Write-GUIProgress -FilePercent 100 -CurrentFile "Ошибка" -State "failed" -ExitCode 1 -Message $script:AsrPreflightError
+		Pause-Prompt "Нажмите [Enter], чтобы выйти..."
+		exit 1
+	}
+	$asr_active = 'yes'
 }
 
 # --- Удалённый бэкенд: включён ли он для ЭТОГО прогона ---
@@ -1750,7 +1788,9 @@ if ($env:FFCONV_REMOTE_SELFTEST -eq '1') {
 }
 
 # --- Основная логика ---
-if ($merge_files -eq "yes") {
+if ($asr_active -eq 'yes') {
+	Invoke-AsrRun $format_files_in_list
+} elseif ($merge_files -eq "yes") {
 	if (($format_files_in_list | Measure-Object).Count -eq 0) {
 		Log-Msg "WARN" "Нет файлов для объединения в $folder_sources"
 		$script:countSkip++
@@ -1853,6 +1893,10 @@ if (-not $guiProgressFile) {
 	Write-Host ("  Обработано:  {0} файлов" -f $script:countOk)
 	Write-Host ("  Пропущено:   {0} (уже существуют)" -f $script:countSkip)
 	Write-Host ("  Ошибки:      {0}" -f $script:countFail)
+	if ($script:AsrStopReason) {
+		Write-Host ("  Остановлено: {0}" -f $script:AsrStopReason)
+		Write-Host ("  Не обработано: {0}" -f $script:AsrNotProcessed)
+	}
 	if ($script:countLocalFallback -gt 0) {
 		Write-Host ("  Посчитано локально: {0} (служба была недоступна)" -f $script:countLocalFallback)
 	}
@@ -1876,7 +1920,8 @@ if (-not $guiProgressFile) {
 	if ($guiCancelFile -and (Test-Path -LiteralPath $guiCancelFile)) {
 		Write-GUIProgress -FilePercent 100 -CurrentFile "Отменено" -State "cancelled" -ExitCode 1 -Message "Отменено пользователем"
 	} elseif ($script:countFail -gt 0) {
-		Write-GUIProgress -FilePercent 100 -CurrentFile "Ошибки" -State "failed" -ExitCode 1 -Message "Файлов с ошибками: $($script:countFail)"
+		$_failMsg = if ($script:AsrStopReason) { "Остановлено: $($script:AsrStopReason)" } else { "Файлов с ошибками: $($script:countFail)" }
+		Write-GUIProgress -FilePercent 100 -CurrentFile "Ошибки" -State "failed" -ExitCode 1 -Message $_failMsg
 	} else {
 		Write-GUIProgress -FilePercent 100 -CurrentFile "Готово" -State "success" -ExitCode 0
 	}

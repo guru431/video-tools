@@ -149,9 +149,15 @@ asr_curl_args() {
 # Первая звуковая дорожка → FLAC, моно, 16 кГц: кодер встроен в любую сборку
 # ffmpeg, без потерь, час ≈ 65 МБ при пределе сервера 500 МБ. -ss/-t — только при
 # нескольких частях и на входной стороне: перекодирование, смещение точное.
+# Пустая длина ($3) — до конца файла: так извлекается последняя часть, потому что
+# длительность контейнера бывает занижена (VBR-MP3 без TOC, сырой ADTS), и -t
+# молча срезал бы конец записи.
 asr_extract_args() {
 	ASR_FF_ARGS=(-nostdin -v error -y)
-	[ "$4" -gt 1 ] && ASR_FF_ARGS+=(-ss "$2" -t "$3")
+	if [ "$4" -gt 1 ]; then
+		ASR_FF_ARGS+=(-ss "$2")
+		[ -n "$3" ] && ASR_FF_ARGS+=(-t "$3")
+	fi
 	ASR_FF_ARGS+=(-i "$1" -map 0:a:0 -vn -ac 1 -ar 16000 -c:a flac "$5")
 	return 0
 }
@@ -682,7 +688,7 @@ asr_file() {
 	asr_plan_parts "$(( 10#$h * 3600 + 10#$m * 60 + 10#$s + 1 ))"
 	local -a plan pairs=()
 	read -r -a plan <<< "$ASR_PLAN"
-	local n=${#plan[@]} i off len part resp t0 started
+	local n=${#plan[@]} i off len tlen part resp t0 started
 
 	if [ "$dry_run" = "yes" ]; then
 		asr_hms "$ASR_PLAN_LEN"
@@ -690,7 +696,8 @@ asr_file() {
 		for (( i = 0; i < n; i++ )); do
 			off="${plan[i]%%:*}"; len="${plan[i]#*:}"
 			printf -v part 'part_%03d.flac' "$i"; printf -v resp 'resp_%03d.json' "$i"
-			asr_extract_args "$full_path" "$off" "$len" "$n" "$part"
+			tlen="$len"; [ "$i" -eq $(( n - 1 )) ] && tlen=""
+			asr_extract_args "$full_path" "$off" "$tlen" "$n" "$part"
 			echo "[DRY-RUN] $ffmpeg ${ASR_FF_ARGS[*]}"
 			asr_curl_args "$ASR_BASE" "$part" "$resp"
 			echo "[DRY-RUN] curl ${ASR_CURL_ARGS[*]}"
@@ -703,7 +710,8 @@ asr_file() {
 	for (( i = 0; i < n; i++ )); do
 		off="${plan[i]%%:*}"; len="${plan[i]#*:}"
 		printf -v part 'part_%03d.flac' "$i"; printf -v resp 'resp_%03d.json' "$i"
-		asr_extract_args "$full_path" "$off" "$len" "$n" "$ASR_RUN_DIR/$part"
+		tlen="$len"; [ "$i" -eq $(( n - 1 )) ] && tlen=""
+		asr_extract_args "$full_path" "$off" "$tlen" "$n" "$ASR_RUN_DIR/$part"
 		if ! "$ffmpeg" "${ASR_FF_ARGS[@]}" 2>"$ASR_RUN_DIR/ffmpeg.err" || [ ! -s "$ASR_RUN_DIR/$part" ]; then
 			log_msg "FAIL" "$name: не удалось извлечь звук (часть $((i + 1))/$n)"
 			asr_file_cleanup; put_result "fail"

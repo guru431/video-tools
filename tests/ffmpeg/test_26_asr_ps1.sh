@@ -58,6 +58,7 @@ Write-Output ("ARGS_HTTP=" + (J @(Get-AsrCurlArgs 'http://h.example:30000' 'part
 $asr_diarize = 'no'; $asr_num_speakers = '4'
 Write-Output ("ARGS_N=" + (J @(Get-AsrCurlArgs 'http://h.example:30000' 'part_001.flac' 'resp_001.json')))
 Write-Output ("FF=" + (J @(Get-AsrFfArgs '/in/a b.mp4' 1001 999 3 'part_001.flac')))
+Write-Output ("FF_LAST=" + (J @(Get-AsrFfArgs '/in/a.mp3' 2002 '' 3 'part_002.flac')))
 $asr_diarize = 'yes'; $asr_num_speakers = ''; $asr_pinned_pubkey = ''
 
 foreach ($c in '0|200|', '0|400|bad-lang', '0|413|', '0|401|', '0|500|', '0|504|', '90|000|', '28|000|', '26|000|', '7|000|') {
@@ -195,6 +196,7 @@ assert_contains "https с пином" "--max-time|2100|-k|--pinnedpubkey|sha256/
 assert_not_contains "http — без -k" "|-k|" "$(get_field ARGS_HTTP)"
 assert_contains "diarize=false и num_speakers" "-F|diarize=false|-F|num_speakers=4|-o" "$(get_field ARGS_N)"
 assert_eq "извлечение части" "-nostdin|-v|error|-y|-ss|1001|-t|999|-i|/in/a b.mp4|-map|0:a:0|-vn|-ac|1|-ar|16000|-c:a|flac|part_001.flac" "$(get_field FF)"
+assert_eq "последняя часть — без -t" "-nostdin|-v|error|-y|-ss|2002|-i|/in/a.mp3|-map|0:a:0|-vn|-ac|1|-ar|16000|-c:a|flac|part_002.flac" "$(get_field FF_LAST)"
 
 suite "ASR PS1: исходы"
 assert_eq "200" "ok|" "$(get_field CL_0_200)"

@@ -105,6 +105,11 @@ assert_eq "извлечение части" "-nostdin|-v|error|-y|-ss|1001|-t|99
 asr_extract_args "/in/a.mp4" 0 61 1 "part_000.flac"
 _join "${ASR_FF_ARGS[@]}"
 assert_not_contains "целиком — без -ss/-t" "-ss" "$JOINED"
+# Последняя часть — до конца файла, без -t: длительность контейнера бывает занижена
+# (VBR-MP3 без TOC, сырой ADTS), и -t молча срезал бы конец записи.
+asr_extract_args "/in/a.mp3" 2002 "" 3 "part_002.flac"
+_join "${ASR_FF_ARGS[@]}"
+assert_eq "последняя часть — без -t" "-nostdin|-v|error|-y|-ss|2002|-i|/in/a.mp3|-map|0:a:0|-vn|-ac|1|-ar|16000|-c:a|flac|part_002.flac" "$JOINED"
 
 # ══════════════════════════════════════════════════════════════
 suite "исходы: файл провален или прогон остановлен"

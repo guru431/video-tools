@@ -91,10 +91,14 @@ function Get-AsrCurlArgs {
 	return $a
 }
 
+# Пустая длина — до конца файла (последняя часть): см. asr_extract_args в .sh.
 function Get-AsrFfArgs {
-	param([string]$In, [int64]$Offset, [int64]$Length, [int]$Count, [string]$Out)
+	param([string]$In, [int64]$Offset, [string]$Length, [int]$Count, [string]$Out)
 	$a = @('-nostdin', '-v', 'error', '-y')
-	if ($Count -gt 1) { $a += @('-ss', [string]$Offset, '-t', [string]$Length) }
+	if ($Count -gt 1) {
+		$a += @('-ss', [string]$Offset)
+		if ($Length) { $a += @('-t', $Length) }
+	}
 	$a += @('-i', $In, '-map', '0:a:0', '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'flac', $Out)
 	return $a
 }
@@ -506,7 +510,8 @@ function Invoke-AsrFile {
 		for ($i = 0; $i -lt $n; $i++) {
 			$off, $len = $plan.Parts[$i].Split(':')
 			$part = 'part_{0:D3}.flac' -f $i; $resp = 'resp_{0:D3}.json' -f $i
-			Write-Host "[DRY-RUN] $ffmpeg $((Get-AsrFfArgs $File.FullName $off $len $n $part) -join ' ')"
+			$tlen = if ($i -eq $n - 1) { '' } else { $len }
+			Write-Host "[DRY-RUN] $ffmpeg $((Get-AsrFfArgs $File.FullName $off $tlen $n $part) -join ' ')"
 			Write-Host "[DRY-RUN] curl $((Get-AsrCurlArgs $script:AsrBase $part $resp) -join ' ')"
 		}
 		return
@@ -518,7 +523,8 @@ function Invoke-AsrFile {
 		$off, $len = $plan.Parts[$i].Split(':')
 		$part = 'part_{0:D3}.flac' -f $i; $resp = 'resp_{0:D3}.json' -f $i
 		$partPath = Join-Path $script:AsrRunDir $part
-		$ffArgs = @(Get-AsrFfArgs $File.FullName $off $len $n $partPath)
+		$tlen = if ($i -eq $n - 1) { '' } else { $len }
+		$ffArgs = @(Get-AsrFfArgs $File.FullName $off $tlen $n $partPath)
 		& $ffmpeg @ffArgs 2>&1 | Out-Null
 		if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $partPath) -or (Get-FileSize $partPath) -le 0) {
 			Clear-AsrFileTemp; Write-AsrFileFail $name "не удалось извлечь звук (часть $($i + 1)/$n)"; return

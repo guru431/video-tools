@@ -1,0 +1,409 @@
+#!/bin/bash
+# Модуль подключается через `source` из converter-скрипта и работает на его
+# переменных (asr_*, ffmpeg, folder_*, log_msg, put_result…): shellcheck их не
+# видит и объявляет неопределёнными (SC2154) или неиспользуемыми (SC2034).
+# shellcheck disable=SC2034,SC2154
+# ============================================================
+# Распознавание речи (ASR) — клиент сервера WhisperX (Bash)
+#
+# Подключается из FFmpeg_Converter_script.sh. Ничего не запускает сам: только
+# функции, поэтому модуль дот-сорсится в тест без сети и без побочных эффектов.
+# Результаты функций — в глобальных ASR_*, а не в stdout: функция внутри $( )
+# выполнилась бы в подоболочке, и всё, что она выставила, потерялось бы (см.
+# шапку remote_client.sh). Двойник — asr_client.ps1; равенство плана частей,
+# аргументов curl, исходов и текста сверяет test_27_asr_parity.sh.
+#
+# Спека: docs/superpowers/specs/2026-10-02-ffmpeg-asr-design.md
+# ============================================================
+
+# --- Экранирование значения для curl-конфига ---
+# Внутри кавычек curl-конфига экранируются ровно \ и " (curl.1, --config). Проход
+# посимвольный по той же причине, что в remote_escape_dq: подстановка шаблоном
+# ломается на bash 3.2. Своя копия, а не вызов из remote_client.sh: модуль
+# подключается и проверяется без удалённого бэкенда.
+asr_escape_dq() {
+	local s="$1" out='' i c
+	for (( i = 0; i < ${#s}; i++ )); do
+		c=${s:i:1}
+		case $c in
+			'\') out="$out\\\\" ;;
+			'"') out="$out\\\"" ;;
+			*)   out="$out$c" ;;
+		esac
+	done
+	ASR_ESCAPED="$out"
+}
+
+# --- Адреса: список через пробел, без хвостовых слэшей ---
+# У сервера разные адреса из разных сетей; берётся первый ответивший. read -a,
+# а не `for w in $1`: голое раскрытие глоббит `*` и `?` по файлам каталога.
+asr_split_endpoints() {
+	local -a words
+	local u i
+	ASR_ENDPOINTS=()
+	read -r -a words <<< "$1"
+	for (( i = 0; i < ${#words[@]}; i++ )); do
+		u="${words[i]}"
+		while [ -n "$u" ] && [ "${u: -1}" = "/" ]; do u="${u%/}"; done
+		[ -n "$u" ] && ASR_ENDPOINTS+=("$u")
+	done
+	return 0
+}
+
+# --- TLS: -k только вместе с пином ---
+# Сертификат сервера самоподписанный и выписан на другое имя: обычная проверка не
+# пройдёт. Пин проверяет, что на том конце именно наш сервер; -k без пина не
+# ставится никогда — это было бы «доверять кому угодно».
+asr_tls_args() {
+	ASR_TLS_ARGS=()
+	case "$1" in
+		https://*) [ -n "${asr_pinned_pubkey:-}" ] && ASR_TLS_ARGS=(-k --pinnedpubkey "$asr_pinned_pubkey") ;;
+	esac
+	return 0
+}
+
+# --- Поле плоского JSON (ответ /speech/limits) ---
+# Ответ плоский, кроме reject_codes, а имена нужных полей в нём уникальны —
+# поэтому регулярное выражение, а не разбор целиком. Кавычки строки снимаются.
+asr_json_field() {
+	local re='"'"$2"'"[[:space:]]*:[[:space:]]*("[^"]*"|\[[^]]*\]|[^,}[:space:]]+)'
+	ASR_JSON_VAL=""
+	[[ $1 =~ $re ]] || return 1
+	ASR_JSON_VAL="${BASH_REMATCH[1]}"
+	case "$ASR_JSON_VAL" in
+		\"*\") ASR_JSON_VAL="${ASR_JSON_VAL#\"}"; ASR_JSON_VAL="${ASR_JSON_VAL%\"}" ;;
+	esac
+	return 0
+}
+
+# --- Пределы сервера ---
+# Опираемся на живой ответ: при переключении сервера на карту max_seconds и
+# скорость меняются, и зашитые числа завели бы план частей не туда.
+asr_parse_limits() {
+	local v
+	ASR_LIM_MAX_SECONDS=""; ASR_LIM_MAX_BYTES=""; ASR_LIM_JOB_TIMEOUT=""
+	ASR_LIM_DEVICE=""; ASR_LIM_LANGUAGES=""; ASR_LIM_DIARIZATION=""; ASR_LIM_VER=""
+	asr_json_field "$1" max_seconds && ASR_LIM_MAX_SECONDS="${ASR_JSON_VAL%%.*}"
+	asr_json_field "$1" max_bytes && ASR_LIM_MAX_BYTES="${ASR_JSON_VAL%%.*}"
+	asr_json_field "$1" job_timeout_sec && ASR_LIM_JOB_TIMEOUT="${ASR_JSON_VAL%%.*}"
+	asr_json_field "$1" device && ASR_LIM_DEVICE="$ASR_JSON_VAL"
+	asr_json_field "$1" diarization && ASR_LIM_DIARIZATION="$ASR_JSON_VAL"
+	asr_json_field "$1" asr_ver && ASR_LIM_VER="$ASR_JSON_VAL"
+	if asr_json_field "$1" languages; then
+		v="${ASR_JSON_VAL#[}"; v="${v%]}"; v="${v//\"/}"; v="${v//,/ }"
+		read -r -a _asr_langs <<< "$v"
+		ASR_LIM_LANGUAGES="${_asr_langs[*]}"
+	fi
+	case "$ASR_LIM_MAX_SECONDS" in ''|*[!0-9]*) return 1 ;; esac
+	case "$ASR_LIM_JOB_TIMEOUT" in ''|*[!0-9]*) return 1 ;; esac
+	return 0
+}
+
+# --- План частей (спека §6) ---
+# $1 — длительность в целых секундах (уже с запасом вверх). Предел «целиком» W —
+# что сервер успеет за свой job_timeout_sec: на процессоре ~0.5 с на секунду
+# записи (берём 0.6 с запасом), на карте в разы быстрее (0.1). Коэффициенты — в
+# целых: ×10/6 и ×10. Длиннее W — равные части не длиннее W/2: равные, чтобы не
+# было трёхсекундного хвоста, который сервер распознаёт хуже всего.
+asr_plan_parts() {
+	local d="$1" w lim p n l i off len
+	if [ "$ASR_LIM_DEVICE" = "cpu" ]; then lim=$(( ASR_LIM_JOB_TIMEOUT * 10 / 6 )); else lim=$(( ASR_LIM_JOB_TIMEOUT * 10 )); fi
+	w="$ASR_LIM_MAX_SECONDS"
+	[ "$lim" -lt "$w" ] && w="$lim"
+	ASR_PLAN_WHOLE="$w"
+	if [ "$d" -le "$w" ]; then
+		ASR_PLAN="0:$d"; ASR_PLAN_LEN="$d"
+		return 0
+	fi
+	p=$(( w / 2 )); n=$(( (d + p - 1) / p )); l=$(( (d + n - 1) / n ))
+	ASR_PLAN=""; ASR_PLAN_LEN="$l"
+	for (( i = 0; i < n; i++ )); do
+		off=$(( i * l )); len=$(( d - off ))
+		[ "$len" -gt "$l" ] && len="$l"
+		[ "$len" -gt 0 ] || break
+		ASR_PLAN="${ASR_PLAN:+$ASR_PLAN }$off:$len"
+	done
+	return 0
+}
+
+# --- Аргументы запроса распознавания ---
+# Ключа здесь нет: он уходит конфигом на stdin (asr_curl_run). Часть и ответ —
+# ОТНОСИТЕЛЬНЫМИ именами: curl запускается из ASR_RUN_DIR. curl из Git Bash —
+# нативная программа, и путь `file=@/tmp/…` MSYS в Windows-путь не переводит —
+# curl отвечает кодом 26 (проверено 2026-10-02). Порядок аргументов — контракт
+# с Get-AsrCurlArgs в .ps1 (test_27).
+asr_curl_args() {
+	local base="$1" part="$2" out="$3" diar="false"
+	[ "${asr_diarize:-yes}" = "yes" ] && diar="true"
+	ASR_CURL_ARGS=(-sS --connect-timeout 10 --max-time "$(( ASR_LIM_JOB_TIMEOUT + 300 ))")
+	asr_tls_args "$base"
+	[ ${#ASR_TLS_ARGS[@]} -gt 0 ] && ASR_CURL_ARGS+=("${ASR_TLS_ARGS[@]}")
+	ASR_CURL_ARGS+=(-F "file=@${part};type=audio/flac" -F "model=whisperx"
+		-F "language=${asr_language}" -F "diarize=${diar}")
+	[ -n "${asr_num_speakers:-}" ] && ASR_CURL_ARGS+=(-F "num_speakers=${asr_num_speakers}")
+	ASR_CURL_ARGS+=(-o "$out" -w '%{http_code}' "${base}/speech/transcriptions")
+	return 0
+}
+
+# --- Извлечение звука части ---
+# Первая звуковая дорожка → FLAC, моно, 16 кГц: кодер встроен в любую сборку
+# ffmpeg, без потерь, час ≈ 65 МБ при пределе сервера 500 МБ. -ss/-t — только при
+# нескольких частях и на входной стороне: перекодирование, смещение точное.
+asr_extract_args() {
+	ASR_FF_ARGS=(-nostdin -v error -y)
+	[ "$4" -gt 1 ] && ASR_FF_ARGS+=(-ss "$2" -t "$3")
+	ASR_FF_ARGS+=(-i "$1" -map 0:a:0 -vn -ac 1 -ar 16000 -c:a flac "$5")
+	return 0
+}
+
+asr_hms() {
+	local s="${1%%.*}"
+	printf -v ASR_HMS '%02d:%02d:%02d' $(( s / 3600 )) $(( s % 3600 / 60 )) $(( s % 60 ))
+}
+
+# Дата в шапке расшифровки. FFCONV_ASR_NOW подменяет её в тестах: реального
+# времени тесты не читают. printf %(…)T — bash 4.2+, на 3.2 (macOS) — date.
+asr_now() {
+	ASR_NOW="${FFCONV_ASR_NOW:-}"
+	[ -n "$ASR_NOW" ] && return 0
+	printf -v ASR_NOW '%(%Y-%m-%d %H:%M)T' -1 2>/dev/null || ASR_NOW="$(date '+%Y-%m-%d %H:%M')"
+}
+
+# --- Проверка [asr] до первого файла ---
+asr_validate_config() {
+	local bad=0 i
+	asr_split_endpoints "${asr_endpoint:-}"
+	if [ ${#ASR_ENDPOINTS[@]} -eq 0 ]; then
+		echo "[ОШИБКА] [asr] endpoint пуст: задайте адрес сервера распознавания (или \${ASR_URL})." >&2
+		bad=1
+	fi
+	for (( i = 0; i < ${#ASR_ENDPOINTS[@]}; i++ )); do
+		case "${ASR_ENDPOINTS[i]}" in
+			http://?*|https://?*) ;;
+			*) echo "[ОШИБКА] [asr] endpoint: '${ASR_ENDPOINTS[i]}' — адрес должен начинаться с http:// или https://." >&2
+			   bad=1 ;;
+		esac
+	done
+	if [ -z "${asr_language:-}" ]; then
+		echo "[ОШИБКА] [asr] language пуст: укажите язык записи (ru, en)." >&2
+		bad=1
+	fi
+	case "${asr_diarize:-yes}" in
+		yes|no) ;;
+		*) echo "[ОШИБКА] [asr] diarize = '$asr_diarize': ожидается yes или no." >&2; bad=1 ;;
+	esac
+	if [ -n "${asr_num_speakers:-}" ]; then
+		local n_ok=0
+		case "$asr_num_speakers" in
+			*[!0-9]*) ;;
+			*) [ "$(( 10#$asr_num_speakers ))" -ge 1 ] && [ "$(( 10#$asr_num_speakers ))" -le 50 ] && n_ok=1 ;;
+		esac
+		if [ "$n_ok" = "0" ]; then
+			echo "[ОШИБКА] [asr] num_speakers = '$asr_num_speakers': целое от 1 до 50 или пусто." >&2
+			bad=1
+		fi
+	fi
+	return $bad
+}
+
+# --- Ключ из api_key_command (приоритет выше api_key) ---
+# Выполняется один раз за прогон: менеджер паролей может спросить пароль.
+ASR_API_KEY_RESOLVED="no"
+asr_resolve_api_key() {
+	[ -n "${asr_api_key_command:-}" ] || return 0
+	[ "$ASR_API_KEY_RESOLVED" = "yes" ] && return 0
+	local out
+	out="$(eval "$asr_api_key_command" 2>/dev/null)" || {
+		echo "[ОШИБКА] [asr] api_key_command завершилась с ошибкой — ключ не получен." >&2
+		return 1
+	}
+	out="${out%%$'\n'*}"
+	out="${out#"${out%%[![:space:]]*}"}"
+	out="${out%"${out##*[![:space:]]}"}"
+	if [ -z "$out" ]; then
+		echo "[ОШИБКА] [asr] api_key_command ничего не напечатала — ключ не получен." >&2
+		return 1
+	fi
+	asr_api_key="$out"
+	ASR_API_KEY_RESOLVED="yes"
+	return 0
+}
+
+# --- Вызов curl из каталога прогона ---
+# Ключ — конфигом на stdin (`--config -`), а не аргументом: argv процесса читает
+# любой локальный пользователь, а запрос живёт до получаса. Код ответа — из
+# `-w %{http_code}` (тело уходит в файл через -o); "000" — ответа не было.
+asr_curl_run() {
+	local dir="$1" out
+	shift
+	asr_escape_dq "${asr_api_key:-}"
+	out="$(cd "$dir" && printf 'header = "Authorization: Bearer %s"\n' "$ASR_ESCAPED" \
+		| "${CURL_BIN:-curl}" --config - "$@" 2>curl.err)"
+	ASR_CURL_RC=$?
+	ASR_HTTP_CODE="$out"
+	case "$ASR_HTTP_CODE" in ''|*[!0-9]*) ASR_HTTP_CODE="000" ;; esac
+	ASR_CURL_ERR=""
+	[ -s "$dir/curl.err" ] && IFS= read -r ASR_CURL_ERR < "$dir/curl.err"
+	rm -f "$dir/curl.err"
+	return 0
+}
+
+# --- Выбор адреса: первый, ответивший 200 на GET /speech/limits ---
+# 401/403 и чужой сертификат (curl 90) — остановка сразу: ключ общий для всех
+# адресов, а чужой сертификат — повод остановиться, а не искать дальше.
+asr_select_endpoint() {
+	local u tried="" i body hint
+	ASR_BASE=""; ASR_STOP_REASON=""
+	asr_split_endpoints "${asr_endpoint:-}"
+	for (( i = 0; i < ${#ASR_ENDPOINTS[@]}; i++ )); do
+		u="${ASR_ENDPOINTS[i]}"
+		asr_tls_args "$u"
+		rm -f "$ASR_RUN_DIR/limits.json"
+		asr_curl_run "$ASR_RUN_DIR" -sS --connect-timeout 5 --max-time 15 \
+			${ASR_TLS_ARGS[@]+"${ASR_TLS_ARGS[@]}"} -o limits.json -w '%{http_code}' "$u/speech/limits"
+		if [ "$ASR_CURL_RC" = "90" ]; then
+			ASR_STOP_REASON="сертификат $u не совпал с закреплённым ключом [asr] pinned_pubkey (curl 90) — соединение оборвано"
+			return 1
+		fi
+		case "$ASR_HTTP_CODE" in
+			200)
+				body=""
+				[ -f "$ASR_RUN_DIR/limits.json" ] && IFS= read -r -d '' body < "$ASR_RUN_DIR/limits.json"
+				if asr_parse_limits "$body"; then
+					ASR_BASE="$u"
+					return 0
+				fi
+				tried="$tried; $u → 200, но ответ не похож на /speech/limits" ;;
+			401|403)
+				ASR_STOP_REASON="$u: ключ не принят (HTTP $ASR_HTTP_CODE) — проверьте [asr] api_key"
+				return 1 ;;
+			*)
+				if [ "$ASR_CURL_RC" != "0" ]; then
+					hint=""
+					case "$ASR_CURL_RC" in
+						35|60) [ -z "${asr_pinned_pubkey:-}" ] && hint=" — для самоподписанного сертификата задайте [asr] pinned_pubkey" ;;
+					esac
+					tried="$tried; $u → curl $ASR_CURL_RC${ASR_CURL_ERR:+ ($ASR_CURL_ERR)}$hint"
+				else
+					tried="$tried; $u → HTTP $ASR_HTTP_CODE"
+				fi ;;
+		esac
+	done
+	ASR_STOP_REASON="сервер распознавания недоступен: ${tried#; }"
+	return 1
+}
+
+# --- Текст ошибки сервера: {"detail": "..."} — дословно ---
+asr_detail() {
+	local body="" re='"detail"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)"'
+	ASR_DETAIL=""
+	[ -n "${1:-}" ] && [ -s "$1" ] || return 0
+	IFS= read -r -d '' body < "$1"
+	[[ $body =~ $re ]] && ASR_DETAIL="${BASH_REMATCH[1]}"
+	return 0
+}
+
+# --- Исход запроса (спека §5.3) ---
+# file — причина в самом файле (прогон продолжается); stop — причина общая для
+# всех файлов: сервер, сеть, ключ, сертификат (прогон останавливается).
+# Тексты причин — контракт с Get-AsrOutcome в .ps1 (test_27).
+asr_classify() {
+	local rc="$1" code="$2" f="${3:-}" d=""
+	ASR_OUTCOME="stop"; ASR_REASON=""; ASR_DETAIL=""
+	[ "$code" != "200" ] && asr_detail "$f"
+	[ -n "$ASR_DETAIL" ] && d=": $ASR_DETAIL"
+	if [ "$rc" != "0" ]; then
+		case "$rc" in
+			90) ASR_REASON="сертификат сервера не совпал с закреплённым ключом (curl 90)" ;;
+			28) ASR_REASON="истёк таймаут ожидания ответа (curl 28); задача на сервере может ещё выполняться" ;;
+			26) ASR_OUTCOME="file"; ASR_REASON="curl не смог прочитать извлечённый звук (curl 26)" ;;
+			*)  ASR_REASON="сетевая ошибка (curl $rc${ASR_CURL_ERR:+: $ASR_CURL_ERR})" ;;
+		esac
+		return 0
+	fi
+	case "$code" in
+		200) ASR_OUTCOME="ok" ;;
+		400|413|422) ASR_OUTCOME="file"; ASR_REASON="HTTP $code$d" ;;
+		401|403) ASR_REASON="ключ не принят (HTTP $code)$d" ;;
+		503) ASR_REASON="очередь сервера заполнена (HTTP 503) и после повторов$d" ;;
+		504) ASR_REASON="сервер не уложился в свой предел (HTTP 504); задача на сервере продолжает выполняться — повторите позже$d" ;;
+		*) ASR_REASON="HTTP $code$d" ;;
+	esac
+	return 0
+}
+
+# --- Запрос одной части ---
+# Запрос синхронный: соединение молчит до конца распознавания (до получаса) — это
+# норма. 503 (очередь полна) — пауза и повтор; остальное классифицирует
+# asr_classify. 200 без поля segments (страница ошибки прокси) — провал файла, а
+# не пустая расшифровка.
+asr_transcribe_part() {
+	local part="$1" resp="$2" try=1 tries="${ASR_RETRIES:-5}" wait_s="${ASR_RETRY_WAIT:-60}"
+	while :; do
+		rm -f "$ASR_RUN_DIR/$resp"
+		asr_curl_args "$ASR_BASE" "$part" "$resp"
+		asr_curl_run "$ASR_RUN_DIR" "${ASR_CURL_ARGS[@]}"
+		if [ "$ASR_CURL_RC" = "0" ] && [ "$ASR_HTTP_CODE" = "503" ] && [ "$try" -le "$tries" ]; then
+			echo "[ПРЕДУПРЕЖДЕНИЕ] Очередь сервера заполнена (HTTP 503) — повтор через ${wait_s} с (попытка $try из $tries)." >&2
+			sleep "$wait_s"
+			try=$((try + 1))
+			continue
+		fi
+		break
+	done
+	asr_classify "$ASR_CURL_RC" "$ASR_HTTP_CODE" "$ASR_RUN_DIR/$resp"
+	if [ "$ASR_OUTCOME" = "ok" ] && ! grep -q '"segments"' "$ASR_RUN_DIR/$resp" 2>/dev/null; then
+		ASR_OUTCOME="file"; ASR_REASON="сервер ответил 200, но без поля segments"
+	fi
+	return 0
+}
+
+# --- Предпусковая проверка: один раз, ДО первого файла ---
+# Всё, что делает невозможным весь прогон, выясняется здесь: отказать на сотом
+# файле дороже, чем на нулевом. Создаёт ASR_RUN_DIR (его убирает сводка скрипта и
+# trap Ctrl+C) и выбирает адрес.
+asr_preflight() {
+	asr_validate_config || return 1
+	if [ "${ffmpeg_available:-yes}" != "yes" ]; then
+		echo "[ОШИБКА] Распознавание речи требует локального ffmpeg: им извлекается звук ($ffmpeg не найден)." >&2
+		return 1
+	fi
+	if ! command -v "${CURL_BIN:-curl}" >/dev/null 2>&1; then
+		echo "[ОШИБКА] curl не найден — распознавание речи невозможно." >&2
+		return 1
+	fi
+	asr_resolve_api_key || return 1
+	if [ -z "${asr_api_key:-}" ]; then
+		echo "[ОШИБКА] [asr] ключ не задан: api_key, api_key_command или \${ASR_API_KEY}." >&2
+		return 1
+	fi
+	ASR_RUN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ffconv_asr.XXXXXXXX")" || {
+		echo "[ОШИБКА] Не удалось создать временный каталог для распознавания." >&2
+		ASR_RUN_DIR=""
+		return 1
+	}
+	if ! asr_select_endpoint; then
+		echo "[ОШИБКА] $ASR_STOP_REASON" >&2
+		rm -rf "$ASR_RUN_DIR"; ASR_RUN_DIR=""
+		return 1
+	fi
+	if [ -n "$ASR_LIM_LANGUAGES" ]; then
+		case " $ASR_LIM_LANGUAGES " in
+			*" $asr_language "*) ;;
+			*)
+				echo "[ОШИБКА] [asr] language = '$asr_language': сервер его не принимает (доступны: $ASR_LIM_LANGUAGES)." >&2
+				rm -rf "$ASR_RUN_DIR"; ASR_RUN_DIR=""
+				return 1 ;;
+		esac
+	fi
+	case "$ASR_BASE" in
+		http://*) echo "[ПРЕДУПРЕЖДЕНИЕ] $ASR_BASE — открытый http: ключ и звук идут по сети незашифрованными." ;;
+	esac
+	if [ "${asr_diarize:-yes}" = "yes" ] && [ "$ASR_LIM_DIARIZATION" = "false" ]; then
+		echo "[ПРЕДУПРЕЖДЕНИЕ] Сервер сообщает diarization = false: говорящих в расшифровке может не быть."
+	fi
+	ASR_STOP_REASON=""
+	asr_plan_parts 0
+	log_msg "INFO" "Распознавание речи: $ASR_BASE (${ASR_LIM_VER:-?}, ${ASR_LIM_DEVICE:-?}); целиком — до $ASR_PLAN_WHOLE с, длиннее — равными частями"
+	return 0
+}

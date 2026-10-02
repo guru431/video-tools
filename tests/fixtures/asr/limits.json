@@ -1,0 +1,1 @@
+{"max_seconds":3600.0,"max_bytes":524288000,"languages":["en","ru"],"models":["whisperx"],"asr_ver":"large-v3-turbo.cpu.int8.v1","device":"cpu","compute_type":"int8","diarization":true,"job_timeout_sec":1800.0,"max_queue":4,"cuda_broken":false,"reject_codes":{"413":"файл больше max_bytes","503":"очередь заполнена (4)"}}

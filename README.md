@@ -36,7 +36,7 @@ video/
 │   ├── run_tests.sh                     # Точка входа
 │   ├── lib/framework.sh                 # Assert-функции, форматированный вывод
 │   ├── mocks/                           # ffmpeg, ffmpeg.cmd, ffprobe, yt-dlp, curl, vot-cli-live
-│   ├── ffmpeg/test_01..24*.sh           # 24 тест-файла
+│   ├── ffmpeg/test_01..25*.sh           # 25 тест-файлов
 │   ├── yt-dlp/test_01..15*.sh           # 15 тест-файлов
 │   └── common/test_*.sh                 # 11 файлов: кодировки, паритет, guardrail'ы, ссылки в документации, pre-commit, privacy-scan, вырезание комментариев при сборке
 │
@@ -222,12 +222,12 @@ yt-dlp/_VideoDownloader_v19.exe
 ```bash
 bash tests/run_tests.sh --fast    # быстрый уровень (≤60 с): файлы из FAST_LEVEL в раннере
 bash tests/run_tests.sh           # все тесты
-bash tests/run_tests.sh ffmpeg    # ffmpeg (24 файла)
+bash tests/run_tests.sh ffmpeg    # ffmpeg (25 файлов)
 bash tests/run_tests.sh yt-dlp    # yt-dlp (15 файлов)
 bash tests/run_tests.sh common    # кросс-платформенные инварианты (11 файлов)
 ```
 
-### Тест-модули FFmpeg (24 файла)
+### Тест-модули FFmpeg (25 файлов)
 
 | Файл | Что тестирует |
 |------|---------------|
@@ -255,6 +255,7 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 | `test_22_remote_ps1` | Удалённый бэкенд: PS1-модуль клиента, загрузка через подменённый HTTP-слой |
 | `test_23_remote_parity` | Удалённый бэкенд: SH и PS1 собирают побайтово одинаковый JSON |
 | `test_24_gui_worker_runspace` | Воркер запускается ТАК ЖЕ, как из GUI (AddScript-строка): `$PSScriptRoot` пуст, stderr не оседает в `Streams.Error` |
+| `test_25_asr_client` | Распознавание речи: клиент (.sh) — ключи, адреса, пределы, план частей, curl, исходы, сборка текста |
 
 ### Тест-модули YT-DLP (15 файлов)
 

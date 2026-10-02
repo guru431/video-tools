@@ -7,6 +7,11 @@
 # Mock binaries have no extension; force LF so their shebangs work on Linux/WSL/CI
 tests/mocks/* text eol=lf
 
+# Фикстуры сверяются с выводом БАЙТ В БАЙТ (ожидаемые расшифровки ASR — LF):
+# без -text core.autocrlf=true на свежем Windows-клоне превратил бы их в CRLF,
+# и сравнение упало бы при верном коде.
+tests/fixtures/** -text
+
 # CMD batch files обязаны быть CRLF, и это правило стоит ПОСЛЕДНИМ — оно должно
 # перекрывать `tests/mocks/*` выше (тот glob написан для extension-less bash-моков,
 # но захватывал и tests/mocks/ffmpeg.cmd).

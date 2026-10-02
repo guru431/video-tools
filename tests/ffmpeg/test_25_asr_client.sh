@@ -235,5 +235,49 @@ asr_resolve_api_key 2>/dev/null; _rc=$?
 assert_eq "упавшая команда — отказ" "1" "$_rc"
 asr_api_key_command=""
 
+# ══════════════════════════════════════════════════════════════
+suite "сборка текста из ответов (общие фикстуры tests/fixtures/asr)"
+# ══════════════════════════════════════════════════════════════
+# $1 — ожидаемый .txt; дальше — аргументы asr_render (выход — четвёртый из них).
+_render_check() {
+    local want="$FIX/$1"; shift
+    asr_render "$@"; local rc=$?
+    if [ "$rc" -eq 0 ] && cmp -s "$want" "$4"; then pass "$(basename "$want"): байт в байт"
+    else fail "$(basename "$want"): байт в байт" "$(cat "$want")" "$(cat "$4" 2>/dev/null)"; fi
+}
+_render_check basic.txt "meeting.mp4" "2026-10-02 12:00" 480 "$WORK/basic.txt" "$FIX/basic.json" 0
+assert_eq "сводка: говорящие|сомнительные|этапы" "2|1|" "$ASR_R_SPEAKERS|$ASR_R_LOW|$ASR_R_BAD"
+_render_check escapes.txt "escapes.mkv" "2026-10-02 12:00" 76 "$WORK/escapes.txt" "$FIX/escapes.json" 0
+assert_eq "этапы с ошибкой в сводке" "align=unavailable, diarize=failed" "$ASR_R_BAD"
+_render_check chunks.txt "long.mp4" "2026-10-02 12:00" 1001 "$WORK/chunks.txt" "$FIX/basic.json" 0 "$FIX/escapes.json" 1001
+assert_eq "говорящие по частям" "2,1" "$ASR_R_SPEAKERS"
+_render_check empty.txt "silence.wav" "2026-10-02 12:00" 10 "$WORK/empty.txt" "$FIX/empty.json" 0
+
+# Многомегабайтный ответ со словами: разбор обязан быть линейным. В BWK awk
+# (macOS) substr считает длину всей строки на каждом вызове, и посимвольный
+# проход по документу целиком был бы квадратичным.
+{
+    printf '{"asr_ver":"x","segments":['
+    for (( _i = 0; _i < 2000; _i++ )); do
+        [ "$_i" -gt 0 ] && printf ','
+        printf '{"start":%d.5,"end":%d.9,"text":" реплика %d \\"q\\"","speaker":"SPEAKER_0%d","confidence":0.9,"words":[{"word":"реплика","start":%d.5,"end":%d.7,"score":0.8}]}' \
+            "$_i" "$_i" "$_i" $(( _i % 2 )) "$_i" "$_i"
+    done
+    printf '],"stages":{"transcribe":{"status":"ok"}},"warnings":[],"audio_seconds":2000.0,"processing_seconds":1000.0}'
+} > "$WORK/big.json"
+asr_render "big.mp4" "2026-10-02 12:00" 2000 "$WORK/big.txt" "$WORK/big.json" 0
+assert_eq "2000 реплик" "2000" "$(grep -c '^\[' "$WORK/big.txt")"
+assert_eq "последняя реплика цела" '[00:33:19] SPEAKER_01: реплика 1999 "q"' "$(tail -1 "$WORK/big.txt")"
+
+# ══════════════════════════════════════════════════════════════
+suite "JSON результата"
+# ══════════════════════════════════════════════════════════════
+asr_write_json "$WORK/one.json" "$FIX/basic.json" 0
+assert_eq "одна часть — ответ без изменений" "$(cat "$FIX/basic.json")" "$(cat "$WORK/one.json")"
+asr_write_json "$WORK/two.json" "$FIX/basic.json" 0 "$FIX/escapes.json" 1001
+_two="$(cat "$WORK/two.json")"
+assert_contains "обёртка, первая часть" '{"chunks":[{"offset_seconds":0,"response":{' "$_two"
+assert_contains "вторая часть со смещением" '"offset_seconds":1001,"response":{"asr_ver"' "$_two"
+
 rm -rf "$WORK"
 summary

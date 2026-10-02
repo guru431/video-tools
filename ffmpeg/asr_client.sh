@@ -407,3 +407,212 @@ asr_preflight() {
 	log_msg "INFO" "Распознавание речи: $ASR_BASE (${ASR_LIM_VER:-?}, ${ASR_LIM_DEVICE:-?}); целиком — до $ASR_PLAN_WHOLE с, длиннее — равными частями"
 	return 0
 }
+
+# --- Сборка .txt из ответов сервера: один процесс awk на файл ---
+# Ни jq, ни python в Git Bash/macOS не гарантированы. Разбор JSON — с RS = кавычка:
+# документ режется на короткие записи «вне строки / внутри строки», и awk не
+# ходит посимвольно по многомегабайтному тексту (в BWK awk substr считает длину
+# всей строки на каждом вызове — посимвольный проход был бы квадратичным).
+# Кавычка внутри строки экранирована, если перед ней НЕЧЁТНОЕ число обратных
+# слэшей. Хранятся только нужные значения (слова и полный текст пропускаются),
+# строки декодируются целиком: \" \\ \/ \b \f \n \r \t \uXXXX и суррогатные пары.
+# LC_ALL=C: байты UTF-8 проходят насквозь, %c печатает байт. Правила шапки и
+# реплик — спека §9.2; двойник — Write-AsrTranscript в .ps1 (байт в байт, test_27).
+# В программе нет апострофов: она лежит в одинарных кавычках оболочки.
+ASR_AWK_RENDER='
+function hexval(h,   i, v, c) {
+	if (length(h) != 4) return -1
+	v = 0; h = tolower(h)
+	for (i = 1; i <= 4; i++) {
+		c = index("0123456789abcdef", substr(h, i, 1)) - 1
+		if (c < 0) return -1
+		v = v * 16 + c
+	}
+	return v
+}
+function utf8(cp) {
+	if (cp < 128) return sprintf("%c", cp)
+	if (cp < 2048) return sprintf("%c%c", 192 + int(cp / 64), 128 + cp % 64)
+	if (cp < 65536) return sprintf("%c%c%c", 224 + int(cp / 4096), 128 + int(cp / 64) % 64, 128 + cp % 64)
+	return sprintf("%c%c%c%c", 240 + int(cp / 262144), 128 + int(cp / 4096) % 64, 128 + int(cp / 64) % 64, 128 + cp % 64)
+}
+function decode(s,   out, i, c, cp, lo) {
+	if (index(s, "\\") == 0) return s
+	out = ""
+	while ((i = index(s, "\\")) > 0) {
+		out = out substr(s, 1, i - 1)
+		c = substr(s, i + 1, 1)
+		if (c == "u") {
+			cp = hexval(substr(s, i + 2, 4)); s = substr(s, i + 6)
+			if (cp >= 55296 && cp < 56320 && substr(s, 1, 2) == "\\u") {
+				lo = hexval(substr(s, 3, 4))
+				if (lo >= 56320 && lo < 57344) { cp = 65536 + (cp - 55296) * 1024 + (lo - 56320); s = substr(s, 7) }
+			}
+			if (cp > 0) out = out utf8(cp)
+			continue
+		}
+		if (c == "n") out = out "\n"
+		else if (c == "t") out = out "\t"
+		else if (c == "r") out = out "\r"
+		else if (c == "b") out = out "\b"
+		else if (c == "f") out = out "\f"
+		else out = out c
+		s = substr(s, i + 2)
+	}
+	return out s
+}
+function clean(t) { gsub(/[\r\n\t]/, " ", t); sub(/^ +/, "", t); sub(/ +$/, "", t); return t }
+function ts(x,   s) { s = int(x); return sprintf("%02d:%02d:%02d", int(s / 3600), int((s % 3600) / 60), s % 60) }
+function want(path) {
+	return path ~ /^p[0-9]+\.(asr_ver|audio_seconds|processing_seconds)$/ ||
+	       path ~ /^p[0-9]+\.warnings\.[0-9]+$/ ||
+	       path ~ /^p[0-9]+\.stages\.[^.]+\.status$/ ||
+	       path ~ /^p[0-9]+\.segments\.[0-9]+\.(start|text|speaker|confidence)$/
+}
+function curpath() {
+	if (d == 0) return "p" part
+	return (TY[d] == "o") ? PP[d] "." KEY[d] : PP[d] "." IX[d]
+}
+function setval(raw, isstr,   path, a) {
+	path = curpath()
+	if (!want(path)) return
+	if (!isstr && raw == "null") return
+	V[path] = isstr ? decode(raw) : raw
+	split(path, a, ".")
+	if (a[2] == "segments" && a[3] + 1 > NSEG[part]) NSEG[part] = a[3] + 1
+	if (a[2] == "warnings" && a[3] + 1 > NW[part]) NW[part] = a[3] + 1
+}
+function flushlit() { if (lit != "") { setval(lit, 0); lit = "" } }
+function opencont(t,   path) {
+	path = curpath()
+	d++; TY[d] = t; PP[d] = path; KEY[d] = ""; IX[d] = 0
+	expect = (t == "o") ? "k" : "v"
+}
+function outside(s,   i, n, c) {
+	n = length(s)
+	for (i = 1; i <= n; i++) {
+		c = substr(s, i, 1)
+		if (c == "{") opencont("o")
+		else if (c == "[") opencont("a")
+		else if (c == "}" || c == "]") { flushlit(); d--; expect = "n" }
+		else if (c == ":") expect = "v"
+		else if (c == ",") { flushlit(); if (TY[d] == "a") IX[d]++; expect = (TY[d] == "o") ? "k" : "v" }
+		else if (c == " " || c == "\n" || c == "\r" || c == "\t") flushlit()
+		else lit = lit c
+	}
+}
+function onstring(raw) {
+	if (expect == "k") {
+		KEY[d] = raw
+		if (PP[d] ~ /^p[0-9]+\.stages$/) SK[part, ++NSK[part]] = raw
+		expect = "c"
+	} else { setval(raw, 1); expect = "n" }
+}
+BEGIN {
+	RS = "\""
+	part = 0
+	split(ENVIRON["ASR_R_OFFS"], OFF, " ")
+	out = ENVIRON["ASR_R_OUT"]
+	lowthr = 0.6
+}
+FNR == 1 { part++; d = 0; ins = 0; sbuf = ""; lit = ""; expect = "v"; NSEG[part] = 0; NW[part] = 0; NSK[part] = 0 }
+{
+	if (!ins) { outside($0); ins = 1; next }
+	n = length($0); k = 0
+	while (k < n && substr($0, n - k, 1) == "\\") k++
+	if (k % 2 == 1) { sbuf = sbuf $0 "\""; next }
+	onstring(sbuf $0); sbuf = ""; ins = 0
+}
+END {
+	aud = 0; audok = 1; prc = 0; prcok = 1; ver = ""; bad = ""; nwarn = 0
+	nrep = 0; low = 0; nlow = 0; lowlist = ""; spk = ""; spkh = ""
+	for (p = 1; p <= part; p++) {
+		pre = "p" p "."
+		off = OFF[p] + 0
+		tag = (part > 1) ? "ч." p ": " : ""
+		if ((pre "audio_seconds") in V) aud += V[pre "audio_seconds"]; else audok = 0
+		if ((pre "processing_seconds") in V) prc += V[pre "processing_seconds"]; else prcok = 0
+		if (ver == "" && (pre "asr_ver") in V) ver = V[pre "asr_ver"]
+		for (j = 1; j <= NSK[p]; j++) {
+			sk = SK[p, j]
+			sst = ((pre "stages." sk ".status") in V) ? V[pre "stages." sk ".status"] : "?"
+			if (sst != "ok") bad = bad (bad == "" ? "" : ", ") tag sk "=" sst
+		}
+		for (j = 0; j < NW[p]; j++)
+			if ((pre "warnings." j) in V) WARN[++nwarn] = tag clean(V[pre "warnings." j])
+		ns = 0; cur = ""; rb = ""; t0 = 0
+		for (i = 0; i < NSEG[p]; i++) {
+			sb = pre "segments." i "."
+			if (!((sb "text") in V)) continue
+			t = clean(V[sb "text"])
+			if (t == "") continue
+			sp = ((sb "speaker") in V && V[sb "speaker"] != "") ? V[sb "speaker"] : "SPEAKER_?"
+			if (sp != "SPEAKER_?" && !((p, sp) in SEEN)) { SEEN[p, sp] = 1; ns++ }
+			st = (((sb "start") in V) ? V[sb "start"] + 0 : 0) + off
+			if ((sb "confidence") in V && V[sb "confidence"] + 0 < lowthr) {
+				low++
+				if (nlow < 3) { lowlist = lowlist (nlow ? ", " : "") ts(st); nlow++ }
+			}
+			if (rb != "" && sp != cur) { REP[++nrep] = "[" ts(t0) "] " cur ": " rb; rb = "" }
+			if (rb == "") { cur = sp; t0 = st; rb = t } else rb = rb " " t
+		}
+		if (rb != "") REP[++nrep] = "[" ts(t0) "] " cur ": " rb
+		spk = spk (p > 1 ? "," : "") ns
+		spkh = spkh (p > 1 ? ", " : "") ns
+	}
+	print "# Расшифровка: " ENVIRON["ASR_R_SRC"] > out
+	print "# Дата: " ENVIRON["ASR_R_DATE"] > out
+	print "# Модель: " (ver == "" ? "?" : ver) > out
+	print "# Длительность записи: " (audok ? ts(aud) : "?") ", обработка: " (prcok ? ts(prc) : "?") > out
+	if (part == 1) print "# Говорящих: " spkh > out
+	else {
+		print "# Говорящих по частям: " spkh > out
+		print "# Частей: " part " по ≈" ts(ENVIRON["ASR_R_PLEN"] + 0) " — метки говорящих в разных частях независимы" > out
+	}
+	print "# Сомнительных сегментов (confidence < 0.6): " low (low > 0 ? "; первые: " lowlist : "") > out
+	if (bad != "") print "# Этапы с ошибкой: " bad > out
+	for (j = 1; j <= nwarn; j++) print "# Предупреждение: " WARN[j] > out
+	print "" > out
+	for (j = 1; j <= nrep; j++) print REP[j] > out
+	close(out)
+	print "speakers=" spk " low=" low " bad=" bad
+}
+'
+
+# $1 — имя входа, $2 — дата, $3 — длина части (для шапки), $4 — выход;
+# дальше пары «файл ответа, смещение». Сводка — в ASR_R_SPEAKERS/LOW/BAD.
+# Значения уходят в awk через ENVIRON, а не -v: -v раскрывает в них \-escape'ы.
+asr_render() {
+	local src="$1" date="$2" plen="$3" out="$4" offs="" summary
+	local -a files=()
+	shift 4
+	while [ $# -ge 2 ]; do files+=("$1"); offs="${offs:+$offs }$2"; shift 2; done
+	rm -f "$out"
+	summary="$(ASR_R_SRC="$src" ASR_R_DATE="$date" ASR_R_OUT="$out" ASR_R_OFFS="$offs" ASR_R_PLEN="$plen" \
+		LC_ALL=C awk "$ASR_AWK_RENDER" "${files[@]}")" || return 1
+	ASR_R_SPEAKERS="${summary#speakers=}"; ASR_R_SPEAKERS="${ASR_R_SPEAKERS%% low=*}"
+	ASR_R_LOW="${summary#* low=}"; ASR_R_LOW="${ASR_R_LOW%% bad=*}"
+	ASR_R_BAD="${summary#* bad=}"
+	[ -s "$out" ]
+}
+
+# --- .asr.json: ответ как есть или обёртка частей без пересборки ---
+# $1 — выход; дальше пары «файл ответа, смещение». Время внутри response — от
+# начала своей части; смещение указано явно (спека §9.1).
+asr_write_json() {
+	local out="$1" first=1
+	shift
+	if [ $# -eq 2 ]; then cp -f "$1" "$out"; return $?; fi
+	{
+		printf '{"chunks":['
+		while [ $# -ge 2 ]; do
+			[ "$first" = 1 ] || printf ','
+			first=0
+			printf '{"offset_seconds":%s,"response":' "$2"
+			cat "$1"
+			printf '}'
+			shift 2
+		done
+		printf ']}\n'
+	} > "$out"
+}

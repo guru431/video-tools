@@ -38,9 +38,10 @@ assert_contains "Remove-PsComments объявлен один раз в обще�
 # Считаем ВЫЗОВЫ, а не упоминания: имя функции встречается и в поясняющем
 # комментарии рядом, и `grep -c` по голому имени зеленел бы от него одного.
 ff_calls=$(printf '%s\n' "$FF_BUILD" | grep -cF 'Remove-PsComments ([System.IO.File]::ReadAllText')
-assert_eq "ffmpeg: вырезание применено к трём исходникам" "3" "$ff_calls"
+assert_eq "ffmpeg: вырезание применено к четырём исходникам" "4" "$ff_calls"
 assert_contains "ffmpeg: встраиваемый script.ps1 без комментариев" 'Remove-PsComments ([System.IO.File]::ReadAllText($scriptPs1' "$FF_BUILD"
 assert_contains "ffmpeg: встраиваемый remote_client.ps1 без комментариев" 'Remove-PsComments ([System.IO.File]::ReadAllText($remotePs1' "$FF_BUILD"
+assert_contains "ffmpeg: встраиваемый asr_client.ps1 без комментариев" 'Remove-PsComments ([System.IO.File]::ReadAllText($asrPs1' "$FF_BUILD"
 assert_contains "ffmpeg: сам GUI без комментариев" 'Remove-PsComments ([System.IO.File]::ReadAllText($src' "$FF_BUILD"
 # У загрузчика ps2exe читает файл с диска, поэтому копия обязана быть временной,
 # а не правкой исходника на месте.
@@ -82,6 +83,7 @@ $files = @(
     'ffmpeg/FFmpeg_Converter_run_win_v19.ps1',
     'ffmpeg/FFmpeg_Converter_script.ps1',
     'ffmpeg/remote_client.ps1',
+    'ffmpeg/asr_client.ps1',
     'yt-dlp/Downloading_from_YouTube_v19.ps1'
 )
 foreach ($f in $files) {
@@ -145,6 +147,7 @@ suite "Remove-PsComments: на настоящих исходниках"
 for f in ffmpeg_FFmpeg_Converter_run_win_v19_ps1 \
          ffmpeg_FFmpeg_Converter_script_ps1 \
          ffmpeg_remote_client_ps1 \
+         ffmpeg_asr_client_ps1 \
          yt_dlp_Downloading_from_YouTube_v19_ps1; do
     before=$(get_field "before_$f")
     # Файл без единого комментария означал бы, что мы тестируем не то.

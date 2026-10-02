@@ -102,7 +102,7 @@ if (Test-Path -LiteralPath $configFile) {
             # Подстановка ${ENV_VAR} из окружения (паритет с yt-dlp/CLI). Не задана → пусто + WARN.
             # Кроме секции [remote]: там TRANSCODE_URL/TRANSCODE_API_KEY не заданы у всех,
             # кто удалённым бэкендом не пользуется, и WARN сыпался бы при каждом старте GUI.
-            $val = Expand-ConfigEnv $val ($curSection -eq 'remote')
+            $val = Expand-ConfigEnv $val ($curSection -eq 'remote' -or $curSection -eq 'asr')
             # ContainsKey-guard = ПЕРВОЕ вхождение ключа. Раньше здесь побеждало
             # ПОСЛЕДНЕЕ, а CLI-PS1 и .sh брали первое: один config.ini с дублем
             # `codec` давал libx264 из CLI и libx265 из GUI — молча.
@@ -195,6 +195,17 @@ $_cfg_remote_stall = Read-Config "stall_timeout" "remote" "900"
 # галочке, которую поставили один раз и забыли. Читаем и передаём как есть.
 $_cfg_remote_keycmd = Read-Config "api_key_command" "remote" ""
 $_cfg_remote_onfail = Read-Config "on_failure" "remote" "abort"
+# Распознавание речи. Адрес и ключ — в полях формы (начальные значения отсюда);
+# api_key_command и pinned_pubkey полей не имеют: команда может спрашивать пароль,
+# а пин — свойство сервера, а не запуска. Читаем и передаём как есть.
+$_cfg_asr_on      = Read-Config "enabled" "asr" "no"
+$_cfg_asr_ep      = Read-Config "endpoint" "asr" ""
+$_cfg_asr_key     = Read-Config "api_key" "asr" ""
+$_cfg_asr_keycmd  = Read-Config "api_key_command" "asr" ""
+$_cfg_asr_pin     = Read-Config "pinned_pubkey" "asr" ""
+$_cfg_asr_lang    = Read-Config "language" "asr" "ru"
+$_cfg_asr_diarize = Read-Config "diarize" "asr" "yes"
+$_cfg_asr_spk     = Read-Config "num_speakers" "asr" ""
 $_cfg_formats      = Read-Config "format_files_in"    "other" "3gp,avi,flv,mp4,mpg,mpeg,wmv,mov,asf,mkv,m4v,webm,mts,vob,m4b,mp3,wma,ogg,m4a,aac"
 $_cfg_sub_style    = Read-Config "subtitles_style"    "other" "FontName=Arial,FontSize=24,PrimaryColour=&HFFFFFF&"
 $_cfg_dry_run      = Read-Config "dry_run"            "other" "no"
@@ -209,7 +220,7 @@ if (-not [System.IO.Path]::IsPathRooted($_cfg_log_file)) { $_cfg_log_file = Join
 # Main Form
 $form = [System.Windows.Forms.Form]::new()
 $form.Text = "Video Converter (ffmpeg) v19"
-$form.Size = [System.Drawing.Size]::new(820, 946)
+$form.Size = [System.Drawing.Size]::new(820, 1022)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
@@ -226,7 +237,7 @@ $_mc = [System.Collections.Generic.List[System.Windows.Forms.Control]]::new()
 # Main container
 $mainContainer = [System.Windows.Forms.Panel]::new()
 $mainContainer.Location = [System.Drawing.Point]::new(10, 36)
-$mainContainer.Size = [System.Drawing.Size]::new(790, 871)
+$mainContainer.Size = [System.Drawing.Size]::new(790, 947)
 $mainContainer.AutoScroll = $true
 $mainContainer.Anchor = [System.Windows.Forms.AnchorStyles]'Top,Bottom,Left,Right'
 $_fc.Add($mainContainer)
@@ -1213,8 +1224,84 @@ $grpRemote.Font = [System.Drawing.Font]::new($_regFont, [System.Drawing.FontStyl
 foreach ($c in $grpRemote.Controls) { $c.Font = $_regFont }
 $_mc.Add($grpRemote)
 
-# ========== Other Settings (collapsible) ==========
+# ========== Распознавание речи (ASR) ==========
+# Отдельный режим: файлы источника не перекодируются, а расшифровываются на
+# сервере распознавания. Как и группа сервера конвертации — в основных
+# настройках: адрес и ключ видны до запуска. Правка полей действует на текущий
+# запуск — config.ini GUI не переписывает. Всё ниже сдвинуто на высоту группы.
 $yPos = 626
+$grpAsr = [System.Windows.Forms.GroupBox]::new()
+$grpAsr.Location = [System.Drawing.Point]::new($xPos0, $yPos)
+$grpAsr.Size = [System.Drawing.Size]::new(770, 72)
+$grpAsr.Text = "Распознавание речи (ASR)"
+
+$chkAsr = [System.Windows.Forms.CheckBox]::new()
+$chkAsr.Location = [System.Drawing.Point]::new(8, 18)
+$chkAsr.Size = [System.Drawing.Size]::new(262, 18)
+$chkAsr.Text = "Расшифровать вместо конвертации"
+$chkAsr.Checked = ($_cfg_asr_on -eq "yes")
+
+$lblAsrLang = [System.Windows.Forms.Label]::new()
+$lblAsrLang.Location = [System.Drawing.Point]::new(280, 20)
+$lblAsrLang.Size = [System.Drawing.Size]::new(40, 16)
+$lblAsrLang.Text = "Язык:"
+
+$cmbAsrLang = [System.Windows.Forms.ComboBox]::new()
+$cmbAsrLang.Location = [System.Drawing.Point]::new(322, 17)
+$cmbAsrLang.Size = [System.Drawing.Size]::new(56, 20)
+$cmbAsrLang.DropDownStyle = 'DropDownList'
+[void]$cmbAsrLang.Items.AddRange(@("ru", "en"))
+if ($_cfg_asr_lang -and -not $cmbAsrLang.Items.Contains($_cfg_asr_lang)) { [void]$cmbAsrLang.Items.Add($_cfg_asr_lang) }
+$cmbAsrLang.SelectedItem = $_cfg_asr_lang
+if ($null -eq $cmbAsrLang.SelectedItem) { $cmbAsrLang.SelectedIndex = 0 }
+
+$chkAsrDiarize = [System.Windows.Forms.CheckBox]::new()
+$chkAsrDiarize.Location = [System.Drawing.Point]::new(392, 18)
+$chkAsrDiarize.Size = [System.Drawing.Size]::new(150, 18)
+$chkAsrDiarize.Text = "Размечать говорящих"
+$chkAsrDiarize.Checked = ($_cfg_asr_diarize -ne "no")
+
+$lblAsrSpeakers = [System.Windows.Forms.Label]::new()
+$lblAsrSpeakers.Location = [System.Drawing.Point]::new(548, 20)
+$lblAsrSpeakers.Size = [System.Drawing.Size]::new(114, 16)
+$lblAsrSpeakers.Text = "Сколько говорящих:"
+
+$txtAsrSpeakers = [System.Windows.Forms.TextBox]::new()
+$txtAsrSpeakers.Location = [System.Drawing.Point]::new(664, 17)
+$txtAsrSpeakers.Size = [System.Drawing.Size]::new(40, 20)
+$txtAsrSpeakers.Text = $_cfg_asr_spk
+
+$lblAsrEndpoint = [System.Windows.Forms.Label]::new()
+$lblAsrEndpoint.Location = [System.Drawing.Point]::new(8, 47)
+$lblAsrEndpoint.Size = [System.Drawing.Size]::new(52, 16)
+$lblAsrEndpoint.Text = "Адрес:"
+
+$txtAsrEndpoint = [System.Windows.Forms.TextBox]::new()
+$txtAsrEndpoint.Location = [System.Drawing.Point]::new(62, 44)
+$txtAsrEndpoint.Size = [System.Drawing.Size]::new(400, 20)
+$txtAsrEndpoint.Text = $_cfg_asr_ep
+
+$lblAsrApiKey = [System.Windows.Forms.Label]::new()
+$lblAsrApiKey.Location = [System.Drawing.Point]::new(470, 47)
+$lblAsrApiKey.Size = [System.Drawing.Size]::new(44, 16)
+$lblAsrApiKey.Text = "Ключ:"
+
+$txtAsrApiKey = [System.Windows.Forms.TextBox]::new()
+$txtAsrApiKey.Location = [System.Drawing.Point]::new(518, 44)
+$txtAsrApiKey.Size = [System.Drawing.Size]::new(200, 20)
+# Ключ не должен читаться с экрана через плечо и на скриншотах.
+$txtAsrApiKey.UseSystemPasswordChar = $true
+$txtAsrApiKey.Text = $_cfg_asr_key
+
+$grpAsr.Controls.AddRange(@($chkAsr, $lblAsrLang, $cmbAsrLang, $chkAsrDiarize, $lblAsrSpeakers, $txtAsrSpeakers,
+	$lblAsrEndpoint, $txtAsrEndpoint, $lblAsrApiKey, $txtAsrApiKey))
+$_regFont = $grpAsr.Font
+$grpAsr.Font = [System.Drawing.Font]::new($_regFont, [System.Drawing.FontStyle]::Bold)
+foreach ($c in $grpAsr.Controls) { $c.Font = $_regFont }
+$_mc.Add($grpAsr)
+
+# ========== Other Settings (collapsible) ==========
+$yPos = 702
 $groupOther = [System.Windows.Forms.GroupBox]::new()
 $groupOther.Location = [System.Drawing.Point]::new($xPos0, $yPos)
 $groupOther.Size = [System.Drawing.Size]::new(770, 18)
@@ -1301,7 +1388,7 @@ $_mc.Add($groupOther)
 
 # ========== Buttons Row ==========
 # Centered: Run(260) + gap(12) + Stop(170) = 442 total in 770px → left = (770-442)/2 = 164 → absolute x = xPos0+164 = 174
-$yPos = 648
+$yPos = 724
 
 $buttonRun = [System.Windows.Forms.Button]::new()
 $buttonRun.Location = [System.Drawing.Point]::new(174, $yPos)
@@ -1375,6 +1462,18 @@ $buttonDoctor.Add_Click({
         else { $lines += "Ключ:    НЕ ЗАДАН — служба откажет на первом запросе." }
     }
 
+    if ($chkAsr.Checked) {
+        $curl = $null
+        try { $curl = (Get-Command curl.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source } catch {}
+        if ($curl) { $lines += "curl:    есть — $curl" }
+        else       { $lines += "curl:    НЕТ — распознавание речи не работает вовсе." }
+        $aep = $txtAsrEndpoint.Text.Trim()
+        if ($aep) { $lines += "ASR:     $aep" }
+        else      { $lines += "ASR:     адрес НЕ ЗАДАН — заполните поле адреса сервера распознавания." }
+        if ($txtAsrApiKey.Text.Trim() -or $_cfg_asr_keycmd) { $lines += "Ключ ASR: задан (значение не показываем)" }
+        else { $lines += "Ключ ASR: НЕ ЗАДАН — сервер откажет на первом запросе." }
+    }
+
     $lines += ""
     $src = $textInputFolder.Text
     $lines += "Источник:   $src$(if (-not (Test-Path -LiteralPath $src)) { '   ← каталога НЕТ' })"
@@ -1385,7 +1484,7 @@ $buttonDoctor.Add_Click({
 $_mc.Add($buttonDoctor)
 
 # ========== Progress Section ==========
-$yPos = 682
+$yPos = 758
 $groupProgress = [System.Windows.Forms.GroupBox]::new()
 $groupProgress.Location = [System.Drawing.Point]::new($xPos0, $yPos)
 $groupProgress.Size = [System.Drawing.Size]::new(770, 168)
@@ -1561,6 +1660,7 @@ $buttonRun.Add_Click({
     elseif ($checkVideoResolution.Checked -and $comboVideoResolution.Text -notmatch '^\d+x\d+$') { $numErr = "Разрешение задаётся как ШИРИНАxВЫСОТА без пробелов (например 1280x720)" }
     elseif ($checkMultithreads.Checked    -and $textThreads.Text          -notmatch '^\d+$')     { $numErr = "Потоки ffmpeg должны быть целым числом" }
     elseif ($chkRemote.Checked            -and $txtRemoteWait.Text        -notmatch '^\d+$')     { $numErr = "«Ждать карту, сек» должно быть целым числом секунд" }
+    elseif ($chkAsr.Checked -and $txtAsrSpeakers.Text.Trim() -and (($txtAsrSpeakers.Text.Trim() -notmatch '^[0-9]+$') -or ([int64]$txtAsrSpeakers.Text.Trim() -lt 1) -or ([int64]$txtAsrSpeakers.Text.Trim() -gt 50))) { $numErr = "«Сколько говорящих» — целое число от 1 до 50 или пусто (сервер определит сам)" }
     if ($numErr) {
         [System.Windows.Forms.MessageBox]::Show($numErr, "Проверка настроек", "OK", "Warning") | Out-Null
         return
@@ -1582,7 +1682,7 @@ $buttonRun.Add_Click({
     if ($checkCreateFrames.Checked)     { $_modes += "извлечение кадров" }
     if ($checkCopyCodecs.Checked)       { $_modes += "копирование кодеков" }
     if ($checkSaveAudio.Checked)        { $_modes += "только аудио" }
-    if ($_modes.Count -gt 1) {
+    if ($_modes.Count -gt 1 -and -not $chkAsr.Checked) {
         # Порядок $_modes уже соответствует приоритету merge>extract>frame>copy>audio.
         $_msg = "Включено несколько взаимоисключающих режимов:`n`n  - " + ($_modes -join "`n  - ") +
                 "`n`nБудет применён только «$($_modes[0])», остальные проигнорированы.`n`nПродолжить?"
@@ -1594,7 +1694,7 @@ $buttonRun.Add_Click({
     # Рантайм-защита в script.ps1 уже откатывается на CPU, но пользователь GUI узнавал
     # об этом только из лога после старта — то есть выбрав GPU, тихо получал софтверное
     # кодирование. Резолвинг кандидата обязан повторять логику script.ps1.
-    if ($hwIndex -gt 0) {
+    if ($hwIndex -gt 0 -and -not $chkAsr.Checked) {
         $_hwSuffix = if ($hwIndex -eq 1) { "_nvenc" } else { "_qsv" }
         $_hwLabel  = if ($hwIndex -eq 1) { "NVENC" }  else { "QSV" }
         $_swCodec  = $comboVideoCodec.Text
@@ -1677,6 +1777,16 @@ $buttonRun.Add_Click({
     $script:remote_stall_timeout   = $_cfg_remote_stall
     $script:remote_on_failure      = $_cfg_remote_onfail
 
+    # ---- Распознавание речи ----
+    $script:asr_enabled         = if ($chkAsr.Checked) { "yes" } else { "no" }
+    $script:asr_endpoint        = $txtAsrEndpoint.Text.Trim()
+    $script:asr_api_key         = $txtAsrApiKey.Text.Trim()
+    $script:asr_api_key_command = $_cfg_asr_keycmd
+    $script:asr_pinned_pubkey   = $_cfg_asr_pin
+    $script:asr_language        = [string]$cmbAsrLang.SelectedItem
+    $script:asr_diarize         = if ($chkAsrDiarize.Checked) { "yes" } else { "no" }
+    $script:asr_num_speakers    = $txtAsrSpeakers.Text.Trim()
+
     # Собираем все переменные для передачи в runspace
     $varsToPass = @{}
     foreach ($varName in @(
@@ -1691,7 +1801,8 @@ $buttonRun.Add_Click({
         'ffmpeg','save_old_extension','format_files_in','subtitles_style',
         'dry_run','enable_log','log_file',
         'remote_enabled','remote_endpoint','remote_api_key','remote_api_key_command',
-        'remote_prefer','remote_wait_timeout','remote_stall_timeout','remote_on_failure'
+        'remote_prefer','remote_wait_timeout','remote_stall_timeout','remote_on_failure',
+        'asr_enabled','asr_endpoint','asr_api_key','asr_api_key_command','asr_pinned_pubkey','asr_language','asr_diarize','asr_num_speakers'
     )) {
         $v = Get-Variable -Name $varName -Scope Script -ErrorAction SilentlyContinue
         $varsToPass[$varName] = if ($v) { $v.Value } else { $null }

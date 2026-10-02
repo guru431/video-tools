@@ -169,4 +169,14 @@ for _v in remote_enabled remote_endpoint remote_api_key remote_prefer remote_wai
     assert_contains "$_v уезжает в runspace" "'$_v'" "$gui_text"
 done
 
+suite "GUI: группа «Распознавание речи (ASR)»"
+assert_contains "галка режима"                'chkAsr'               "$gui_text"
+assert_contains "группа — верхнего уровня"    '$_mc.Add($grpAsr)'    "$gui_text"
+assert_contains "поле адреса"                 'txtAsrEndpoint'       "$gui_text"
+assert_contains "ключ на экране замаскирован" 'txtAsrApiKey.UseSystemPasswordChar = $true' "$gui_text"
+assert_contains "незаданная \${VAR} в [asr] без WARN" "(\$curSection -eq 'remote' -or \$curSection -eq 'asr')" "$gui_text"
+for _v in asr_enabled asr_endpoint asr_api_key asr_api_key_command asr_pinned_pubkey asr_language asr_diarize asr_num_speakers; do
+    assert_contains "$_v уезжает в runspace" "'$_v'" "$gui_text"
+done
+
 summary

@@ -24,6 +24,15 @@ if (Test-Path -LiteralPath $remotePs1) {
     $scriptContent = $remoteContent + "`n" + $scriptContent
 }
 
+# Модуль распознавания речи — по той же причине и тем же способом: script.ps1
+# подключает его только при отсутствии функции Invoke-AsrRun.
+$asrPs1 = Join-Path $PSScriptRoot 'asr_client.ps1'
+if (Test-Path -LiteralPath $asrPs1) {
+    Write-Host 'Embedding asr_client.ps1...'
+    $asrContent = Remove-PsComments ([System.IO.File]::ReadAllText($asrPs1, [System.Text.Encoding]::UTF8))
+    $scriptContent = $asrContent + "`n" + $scriptContent
+}
+
 # Встраиваемый текст живёт внутри here-string @'…'@. Строка, начинающаяся с '@ (после
 # необязательных пробелов), закрыла бы её досрочно: EXE собрался бы, CI smoke-build
 # остался бы зелёным, а при запуске пользователь получил бы parse error. Проверяем до
@@ -43,7 +52,7 @@ $scriptContent
 # === END EMBEDDED SCRIPT ===
 "@
 
-# Комментарии снимаются со ВСЕХ трёх исходников этого EXE: и со встраиваемых, и с
+# Комментарии снимаются со ВСЕХ четырёх исходников этого EXE: и со встраиваемых, и с
 # самого GUI. Текст комментариев входит в сумму признаков, по которой антивирус
 # выносит вердикт — измерено в этом репозитории (docs/knowledge-base.md), см.
 # Remove-PsComments в tools/_build_common.ps1. В репозитории врезки остаются.

@@ -624,6 +624,7 @@ if [ -f "$CHK" ]; then
     assert_contains "зависимость: GUI ffmpeg"       "ffmpeg/FFmpeg_Converter_run_win_v19.ps1" "$chk"
     assert_contains "зависимость: воркер ffmpeg"    "ffmpeg/FFmpeg_Converter_script.ps1"      "$chk"
     assert_contains "зависимость: клиент remote"    "ffmpeg/remote_client.ps1"                "$chk"
+    assert_contains "зависимость: клиент asr"       "ffmpeg/asr_client.ps1"                   "$chk"
     assert_contains "зависимость: GUI yt-dlp"       "yt-dlp/Downloading_from_YouTube_v19.ps1" "$chk"
 else
     fail "check_release.ps1 на месте" "$CHK" "не найден"
@@ -722,7 +723,7 @@ suite "PS1-воркер ffmpeg: без \$PSScriptRoot (GUI подаёт скри
 # «Cannot bind argument to parameter 'Path'», top-level trap делал break, и воркер
 # умирал до первого файла — во всех режимах, и в .ps1-GUI, и в собранном EXE.
 # Каталог приложения приходит отдельной переменной $guiAppDir.
-for _w in "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1" "$PROJECT_DIR/ffmpeg/remote_client.ps1"; do
+for _w in "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1" "$PROJECT_DIR/ffmpeg/remote_client.ps1" "$PROJECT_DIR/ffmpeg/asr_client.ps1"; do
     _wn="$(basename "$_w")"
     _whits="$(grep -vE '^[[:space:]]*#' "$_w" | grep -nF '$PSScriptRoot' | grep -v 'guiAppDir' || true)"
     assert_empty "$_wn: \$PSScriptRoot не используется в одиночку" "$_whits"

@@ -29,7 +29,8 @@ $exeDeps = @{
     'ffmpeg/_VideoConverter_v19.exe'  = @(
         'ffmpeg/FFmpeg_Converter_run_win_v19.ps1',
         'ffmpeg/FFmpeg_Converter_script.ps1',
-        'ffmpeg/remote_client.ps1')
+        'ffmpeg/remote_client.ps1',
+        'ffmpeg/asr_client.ps1')
     'yt-dlp/_VideoDownloader_v19.exe' = @(
         'yt-dlp/Downloading_from_YouTube_v19.ps1')
 }

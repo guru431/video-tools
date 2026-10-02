@@ -38,7 +38,7 @@ video/
 │   ├── lib/framework.sh                 # Assert-функции, форматированный вывод
 │   ├── mocks/                           # ffmpeg, ffmpeg.cmd, ffprobe, yt-dlp, curl, vot-cli-live
 │   ├── fixtures/asr/                    # Ответы сервера распознавания и ожидаемые расшифровки (.sh и .ps1)
-│   ├── ffmpeg/test_01..28*.sh           # 28 тест-файлов
+│   ├── ffmpeg/test_01..29*.sh           # 29 тест-файлов
 │   ├── yt-dlp/test_01..15*.sh           # 15 тест-файлов
 │   └── common/test_*.sh                 # 11 файлов: кодировки, паритет, guardrail'ы, ссылки в документации, pre-commit, privacy-scan, вырезание комментариев при сборке
 │
@@ -251,12 +251,12 @@ yt-dlp/_VideoDownloader_v19.exe
 ```bash
 bash tests/run_tests.sh --fast    # быстрый уровень (≤60 с): файлы из FAST_LEVEL в раннере
 bash tests/run_tests.sh           # все тесты
-bash tests/run_tests.sh ffmpeg    # ffmpeg (28 файлов)
+bash tests/run_tests.sh ffmpeg    # ffmpeg (29 файлов)
 bash tests/run_tests.sh yt-dlp    # yt-dlp (15 файлов)
 bash tests/run_tests.sh common    # кросс-платформенные инварианты (11 файлов)
 ```
 
-### Тест-модули FFmpeg (28 файлов)
+### Тест-модули FFmpeg (29 файлов)
 
 | Файл | Что тестирует |
 |------|---------------|
@@ -288,6 +288,7 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 | `test_26_asr_ps1` | Распознавание речи: PS1-модуль — те же случаи и фикстуры, запуск curl.exe и отмена |
 | `test_27_asr_parity` | Распознавание речи: .sh и .ps1 дают одинаковые план частей, аргументы curl, исходы и текст |
 | `test_28_asr_integration` | Распознавание речи: сквозной прогон script.sh с моками ffmpeg и curl |
+| `test_29_asr_ps1_integration` | Распознавание речи: сквозной прогон FFmpeg_Converter_script.ps1 (мок ffmpeg.cmd, подменённая сеть) |
 
 ### Тест-модули YT-DLP (15 файлов)
 

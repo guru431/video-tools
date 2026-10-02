@@ -616,3 +616,163 @@ asr_write_json() {
 		printf ']}\n'
 	} > "$out"
 }
+
+# Части и ответы текущего файла — в ASR_RUN_DIR; сам каталог живёт весь прогон.
+asr_file_cleanup() {
+	[ -n "${ASR_RUN_DIR:-}" ] || return 0
+	rm -f "$ASR_RUN_DIR"/part_*.flac "$ASR_RUN_DIR"/resp_*.json "$ASR_RUN_DIR/ffmpeg.err"
+}
+
+# --- Один файл (спека §5.2) ---
+# rc 0 — файл учтён (ok/fail/skip через put_result); rc 2 — прогон остановлен,
+# причина в ASR_STOP_REASON. Формулы имени и подпапки — те же, что у encode_file.
+asr_file() {
+	local full_path="$1" name="${1##*/}"
+	if [ "$dest_inside_source" = "yes" ]; then
+		canon_path "$full_path"
+		case "$CANON_PATH" in
+			"$canon_destination"/*)
+				log_msg "SKIP" "внутри каталога назначения (собственный выход): $name"
+				put_result "skip"
+				return 0 ;;
+		esac
+	fi
+	path_dir "$full_path"
+	local rel="$PATH_DIR/"
+	rel="${rel:$_src_prefix_len}"
+	local stem="${name%.*}"
+	[ "$save_old_extension" = "yes" ] && stem="$name"
+	local out_dir="${folder_destination}${rel}"
+	local out_txt="${out_dir}${stem}.txt" out_json="${out_dir}${stem}.asr.json"
+
+	# Два входа одного прогона не делят один выход: movie.avi и movie.mp4 оба дают
+	# movie.txt, и второй затёр бы первый (или «пропустил» бы его как готовый).
+	lower_ascii "$out_txt"
+	case "$ASR_CLAIMED" in
+		*$'\n'"$LOWER_ASCII"$'\n'*)
+			log_msg "FAIL" "$name: конфликт выходов — «${stem}.txt» уже занят другим входом (включите save_old_extension = yes либо разнесите файлы)"
+			put_result "fail"
+			return 0 ;;
+	esac
+	ASR_CLAIMED="$ASR_CLAIMED$LOWER_ASCII"$'\n'
+
+	if [ "$overwrite_existing" != "yes" ] && [ -f "$out_txt" ]; then
+		log_msg "SKIP" "$name: расшифровка уже есть (${stem}.txt)"
+		put_result "skip"
+		return 0
+	fi
+
+	# Длительность и звук — тот же разбор `ffmpeg -i`, что у конвертера.
+	parse_media_info "$("$ffmpeg" -nostdin -i "$full_path" 2>&1)"
+	if [ -z "$MI_ACODEC" ]; then
+		log_msg "FAIL" "$name: нет звуковой дорожки"
+		put_result "fail"
+		return 0
+	fi
+	if [ -z "$MI_DUR" ]; then
+		log_msg "FAIL" "$name: длительность не читается"
+		put_result "fail"
+		return 0
+	fi
+	local h m s
+	IFS=: read -r h m s <<< "$MI_DUR"
+	asr_plan_parts "$(( 10#$h * 3600 + 10#$m * 60 + 10#$s + 1 ))"
+	local -a plan pairs=()
+	read -r -a plan <<< "$ASR_PLAN"
+	local n=${#plan[@]} i off len part resp t0 started
+
+	if [ "$dry_run" = "yes" ]; then
+		asr_hms "$ASR_PLAN_LEN"
+		echo "[DRY-RUN] $name: частей $n (по ≈$ASR_HMS) → $out_txt"
+		for (( i = 0; i < n; i++ )); do
+			off="${plan[i]%%:*}"; len="${plan[i]#*:}"
+			printf -v part 'part_%03d.flac' "$i"; printf -v resp 'resp_%03d.json' "$i"
+			asr_extract_args "$full_path" "$off" "$len" "$n" "$part"
+			echo "[DRY-RUN] $ffmpeg ${ASR_FF_ARGS[*]}"
+			asr_curl_args "$ASR_BASE" "$part" "$resp"
+			echo "[DRY-RUN] curl ${ASR_CURL_ARGS[*]}"
+		done
+		return 0
+	fi
+
+	[ -d "$out_dir" ] || mkdir -p "$out_dir"
+	now_s; started=$NOW_S
+	for (( i = 0; i < n; i++ )); do
+		off="${plan[i]%%:*}"; len="${plan[i]#*:}"
+		printf -v part 'part_%03d.flac' "$i"; printf -v resp 'resp_%03d.json' "$i"
+		asr_extract_args "$full_path" "$off" "$len" "$n" "$ASR_RUN_DIR/$part"
+		if ! "$ffmpeg" "${ASR_FF_ARGS[@]}" 2>"$ASR_RUN_DIR/ffmpeg.err" || [ ! -s "$ASR_RUN_DIR/$part" ]; then
+			log_msg "FAIL" "$name: не удалось извлечь звук (часть $((i + 1))/$n)"
+			asr_file_cleanup; put_result "fail"
+			return 0
+		fi
+		if [ -n "$ASR_LIM_MAX_BYTES" ] && [ "$(file_size "$ASR_RUN_DIR/$part")" -gt "$ASR_LIM_MAX_BYTES" ]; then
+			log_msg "FAIL" "$name: часть $((i + 1))/$n больше предела сервера ($ASR_LIM_MAX_BYTES байт)"
+			asr_file_cleanup; put_result "fail"
+			return 0
+		fi
+		asr_hms "$len"
+		log_msg "INFO" "$name: распознавание, часть $((i + 1))/$n ($ASR_HMS записи) — ждём ответ сервера"
+		now_s; t0=$NOW_S
+		asr_transcribe_part "$part" "$resp"
+		case "$ASR_OUTCOME" in
+			ok) ;;
+			file)
+				log_msg "FAIL" "$name: $ASR_REASON"
+				asr_file_cleanup; put_result "fail"
+				return 0 ;;
+			*)
+				log_msg "FAIL" "$name: $ASR_REASON"
+				ASR_STOP_REASON="$ASR_REASON"
+				asr_file_cleanup; put_result "fail"
+				return 2 ;;
+		esac
+		now_s; asr_hms $(( NOW_S - t0 ))
+		log_msg "INFO" "$name: часть $((i + 1))/$n распознана за $ASR_HMS"
+		rm -f "$ASR_RUN_DIR/$part"
+		pairs+=("$ASR_RUN_DIR/$resp" "$off")
+	done
+
+	# Публикация: временные имена в каталоге назначения, затем rename; .txt —
+	# последним: он маркер готовности, по нему работает пропуск.
+	local tmp_json tmp_txt el extra=""
+	tmp_json="$(partial_path "$out_json")"; tmp_txt="$(partial_path "$out_txt")"
+	asr_now
+	if ! asr_write_json "$tmp_json" "${pairs[@]}" \
+		|| ! asr_render "$name" "$ASR_NOW" "$ASR_PLAN_LEN" "$tmp_txt" "${pairs[@]}"; then
+		log_msg "FAIL" "$name: не удалось собрать расшифровку из ответа сервера"
+		rm -f "$tmp_json" "$tmp_txt"; asr_file_cleanup; put_result "fail"
+		return 0
+	fi
+	if mv -f "$tmp_json" "$out_json" 2>/dev/null && mv -f "$tmp_txt" "$out_txt" 2>/dev/null && [ -f "$out_txt" ]; then
+		now_s; el=$(( NOW_S - started ))
+		[ -n "$ASR_R_BAD" ] && extra=", этапы с ошибкой: $ASR_R_BAD"
+		log_msg "OK" "$name -> ${stem}.txt (говорящих: $ASR_R_SPEAKERS, сомнительных сегментов: $ASR_R_LOW$extra) ($((el / 60))m $((el % 60))s)"
+		put_result "ok:0:0"
+	else
+		log_msg "FAIL" "$name: не удалось опубликовать результат (rename)"
+		rm -f "$tmp_json" "$tmp_txt"
+		put_result "fail"
+	fi
+	asr_file_cleanup
+	return 0
+}
+
+# --- Прогон: файлы строго по одному (у сервера один рабочий поток) ---
+# Остановка (rc 2) — остальные файлы считаются «не обработано».
+asr_run() {
+	local full_path stopped="no" rc
+	ASR_CLAIMED=$'\n'
+	ASR_STOP_REASON=""
+	ASR_NOT_PROCESSED=0
+	while IFS= read -r -d '' full_path; do
+		_any_input="yes"
+		if [ "$stopped" = "yes" ]; then
+			ASR_NOT_PROCESSED=$((ASR_NOT_PROCESSED + 1))
+			continue
+		fi
+		asr_file "$full_path"; rc=$?
+		[ "$rc" -eq 2 ] && stopped="yes"
+	done < <(find_inputs | sort_null)
+	return 0
+}

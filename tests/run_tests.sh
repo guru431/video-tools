@@ -335,6 +335,7 @@ FFMPEG_TESTS=(
     "$TESTS_DIR/ffmpeg/test_23_remote_parity.sh"
     "$TESTS_DIR/ffmpeg/test_24_gui_worker_runspace.sh"
     "$TESTS_DIR/ffmpeg/test_25_asr_client.sh"
+    "$TESTS_DIR/ffmpeg/test_28_asr_integration.sh"
 )
 
 YTDLP_TESTS=(

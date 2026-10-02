@@ -143,6 +143,10 @@ _ffconv_script_dir="$(cd "$PATH_DIR" && pwd)"
 if [ -f "${_ffconv_script_dir}/remote_client.sh" ]; then
 	source "${_ffconv_script_dir}/remote_client.sh"
 fi
+# Распознавание речи — второй модуль того же устройства: только функции.
+if [ -f "${_ffconv_script_dir}/asr_client.sh" ]; then
+	source "${_ffconv_script_dir}/asr_client.sh"
+fi
 
 # --- Парсинг настроек (формат :+:value или :-:value) ---
 IFS=':' read -r foo video_codec_status video_codec_value <<< "$video_codec"
@@ -661,6 +665,7 @@ _cleanup_on_int() {
 	for _t in "${_tmp_files[@]}"; do [ -n "$_t" ] && rm -f "$_t"; done
 	[ -n "$results_dir" ] && rm -rf "$results_dir"
 	[ -n "${collisions_file:-}" ] && rm -f "$collisions_file"
+	[ -n "${ASR_RUN_DIR:-}" ] && rm -rf "$ASR_RUN_DIR"
 	exit 130
 }
 trap _cleanup_on_int INT TERM
@@ -1857,6 +1862,33 @@ sort_null() {
 	fi
 }
 
+# --- Распознавание речи: отдельный режим вместо конвертации ---
+# Ни один режим конвертера, ни [remote] здесь не участвуют: файлы не
+# перекодируются. Всё, что делает невозможным весь прогон, выясняет
+# asr_preflight — ДО первого файла.
+asr_active="no"
+if [ "${asr_enabled:-no}" = "yes" ]; then
+	if ! type asr_preflight >/dev/null 2>&1; then
+		echo "[ОШИБКА] [asr] enabled = yes, но рядом со скриптом нет asr_client.sh." >&2
+		pause_prompt "Нажмите [Enter], чтобы выйти..."
+		exit 1
+	fi
+	if [ "$parallel_count" -gt 1 ] 2>/dev/null; then
+		echo "[ПРЕДУПРЕЖДЕНИЕ] parallel_files в режиме распознавания игнорируется: у сервера один рабочий поток, файлы идут по одному."
+		parallel_count=1
+	fi
+	if [ "$remote_enabled" = "yes" ]; then
+		log_msg "INFO" "[remote] в режиме распознавания не используется: конвертации нет"
+		remote_enabled="no"
+	fi
+	if ! asr_preflight; then
+		rm -rf "$results_dir"
+		pause_prompt "Нажмите [Enter], чтобы выйти..."
+		exit 1
+	fi
+	asr_active="yes"
+fi
+
 # F-modes. Спецрежимы (merge/extract/frame/copy/audio) взаимоисключающи по построению:
 # при нескольких включённых часть опций молча игнорируется. Определяем ЭФФЕКТИВНЫЙ режим
 # по документированному приоритету и ЯВНО предупреждаем о проигнорированных, а не молчим.
@@ -1870,7 +1902,7 @@ _active_modes=""
 _active_modes="${_active_modes# }"
 _n_modes=0
 for _m in $_active_modes; do _n_modes=$((_n_modes + 1)); done
-if [ "$_n_modes" -gt 1 ]; then
+if [ "$_n_modes" -gt 1 ] && [ "$asr_active" != "yes" ]; then
 	_mode_winner="${_active_modes%% *}"
 	# Здесь и в F-collision-map подстановка обязана быть в скобках: следом идёт «»», и в
 	# локали, где старший байт считается буквой (macOS + bash 3.2), он утягивается в имя
@@ -1888,7 +1920,8 @@ fi
 # Режимы merge (один выход), extract (расширение известно только после ffprobe каждого
 # файла) и frame (выход — каталог) сюда не попадают: там формула выхода другая.
 collisions_file=""
-if [ "$merge_files" != "yes" ] && [ "$extract_audio_copy" != "yes" ] && [ "$create_frame" != "yes" ]; then
+# У распознавания своя проверка коллизий (ASR_CLAIMED в asr_client.sh): выход — .txt.
+if [ "$merge_files" != "yes" ] && [ "$extract_audio_copy" != "yes" ] && [ "$create_frame" != "yes" ] && [ "$asr_active" != "yes" ]; then
 	# Оба файла — в своём каталоге прогона (results_dir), а не через mktemp: тот
 	# стоил процессов каждому запуску, а каталог и так удаляется в конце.
 	new_run_file map ""; _cmap="$NEW_FILE"
@@ -2014,7 +2047,9 @@ if [ "${FFCONV_REMOTE_SELFTEST:-}" = "1" ]; then
 fi
 
 # --- Основная логика ---
-if [ "$merge_files" = "yes" ]; then
+if [ "$asr_active" = "yes" ]; then
+	asr_run
+elif [ "$merge_files" = "yes" ]; then
 	# fname сбрасывается явно: переменная не локальна (merge — top-level, не функция),
 	# при повторном source старое значение иначе осталось бы.
 	fname=""
@@ -2171,6 +2206,7 @@ for f in "$results_dir"/lf_*; do
 done
 # Карта коллизий лежит в results_dir и уходит вместе с ним.
 rm -rf "$results_dir"
+[ -n "${ASR_RUN_DIR:-}" ] && rm -rf "$ASR_RUN_DIR"
 
 now_s; end_time_global=$NOW_S
 elapsed_global=$((end_time_global - start_time_global))
@@ -2188,6 +2224,10 @@ fi
 echo "  Обработано:  ${total_ok} файлов"
 echo "  Пропущено:   ${total_skip} (уже существуют)"
 echo "  Ошибки:      ${total_fail}"
+if [ -n "${ASR_STOP_REASON:-}" ]; then
+	echo "  Остановлено: ${ASR_STOP_REASON}"
+	echo "  Не обработано: ${ASR_NOT_PROCESSED:-0}"
+fi
 [ "$total_local" -gt 0 ] && echo "  Посчитано локально: ${total_local} (служба была недоступна)"
 printf "  Время:       %d мин %d сек\n" "$elapsed_global_min" "$elapsed_global_sec"
 if [ "$total_in_bytes" -gt 0 ]; then

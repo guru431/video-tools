@@ -80,6 +80,7 @@ read_config() {
 			# всех, кто удалённым бэкендом не пользуется (а он выключен по умолчанию),
 			# и WARN печатался бы на каждом запуске. Про незаданную переменную громко
 			# говорит remote_preflight — ровно тогда, когда она действительно нужна.
+			# То же для [asr]: ASR_URL/ASR_API_KEY — о пустом адресе говорит asr_preflight.
 			# Два ограничителя, и оба обязательны: имя обязано быть валидным
 			# идентификатором (`${}` и `${A-B}` роняли `${!_vn}` с «invalid variable
 			# name», значение терялось молча), и число итераций ограничено —
@@ -92,7 +93,7 @@ read_config() {
 					echo "WARN: '\${$_vn}' — недопустимое имя переменной окружения, оставлено как есть" >&2
 					break
 				fi
-				[ -n "${!_vn:-}" ] || [ "$section" = "remote" ] || echo "WARN: переменная $_vn не задана" >&2
+				[ -n "${!_vn:-}" ] || [ "$section" = "remote" ] || [ "$section" = "asr" ] || echo "WARN: переменная $_vn не задана" >&2
 				value="${value//\$\{$_vn\}/${!_vn:-}}"
 			done
 			# Кавычки вокруг значения — обычный результат «Копировать как путь» в
@@ -195,6 +196,17 @@ remote_prefer="$(read_config "prefer" "remote" "auto")"
 remote_wait_timeout="$(read_config "wait_timeout" "remote" "1800")"
 remote_stall_timeout="$(read_config "stall_timeout" "remote" "900")"
 remote_on_failure="$(read_config "on_failure" "remote" "abort")"
+
+# Распознавание речи. Адрес — списком через пробел; нормализация и проверка —
+# в asr_client.sh (asr_split_endpoints / asr_validate_config), как у [remote].
+asr_enabled="$(read_config "enabled" "asr" "no")"
+asr_endpoint="$(read_config "endpoint" "asr" "")"
+asr_api_key="$(read_config "api_key" "asr" "")"
+asr_api_key_command="$(read_config "api_key_command" "asr" "")"
+asr_pinned_pubkey="$(read_config "pinned_pubkey" "asr" "")"
+asr_language="$(read_config "language" "asr" "ru")"
+asr_diarize="$(read_config "diarize" "asr" "yes")"
+asr_num_speakers="$(read_config "num_speakers" "asr" "")"
 # Нормализация адреса живёт в ОДНОМ месте на платформу — remote_normalize_endpoint
 # в remote_client.sh, вызывается из remote_preflight. Здесь её нет намеренно:
 # раньше `${x%/}` снимал один хвостовой слэш, TrimEnd в PS1 — все, а Trim пробелов

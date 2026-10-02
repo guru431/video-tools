@@ -58,6 +58,14 @@ set "remote_prefer=auto"
 set "remote_wait_timeout=1800"
 set "remote_stall_timeout=900"
 set "remote_on_failure=abort"
+set "asr_enabled=no"
+set "asr_endpoint="
+set "asr_api_key="
+set "asr_api_key_command="
+set "asr_pinned_pubkey="
+set "asr_language=ru"
+set "asr_diarize=yes"
+set "asr_num_speakers="
 
 :: --- Чтение config.ini ---
 set "CONFIG_FILE=%~dp0config.ini"
@@ -197,8 +205,8 @@ if defined _ee_bad (
 set "_ee_prev=!_val!"
 :: Кроме секции [remote]: TRANSCODE_URL/TRANSCODE_API_KEY не заданы у всех, кто
 :: удалённым бэкендом не пользуется, а он выключен по умолчанию — WARN печатался
-:: бы на каждом запуске. В CMD удалённый счёт и так не поддерживается.
-if /i not "!_section!"=="remote" if not defined !_ee_name! echo WARN: переменная !_ee_name! не задана 1>&2
+:: бы на каждом запуске. В CMD удалённый счёт и так не поддерживается. То же для [asr].
+if /i not "!_section!"=="remote" if /i not "!_section!"=="asr" if not defined !_ee_name! echo WARN: переменная !_ee_name! не задана 1>&2
 call set "_ee_val=%%%_ee_name%%%"
 rem Незаданная переменная: подставляем пустую строку явно. Значение, целиком
 rem равное ${UNSET}, после подстановки делало _val НЕОПРЕДЕЛЁННОЙ, а !_val! в
@@ -289,6 +297,16 @@ if /i "!_section!"=="remote" (
 	if /i "!_key!"=="stall_timeout" set "remote_stall_timeout=!_val!"
 	if /i "!_key!"=="on_failure" set "remote_on_failure=!_val!"
 )
+if /i "!_section!"=="asr" (
+	if /i "!_key!"=="enabled" set "asr_enabled=!_val!"
+	if /i "!_key!"=="endpoint" set "asr_endpoint=!_val!"
+	if /i "!_key!"=="api_key" set "asr_api_key=!_val!"
+	if /i "!_key!"=="api_key_command" set "asr_api_key_command=!_val!"
+	if /i "!_key!"=="pinned_pubkey" set "asr_pinned_pubkey=!_val!"
+	if /i "!_key!"=="language" set "asr_language=!_val!"
+	if /i "!_key!"=="diarize" set "asr_diarize=!_val!"
+	if /i "!_key!"=="num_speakers" set "asr_num_speakers=!_val!"
+)
 exit /b
 
 :to_flag
@@ -342,11 +360,22 @@ if not defined _abs set "log_file=%~dp0!log_file!"
 
 rem Тестовый хук: --print-config печатает распарсенные переменные и выходит, не запуская script
 if "%~1"=="--print-config" (
-	for %%V in (folder_sources folder_destination audio_only merge_files create_frame copy_codecs extract_audio_copy overwrite_existing audio_codec audio_number_channels audio_bitrate audio_sampling_rate audio_normalize video_codec video_resolution video_bitrate video_number_frames video_rotation video_subtitles video_quality keep_aspect_ratio output_container multithreads parallel_files hw_accel gpu_preset gpu_tune gpu_rc playback_speed start_coding length_coding split_by_silence silence_duration silence_threshold save_old_extension format_files_in subtitles_style dry_run enable_log log_file remote_enabled remote_endpoint remote_api_key_command remote_prefer remote_wait_timeout remote_stall_timeout remote_on_failure) do echo %%V=!%%V!
+	for %%V in (folder_sources folder_destination audio_only merge_files create_frame copy_codecs extract_audio_copy overwrite_existing audio_codec audio_number_channels audio_bitrate audio_sampling_rate audio_normalize video_codec video_resolution video_bitrate video_number_frames video_rotation video_subtitles video_quality keep_aspect_ratio output_container multithreads parallel_files hw_accel gpu_preset gpu_tune gpu_rc playback_speed start_coding length_coding split_by_silence silence_duration silence_threshold save_old_extension format_files_in subtitles_style dry_run enable_log log_file remote_enabled remote_endpoint remote_api_key_command remote_prefer remote_wait_timeout remote_stall_timeout remote_on_failure asr_enabled asr_endpoint asr_api_key_command asr_pinned_pubkey asr_language asr_diarize asr_num_speakers) do echo %%V=!%%V!
 	rem Ключ печатаем маской: --print-config — тестовый хук, но его вывод уходит
 	rem в логи CI, а Bearer-ключ службы не имеет права там оказаться.
 	if defined remote_api_key (echo remote_api_key=***) else (echo remote_api_key=)
+	if defined asr_api_key (echo asr_api_key=***) else (echo asr_api_key=)
 	exit /b 0
+)
+
+rem Распознавание речи есть только в .sh/.ps1/GUI. Молча конвертировать вместо
+rem расшифровки нельзя: пользователь получил бы перекодированные файлы там, где
+rem ждал текст. Поэтому отказ — явный и с ненулевым кодом, а не предупреждение.
+if /i "%asr_enabled%"=="yes" (
+	echo [ПРЕДУПРЕЖДЕНИЕ] Распознавание речи ^([asr] enabled^) в CMD-версии недоступно:
+	echo [ПРЕДУПРЕЖДЕНИЕ] нет HTTP-клиента с закреплённым ключом сервера и разбора JSON.
+	echo [ПРЕДУПРЕЖДЕНИЕ] Конвертация не запускается. Используйте .sh, .ps1 или GUI.
+	exit /b 1
 )
 
 :: start coding

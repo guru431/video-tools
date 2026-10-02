@@ -30,6 +30,18 @@ ffmpeg:
       - wait_timeout
       - stall_timeout
       - on_failure
+    # Распознавание речи — только .sh/.ps1/GUI: в cmd.exe нет HTTP-клиента с
+    # закреплённым ключом и разбора JSON. Ключи в .cmd читаются (их видно в
+    # --print-config), а при enabled = yes .cmd предупреждает и выходит с кодом 1.
+    asr_sh_ps1_only_behavior:
+      - enabled
+      - endpoint
+      - api_key
+      - api_key_command
+      - pinned_pubkey
+      - language
+      - diarize
+      - num_speakers
 
 yt-dlp:
   # Нет мёртвых ключей: каждый читается хотя бы в .sh ИЛИ .ps1.

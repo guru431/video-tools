@@ -64,16 +64,50 @@ key_is_read() {
 }
 
 # ── ffmpeg: строгий трёхплатформенный паритет ─────────────────────────────
-suite "ffmpeg: каждый ключ config.ini читается в run.sh/run.cmd/run.ps1"
+# Ключи сверяются ВМЕСТЕ С СЕКЦИЕЙ. [asr] повторяет имена [remote] (enabled,
+# endpoint, api_key, api_key_command), и сверка по одному имени зеленела бы при
+# забытом чтении `[asr] enabled` — его «покрывало» чтение `[remote] enabled`.
+# Пары «секция/ключ» собираются одним grep/awk на файл, как и раньше.
+keys_sec_of() {
+    awk '/^[[:space:]]*\[[^]]+\][[:space:]]*$/ { s = $0; gsub(/^[[:space:]]*\[|\][[:space:]]*$/, "", s); s = tolower(s); next }
+         /^[[:space:]]*[a-z_]+[[:space:]]*=/ { k = $0; sub(/^[[:space:]]*/, "", k); sub(/[[:space:]]*=.*/, "", k); print s "/" k }' "$1"
+}
+_rs_files=(); _rs_lists=()
+key_sec_is_read() {
+    local file="$1" pair="$2" list="" i
+    for i in "${!_rs_files[@]}"; do
+        [ "${_rs_files[i]}" = "$file" ] && { list="${_rs_lists[i]}"; break; }
+    done
+    if [ -z "$list" ]; then
+        case "$file" in
+            *.sh)  list=$'\n'"$(grep -oE 'read_config[[:space:]]+"[a-z_]+"[[:space:]]+"[a-z_]+"' "$file" | awk -F'"' '{print $4 "/" $2}')"$'\n' ;;
+            *.ps1) list=$'\n'"$(grep -oE 'Read-Config[[:space:]]+"[a-z_]+"[[:space:]]+"[a-z_]+"' "$file" | awk -F'"' '{print $4 "/" $2}')"$'\n' ;;
+            *.cmd) list=$'\n'"$(awk 'match($0, /"!_section!"=="[a-z_]+"/) { s = substr($0, RSTART + 15, RLENGTH - 16) }
+                                     match($0, /_key!"=="[a-z_]+"/) { print s "/" substr($0, RSTART + 9, RLENGTH - 10) }' "$file")"$'\n' ;;
+        esac
+        _rs_files+=("$file"); _rs_lists+=("$list")
+    fi
+    case "$list" in *$'\n'"$pair"$'\n'*) return 0 ;; esac
+    return 1
+}
+
+suite "ffmpeg: каждый ключ config.ini читается в run.sh/run.cmd/run.ps1 (с секцией)"
 FF="$PROJECT_DIR/ffmpeg"
 assert_nonempty_keys "ffmpeg" "$FF/config.ini.example"
-while IFS= read -r key; do
-    [ -z "$key" ] && continue
+while IFS= read -r pair; do
+    [ -z "$pair" ] && continue
     for plat in FFmpeg_Converter_run_v19.sh FFmpeg_Converter_run_v19.cmd FFmpeg_Converter_run_v19.ps1; do
-        if key_is_read "$FF/$plat" "$key"; then pass "ffmpeg '$key' в $plat"
-        else fail "ffmpeg '$key' в $plat" "читается" "отсутствует"; fi
+        if key_sec_is_read "$FF/$plat" "$pair"; then pass "ffmpeg '$pair' в $plat"
+        else fail "ffmpeg '$pair' в $plat" "читается" "отсутствует"; fi
     done
-done < <(keys_of "$FF/config.ini.example")
+done < <(keys_sec_of "$FF/config.ini.example")
+
+# Негативная самопроверка: ключ, прочитанный в ДРУГОЙ секции, не засчитывается.
+if key_sec_is_read "$FF/FFmpeg_Converter_run_v19.sh" "nosuch/enabled"; then
+    fail "чтение [remote] enabled не засчитывается за [nosuch] enabled" "не засчитано" "засчитано"
+else
+    pass "чтение [remote] enabled не засчитывается за [nosuch] enabled"
+fi
 
 # ── yt-dlp: минимум один читатель (нет мёртвых ключей) ────────────────────
 suite "yt-dlp: каждый ключ config.ini читается хотя бы в .sh или .ps1"
@@ -101,8 +135,9 @@ for _pair in "ffmpeg" "yt-dlp"; do
         skip "$_pair: ключи шаблона = ключам config.ini" "рабочего config.ini нет (CI/свежий клон)"
         continue
     fi
-    _only_live="$(comm -23 <(keys_of "$_live" | sort -u) <(keys_of "$_tmpl" | sort -u) | tr '\n' ' ')"
-    _only_tmpl="$(comm -13 <(keys_of "$_live" | sort -u) <(keys_of "$_tmpl" | sort -u) | tr '\n' ' ')"
+    _kf=keys_of; [ "$_pair" = "ffmpeg" ] && _kf=keys_sec_of
+    _only_live="$(comm -23 <($_kf "$_live" | sort -u) <($_kf "$_tmpl" | sort -u) | tr '\n' ' ')"
+    _only_tmpl="$(comm -13 <($_kf "$_live" | sort -u) <($_kf "$_tmpl" | sort -u) | tr '\n' ' ')"
     assert_empty "$_pair: нет ключей только в config.ini" "$_only_live"
     assert_empty "$_pair: нет ключей только в .example"   "$_only_tmpl"
 done

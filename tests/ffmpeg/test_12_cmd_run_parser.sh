@@ -169,6 +169,35 @@ assert_contains "недопустимое имя → WARN" "недопустим
 assert_eq "допустимое имя по-прежнему подставляется" "dry_run=yes" \
     "$(printf '%s\n' "$env_out" | grep '^dry_run=' | head -1)"
 
+# ══════════════════════════════════════════════════════════════
+suite "CMD: ключи [asr] разбираются; enabled = yes — отказ без конвертации"
+# ══════════════════════════════════════════════════════════════
+# Распознавание речи в CMD недоступно. Молча конвертировать вместо расшифровки
+# нельзя: пользователь получил бы видео там, где ждал текст, поэтому — код 1.
+printf '[asr]\r\nenabled = no\r\nendpoint = https://asr.example:30010 http://asr2.example:30000\r\napi_key = asr-s3cr3t\r\npinned_pubkey = sha256//AAAA=\r\nlanguage = en\r\ndiarize = no\r\nnum_speakers = 4\r\n' > "$TMP_DIR/config.ini"
+asr_out=$(cmd //c "$WIN_RUN --print-config" < /dev/null 2>&1 | tr -d '\r')
+get_asr() { printf '%s\n' "$asr_out" | grep "^$1=" | head -1; }
+assert_eq "asr_enabled"       "asr_enabled=no"                                                    "$(get_asr asr_enabled)"
+assert_eq "asr_endpoint"      "asr_endpoint=https://asr.example:30010 http://asr2.example:30000" "$(get_asr asr_endpoint)"
+assert_eq "asr_pinned_pubkey" "asr_pinned_pubkey=sha256//AAAA="                                   "$(get_asr asr_pinned_pubkey)"
+assert_eq "asr_language"      "asr_language=en"                                                   "$(get_asr asr_language)"
+assert_eq "asr_diarize"       "asr_diarize=no"                                                    "$(get_asr asr_diarize)"
+assert_eq "asr_num_speakers"  "asr_num_speakers=4"                                                "$(get_asr asr_num_speakers)"
+assert_eq "ключ ASR под маской" "asr_api_key=***"                                                 "$(get_asr asr_api_key)"
+assert_not_contains "значение ключа ASR не печатается" "asr-s3cr3t" "$asr_out"
+
+printf '[asr]\r\nendpoint = ${FF_T_ASR_UNSET}\r\n' > "$TMP_DIR/config.ini"
+asr_env_out=$(cmd //c "$WIN_RUN --print-config" < /dev/null 2>&1 | tr -d '\r')
+assert_not_contains "незаданная \${VAR} в [asr] не печатает WARN" "FF_T_ASR_UNSET" "$asr_env_out"
+
+printf '[asr]\r\nenabled = yes\r\n' > "$TMP_DIR/config.ini"
+asr_run_out=$(cmd //c "$WIN_RUN" < /dev/null 2>&1); asr_run_rc=$?
+asr_run_out=$(printf '%s' "$asr_run_out" | tr -d '\r')
+assert_eq "enabled = yes — код 1" "1" "$asr_run_rc"
+assert_contains "отказ объяснён" "Распознавание речи" "$asr_run_out"
+# В TMP_DIR нет script.cmd: дошёл бы до вызова — сказал бы «не найден».
+assert_not_contains "конвертация не запускалась" "не найден FFmpeg_Converter_script.cmd" "$asr_run_out"
+
 rm -rf "$TMP_DIR"
 
 summary

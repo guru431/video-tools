@@ -134,4 +134,15 @@ done < <(printf '%s
 ' "$ff_sh_ps1_only")
 assert_contains "CMD предупреждает о недоступности удалённого бэкенда"     "Удалённый бэкенд" "$_cmd_run_src"
 
+# asr_sh_ps1_only_behavior: ключи [asr]. В .cmd они читаются в своей секции, а
+# включённый режим даёт отказ с кодом 1 — молча конвертировать вместо расшифровки
+# значило бы выдать пользователю не тот результат.
+ff_asr_only=$(yaml_list_after '    asr_sh_ps1_only_behavior:')
+assert_not_empty "контракт: список asr_sh_ps1_only_behavior (ffmpeg) не пуст" "$ff_asr_only"
+while IFS= read -r k; do
+    [ -z "$k" ] && continue
+    assert_contains "asr-ключ '$k' читается в run_v19.cmd" "if /i \"!_key!\"==\"$k\" set \"asr_" "$_cmd_run_src"
+done < <(printf '%s\n' "$ff_asr_only")
+assert_contains "CMD отказывается при включённом распознавании" "Распознавание речи" "$_cmd_run_src"
+
 summary

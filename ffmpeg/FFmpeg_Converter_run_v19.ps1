@@ -79,7 +79,8 @@ function Read-Config {
 					# Здесь файл разбирается ЦЕЛИКОМ в кэш при первом же Read-Config, поэтому
 					# WARN печатался бы дважды на каждом запуске, о чём бы ни спросили.
 					# Про незаданную переменную громко говорит Invoke-RemotePreflight.
-					$val = Expand-ConfigEnv $val ($curSection -eq 'remote')
+					# То же для [asr] (ASR_URL/ASR_API_KEY) — там говорит Invoke-AsrPreflight.
+					$val = Expand-ConfigEnv $val ($curSection -eq 'remote' -or $curSection -eq 'asr')
 					$_k = "${curSection}::$($Matches[1].Trim())"
 					# ContainsKey-guard = ПЕРВОЕ вхождение ключа (контракт всех платформ).
 					if (-not $script:_cfgCache.ContainsKey($_k)) { $script:_cfgCache[$_k] = (Remove-ConfigQuotes $val) }
@@ -169,6 +170,16 @@ $remote_prefer          = Read-Config "prefer" "remote" "auto"
 $remote_wait_timeout    = Read-Config "wait_timeout" "remote" "1800"
 $remote_stall_timeout   = Read-Config "stall_timeout" "remote" "900"
 $remote_on_failure      = Read-Config "on_failure" "remote" "abort"
+
+# Распознавание речи; нормализация адреса и проверка — в asr_client.ps1.
+$asr_enabled         = Read-Config "enabled" "asr" "no"
+$asr_endpoint        = Read-Config "endpoint" "asr" ""
+$asr_api_key         = Read-Config "api_key" "asr" ""
+$asr_api_key_command = Read-Config "api_key_command" "asr" ""
+$asr_pinned_pubkey   = Read-Config "pinned_pubkey" "asr" ""
+$asr_language        = Read-Config "language" "asr" "ru"
+$asr_diarize         = Read-Config "diarize" "asr" "yes"
+$asr_num_speakers    = Read-Config "num_speakers" "asr" ""
 
 $save_old_extension = Read-Config "save_old_extension" "other" "no"
 $format_files_in    = Read-Config "format_files_in"    "other" "3gp,avi,flv,mp4,mpg,mpeg,wmv,mov,asf,mkv,m4v,webm,mts,vob,m4b,mp3,wma,ogg,m4a,aac"

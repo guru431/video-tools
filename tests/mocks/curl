@@ -14,6 +14,11 @@
 #                        Шаблон — glob для `case` (например `/v1/uploads/*`).
 #                        Первое совпадение выигрывает. Путь, не совпавший ни с
 #                        одним шаблоном, — ОШИБКА (exit 99), а не молчаливый 200.
+#   MOCK_CURL_EXIT     — выйти с этим кодом (90 — чужой сертификат, 28 — таймаут)
+#   MOCK_CURL_FAIL_HOSTS — хосты через пробел, для которых — exit 7 (выбор адреса)
+#   MOCK_CURL_CODE_SEQ_FILE — файл с HTTP-кодами по строке: каждый вызов берёт
+#                        первую строку как код ответа и снимает её (повторы при 503)
+#   `-F`/`--form` без `-X` — это POST, как у настоящего curl.
 #
 # Маршрутизация появилась не для красоты. Пока мок отдавал одно и то же тело на
 # ЛЮБОЙ URL, путь эндпоинта не проверялся ничем: клиент ходил по /jobs, спека и
@@ -34,6 +39,7 @@ LOG_FILE="${MOCK_CURL_LOG:-/tmp/mock_curl_calls.txt}"
 echo "$@" >> "$LOG_FILE"
 
 METHOD="GET"
+METHOD_SET=0
 URL=""
 OUT_FILE=""
 READ_CONFIG=0
@@ -43,7 +49,8 @@ WRITE_OUT=""
 PREV=""
 for arg in "$@"; do
 	case "$PREV" in
-		-X) METHOD="$arg" ;;
+		-X) METHOD="$arg"; METHOD_SET=1 ;;
+		-F|--form) [ "$METHOD_SET" = "1" ] || METHOD="POST" ;;
 		-o) OUT_FILE="$arg" ;;
 	esac
 	case "$arg" in
@@ -102,6 +109,22 @@ if [ "${READ_BODY:-0}" = "1" ]; then
 fi
 
 [ "${MOCK_CURL_FAIL:-0}" = "1" ] && exit 7
+[ -n "${MOCK_CURL_EXIT:-}" ] && exit "$MOCK_CURL_EXIT"
+_host="${URL#*://}"; _host="${_host%%[/:]*}"
+case " ${MOCK_CURL_FAIL_HOSTS:-} " in
+	*" $_host "*) [ -n "$_host" ] && exit 7 ;;
+esac
+SEQ_CODE=""
+if [ -n "${MOCK_CURL_CODE_SEQ_FILE:-}" ] && [ -s "$MOCK_CURL_CODE_SEQ_FILE" ]; then
+	_seq=()
+	while IFS= read -r _l; do [ -n "$_l" ] && _seq+=("$_l"); done < "$MOCK_CURL_CODE_SEQ_FILE"
+	SEQ_CODE="${_seq[0]:-}"
+	if [ "${#_seq[@]}" -gt 1 ]; then
+		printf '%s\n' "${_seq[@]:1}" > "$MOCK_CURL_CODE_SEQ_FILE"
+	else
+		: > "$MOCK_CURL_CODE_SEQ_FILE"
+	fi
+fi
 
 # Путь без схемы и хоста: маршруты пишутся так, как их видит служба.
 PATH_ONLY="${URL#*://}"
@@ -139,6 +162,8 @@ EOF
 		exit 99
 	fi
 fi
+
+[ -n "$SEQ_CODE" ] && CODE="$SEQ_CODE"
 
 # Хвост собираем по формату -w, который задал клиент: он бывает
 # '\n%{http_code}' и '\n%{http_code} %{size_upload}'. Подставляем оба

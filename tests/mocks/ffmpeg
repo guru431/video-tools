@@ -10,6 +10,7 @@
 #   MOCK_FFMPEG_LOG=           — путь к файлу лога (по умолчанию /tmp/mock_ffmpeg_calls.txt)
 #   MOCK_FFMPEG_SILENCE="10:12 25:27" — при -af silencedetect эмитить пары
 #                                       silence_start/silence_end (секунды)
+#   MOCK_FFMPEG_NO_AUDIO=1     — в выводе -i нет строки Stream … Audio
 # ============================================================
 
 LOG_FILE="${MOCK_FFMPEG_LOG:-/tmp/mock_ffmpeg_calls.txt}"
@@ -62,13 +63,14 @@ if [[ "$*" == *" -i "* ]] || [[ "$*" == "-i "* ]]; then
     fi
     # printf, а не `cat <<`: мок зовут сотни раз за прогон, и лишний процесс на
     # каждый вызов -i заметен в общем времени набора.
+    ASTREAM="    Stream #0:1(und): Audio: ${AUDIO_CODEC}, 48000 Hz, stereo, fltp, 192 kb/s"
+    [ "${MOCK_FFMPEG_NO_AUDIO:-0}" = "1" ] && ASTREAM=""
     printf '%s\n' "ffmpeg version 6.0 (mock)" \
         "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'input.mp4':" \
         "  Metadata:" \
         "    encoder         : Lavf58.76.100" \
         "  Duration: ${DURATION}, start: 0.000000, bitrate: ${BITRATE} kb/s" \
-        "${VSTREAM}" \
-        "    Stream #0:1(und): Audio: ${AUDIO_CODEC}, 48000 Hz, stereo, fltp, 192 kb/s" >&2
+        "${VSTREAM}" ${ASTREAM:+"$ASTREAM"} >&2
 fi
 
 # Имитация silencedetect: синтетические silence_start/silence_end в stderr

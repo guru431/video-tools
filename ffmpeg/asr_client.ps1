@@ -199,8 +199,21 @@ function Invoke-AsrCurl {
 	$psi.RedirectStandardError = $true
 	$psi.CreateNoWindow = $true
 	$p = $null; $done = $false
+	# Process.Start открывает stdin кодировкой [Console]::InputEncoding и сразу пишет
+	# её преамбулу. При консоли в UTF-8 (chcp 65001, «UTF-8 для всех языков» Windows)
+	# это BOM, и curl отвергает конфиг целиком: «option --config: is unknown» (живой
+	# прогон 2026-10-02). На время запуска — та же кодовая страница без BOM.
+	$savedIn = $null
 	try {
-		$p = [System.Diagnostics.Process]::Start($psi)
+		$ie = [Console]::InputEncoding
+		if ($ie.CodePage -eq 65001 -and $ie.GetPreamble().Length -gt 0) {
+			$savedIn = $ie
+			[Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false)
+		}
+	} catch { $savedIn = $null }
+	try {
+		try { $p = [System.Diagnostics.Process]::Start($psi) }
+		finally { if ($savedIn) { try { [Console]::InputEncoding = $savedIn } catch {} } }
 		$p.StandardInput.Write('header = "Authorization: Bearer ' + (ConvertTo-AsrConfigString ([string]$asr_api_key)) + '"' + "`n")
 		$p.StandardInput.Close()
 		$outTask = $p.StandardOutput.ReadToEndAsync()

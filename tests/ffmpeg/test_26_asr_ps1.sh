@@ -106,8 +106,16 @@ if ([Environment]::OSVersion.Platform -eq 'Win32NT') {
     [System.IO.File]::WriteAllText($fake, "@echo off`r`necho %* > `"%~dp0args.txt`"`r`nfindstr `"^`" > `"%~dp0stdin.txt`"`r`necho 200`r`nexit /b 0`r`n")
     $env:CURL_BIN = $fake
     $asr_api_key = 'k-123'
+    # Console in UTF-8 (chcp 65001, "UTF-8 for worldwide language support"): .NET opens the
+    # child's stdin with Console.InputEncoding, i.e. UTF-8 WITH a BOM, and curl rejects a
+    # config that starts with it ("option --config: is unknown"). Reproduce that condition.
+    $savedIn = $null
+    try { $savedIn = [Console]::InputEncoding; [Console]::InputEncoding = [System.Text.Encoding]::UTF8 } catch {}
     $r = Invoke-AsrCurl $Work @('-sS', '-o', 'x.json', '-w', '%{http_code}', 'https://h.example/speech/limits')
+    if ($savedIn) { try { [Console]::InputEncoding = $savedIn } catch {} }
     Write-Output ("REAL_RC=" + $r.Rc + '|' + $r.Code)
+    $stdinBytes = [System.IO.File]::ReadAllBytes((Join-Path $Work 'stdin.txt'))
+    Write-Output ("REAL_STDIN_FIRST=" + $(if ($stdinBytes.Length) { $stdinBytes[0] } else { -1 }))
     Write-Output ("REAL_STDIN=" + ([System.IO.File]::ReadAllText((Join-Path $Work 'stdin.txt'))).Trim())
     Write-Output ("REAL_ARGS=" + ([System.IO.File]::ReadAllText((Join-Path $Work 'args.txt'))).Trim())
     $slow = Join-Path $Work 'slowcurl.cmd'
@@ -226,6 +234,10 @@ if [ "$(get_field REAL)" = "skip" ]; then
 else
     assert_eq "код и HTTP-код" "0|200" "$(get_field REAL_RC)"
     assert_eq "ключ — заголовком в stdin" 'header = "Authorization: Bearer k-123"' "$(get_field REAL_STDIN)"
+    # 104 = 'h'. BOM (239) в начале конфига curl отвергает целиком — живой прогон
+    # 2026-10-02 упал на этом при консоли в UTF-8, а проверка выше BOM не видит:
+    # ReadAllText срезает его молча.
+    assert_eq "stdin curl'а начинается без BOM" "104" "$(get_field REAL_STDIN_FIRST)"
     assert_contains "конфиг со stdin" "--config - -sS" "$(get_field REAL_ARGS)"
     assert_not_contains "ключа нет в аргументах" "k-123" "$(get_field REAL_ARGS)"
     assert_eq "отмена убивает curl быстро" "True|1" "$(get_field CANCEL)"

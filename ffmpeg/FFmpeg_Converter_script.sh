@@ -148,6 +148,20 @@ if [ -f "${_ffconv_script_dir}/asr_client.sh" ]; then
 	source "${_ffconv_script_dir}/asr_client.sh"
 fi
 
+# --remote-selftest проверяет службу конвертации, и распознавание при нём не
+# включается: иначе самопроверка отказывала с неверной причиной («[remote]
+# выключен» — его выключил режим распознавания) и оставляла каталог прогона.
+if [ "${asr_enabled:-no}" = "yes" ] && [ "${FFCONV_REMOTE_SELFTEST:-}" = "1" ]; then
+	echo "[ПРЕДУПРЕЖДЕНИЕ] --remote-selftest: [asr] enabled = yes не действует — проверяется служба конвертации."
+	asr_enabled="no"
+fi
+# Распознавание не конвертирует: [split], скорость и контейнер к нему не относятся,
+# и их проверки ниже (чч-мм-сс, диапазон скорости, контейнер с кодеками) не должны
+# останавливать режим из-за настроек, которые он не применяет.
+if [ "${asr_enabled:-no}" = "yes" ]; then
+	start_coding=":-:"; length_coding=":-:"; playback_speed=":-:1.0"; output_container=":-:mp4"
+fi
+
 # --- Парсинг настроек (формат :+:value или :-:value) ---
 IFS=':' read -r foo video_codec_status video_codec_value <<< "$video_codec"
 IFS=':' read -r foo video_number_frames_status video_number_frames_value <<< "$video_number_frames"
@@ -666,6 +680,8 @@ _cleanup_on_int() {
 	[ -n "$results_dir" ] && rm -rf "$results_dir"
 	[ -n "${collisions_file:-}" ] && rm -f "$collisions_file"
 	[ -n "${ASR_RUN_DIR:-}" ] && rm -rf "$ASR_RUN_DIR"
+	# Прерванная публикация расшифровки: .ffconv-partial-* в назначении.
+	[ -n "${ASR_TMP_TXT:-}" ] && rm -f "$ASR_TMP_JSON" "$ASR_TMP_TXT"
 	exit 130
 }
 trap _cleanup_on_int INT TERM

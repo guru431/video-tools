@@ -78,6 +78,8 @@ assert_not_contains "целиком — без -ss" "-ss" "$_ff"
 assert_contains "сводка" "Обработано:  1" "$RUN_OUT"
 assert_not_contains "ключ не печатается" "int-secret-key" "$RUN_OUT"
 assert_empty "временных файлов в назначении нет" "$(find "$OUT" -name '.ffconv-partial-*')"
+# Мок пишет часть в 18 байт: отправка на 1 Мбит/с — секунда сверх 1800 + 300.
+assert_contains "--max-time учитывает отправку части" "--max-time 2101" "$(cat "$WORK/curl.log" 2>/dev/null)"
 
 # ══════════════════════════════════════════════════════════════
 suite "длинная запись — равные части, смещения в JSON и шапке"
@@ -116,6 +118,15 @@ reset_dirs; ok_routes; : > "$IN/mute.mp4"
 run_asr 'export MOCK_FFMPEG_NO_AUDIO=1'
 assert_eq "код 1" "1" "$RUN_RC"
 assert_contains "причина" "нет звуковой дорожки" "$RUN_OUT"
+posts; assert_eq "запроса нет" "0" "$POSTS"
+
+# ══════════════════════════════════════════════════════════════
+suite "сбой извлечения звука — причина из stderr ffmpeg"
+# ══════════════════════════════════════════════════════════════
+reset_dirs; ok_routes; : > "$IN/bad.mp4"
+run_asr 'export MOCK_FFMPEG_FAIL=1 MOCK_FFMPEG_ERR="moov atom not found"'
+assert_eq "код 1" "1" "$RUN_RC"
+assert_contains "причина названа" "не удалось извлечь звук (часть 1/1): moov atom not found" "$RUN_OUT"
 posts; assert_eq "запроса нет" "0" "$POSTS"
 
 # ══════════════════════════════════════════════════════════════
@@ -165,6 +176,8 @@ assert_eq "код 0" "0" "$RUN_RC"
 assert_contains "план" "[DRY-RUN] a.mp4: частей 3" "$RUN_OUT"
 assert_contains "команда ffmpeg" "-c:a flac part_002.flac" "$RUN_OUT"
 assert_contains "запрос" "speech/transcriptions" "$RUN_OUT"
+# Части нет — размер оценён сверху: 1201 с × 32000 байт/с на 1 Мбит/с = 308 с.
+assert_contains "--max-time с оценкой отправки" "--max-time 2408" "$RUN_OUT"
 assert_not_contains "ключа в выводе нет" "int-secret-key" "$RUN_OUT"
 posts; assert_eq "отправки нет" "0" "$POSTS"
 assert_empty "файлов нет" "$(ls -A "$OUT")"
@@ -193,6 +206,47 @@ assert_contains "[remote] не используется — сказано" "[re
 assert_not_contains "служба конвертации не опрашивалась" "/capabilities" "$(cat "$WORK/curl.log" 2>/dev/null)"
 assert_contains "parallel_files назван" "parallel_files в режиме распознавания игнорируется" "$RUN_OUT"
 assert_eq "код 0" "0" "$RUN_RC"
+
+# ══════════════════════════════════════════════════════════════
+suite "настройки конвертации не останавливают распознавание"
+# ══════════════════════════════════════════════════════════════
+# [split] не в чч-мм-сс, скорость 0 и webm с libx264/aac — каждое останавливало
+# прогон до первого файла, хотя распознавание их не применяет.
+reset_dirs; ok_routes; : > "$IN/a.mp4"
+run_asr 'start_coding=":+:1:00:00"' 'length_coding=":+:00-00-00"' 'playback_speed=":+:0"' 'output_container=":+:webm"'
+assert_eq "код 0" "0" "$RUN_RC"
+assert_file_exists "расшифровка есть" "$OUT/a.txt"
+assert_not_contains "ошибок настроек нет" "[ОШИБКА]" "$RUN_OUT"
+
+# ══════════════════════════════════════════════════════════════
+suite "--remote-selftest при [asr] enabled = yes"
+# ══════════════════════════════════════════════════════════════
+# Самопроверка — про службу конвертации: распознавание не включается, причина
+# отказа — настоящая, каталога прогона распознавания не остаётся.
+reset_dirs; ok_routes; rm -rf "$WORK/tmp"; mkdir -p "$WORK/tmp"
+run_asr 'export FFCONV_REMOTE_SELFTEST=1 TMPDIR="$WORK/tmp"'
+assert_eq "код 1" "1" "$RUN_RC"
+assert_contains "распознавание не включено — сказано" "[asr] enabled = yes не действует" "$RUN_OUT"
+assert_contains "причина — [remote] выключен" "--remote-selftest требует [remote] enabled = yes" "$RUN_OUT"
+assert_not_contains "сервер распознавания не опрашивался" "speech/limits" "$(cat "$WORK/curl.log" 2>/dev/null)"
+assert_empty "каталога прогона распознавания нет" "$(find "$WORK/tmp" -maxdepth 1 -name 'ffconv_asr.*')"
+
+# ══════════════════════════════════════════════════════════════
+suite "Ctrl+C во время публикации — временных файлов в назначении нет"
+# ══════════════════════════════════════════════════════════════
+# mv расшифровки шлёт скрипту SIGINT, как Ctrl+C: trap обязан убрать
+# .ffconv-partial-*.txt/.asr.json, которые публикация ещё не переименовала.
+reset_dirs; ok_routes; : > "$IN/a.mp4"
+mkdir -p "$WORK/intmv"
+cat > "$WORK/intmv/mv" <<EOF
+#!/bin/bash
+case "\$*" in *.asr.json) kill -INT "\$PPID"; exit 1 ;; esac
+exec "$(command -v mv)" "\$@"
+EOF
+chmod +x "$WORK/intmv/mv"
+run_asr 'export PATH="$WORK/intmv:$PATH"'
+assert_eq "прерван — код 130" "130" "$RUN_RC"
+assert_empty "временных файлов в назначении нет" "$(find "$OUT" -name '.ffconv-partial-*')"
 
 rm -rf "$WORK"
 summary

@@ -1636,7 +1636,12 @@ $buttonRun.Add_Click({
 
     # ---- Валидация числовых полей (до запуска — иначе ошибка ffmpeg на каждом файле) ----
     $numErr = $null
-    if     ($checkAudioBitrate.Checked    -and $textAudioBitrate.Text    -notmatch '^\d+$')            { $numErr = "Аудио битрейт должен быть целым числом (кбит/с)" }
+    # Распознавание не конвертирует: поля конвертации ему не мешают (воркер их тоже не
+    # проверяет), а «Сколько говорящих» — шаблоном: [int64] на двадцати цифрах бросал.
+    if ($chkAsr.Checked) {
+        if ($txtAsrSpeakers.Text.Trim() -and $txtAsrSpeakers.Text.Trim() -notmatch '^0*([1-9]|[1-4][0-9]|50)\z') { $numErr = "«Сколько говорящих» — целое число от 1 до 50 или пусто (сервер определит сам)" }
+    }
+    elseif ($checkAudioBitrate.Checked    -and $textAudioBitrate.Text    -notmatch '^\d+$')            { $numErr = "Аудио битрейт должен быть целым числом (кбит/с)" }
     elseif ($checkAudioSampleRate.Checked -and $textAudioSampleRate.Text -notmatch '^\d+$')            { $numErr = "Частота дискретизации должна быть целым числом (Гц)" }
     elseif ($checkFrameRate.Checked       -and $textFrameRate.Text       -notmatch '^\d+(\.\d+)?$')    { $numErr = "Кадры/с должны быть числом" }
     elseif ($checkVideoBitrate.Checked    -and $textVideoBitrate.Text    -notmatch '^\d+$')            { $numErr = "Видео битрейт должен быть целым числом (кбит/с)" }
@@ -1660,7 +1665,6 @@ $buttonRun.Add_Click({
     elseif ($checkVideoResolution.Checked -and $comboVideoResolution.Text -notmatch '^\d+x\d+$') { $numErr = "Разрешение задаётся как ШИРИНАxВЫСОТА без пробелов (например 1280x720)" }
     elseif ($checkMultithreads.Checked    -and $textThreads.Text          -notmatch '^\d+$')     { $numErr = "Потоки ffmpeg должны быть целым числом" }
     elseif ($chkRemote.Checked            -and $txtRemoteWait.Text        -notmatch '^\d+$')     { $numErr = "«Ждать карту, сек» должно быть целым числом секунд" }
-    elseif ($chkAsr.Checked -and $txtAsrSpeakers.Text.Trim() -and (($txtAsrSpeakers.Text.Trim() -notmatch '^[0-9]+$') -or ([int64]$txtAsrSpeakers.Text.Trim() -lt 1) -or ([int64]$txtAsrSpeakers.Text.Trim() -gt 50))) { $numErr = "«Сколько говорящих» — целое число от 1 до 50 или пусто (сервер определит сам)" }
     if ($numErr) {
         [System.Windows.Forms.MessageBox]::Show($numErr, "Проверка настроек", "OK", "Warning") | Out-Null
         return

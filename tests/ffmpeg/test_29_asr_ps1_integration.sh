@@ -6,9 +6,9 @@
 # выходов, исходы «файл / прогон», части, сводка и код возврата. Те же
 # сценарии, что test_28 для .sh: файловый цикл .ps1 — основной путь в
 # Windows (GUI и EXE). Один процесс PowerShell на сценарий: воркер кончается exit.
-# Исход сверяется по счётчику «Ошибки» в сводке, а не по коду процесса: `exit`
-# дот-сорснутого воркера в PS 5.1 под -File даёт процессу 0 — давний дефект
-# CLI-обёртки, записан в FINDINGS.md (2026-10-02).
+# Harness передаёт код воркера процессу так же, как FFmpeg_Converter_run_v19.ps1
+# (`exit` дот-сорснутого скрипта под -File иначе даёт 0); последний сюит
+# проверяет код возврата самого run_v19.ps1.
 # ============================================================
 
 TESTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -60,12 +60,16 @@ $remote_api_key_command = ''; $remote_prefer = 'auto'; $remote_wait_timeout = '1
 $remote_stall_timeout = '900'; $remote_on_failure = 'abort'
 $asr_enabled = 'yes'; $asr_endpoint = 'https://asr.example:30010'; $asr_api_key = 'int-secret-key'
 $asr_api_key_command = ''; $asr_pinned_pubkey = ''; $asr_language = 'ru'; $asr_diarize = 'yes'; $asr_num_speakers = ''
+# Conversion settings that used to stop the run before the first file, though ASR does not use them.
+if ($env:ASR_T_BADCONV) { $start_coding = ':+:1:00:00'; $length_coding = ':+:00-00-00'; $playback_speed = ':+:0'; $output_container = ':+:webm' }
 . $Module
 # The network: limits from the fixture; transcription answers with ASR_T_CODE.
+# A pressed Stop (GUI cancel file) is honoured like the real Invoke-AsrCurl does.
 function Invoke-AsrCurl {
     param([string]$Dir, [string[]]$CurlArgs)
     $url = $CurlArgs[-1]
     Add-Content -LiteralPath $env:ASR_T_LOG -Value $url
+    if ($script:AsrCancelCheck -and (& $script:AsrCancelCheck)) { return [pscustomobject]@{ Rc = -1; Code = '000'; Err = 'cancelled'; Cancelled = $true } }
     $i = [array]::IndexOf($CurlArgs, '-o')
     $o = Join-Path $Dir $CurlArgs[$i + 1]
     if ($url -like '*/speech/limits') {
@@ -75,12 +79,16 @@ function Invoke-AsrCurl {
     $code = $env:ASR_T_CODE
     $body = if ($code -eq '200') { [System.IO.File]::ReadAllText((Join-Path $Fix 'basic.json')) } else { '{"detail":"bad-thing"}' }
     [System.IO.File]::WriteAllText($o, $body)
+    # Stop pressed while the first part was being recognised.
+    if ($env:ASR_T_CANCEL_AFTER_POST) { [System.IO.File]::WriteAllText($env:FFMPEG_GUI_CANCEL_FILE, '') }
     return [pscustomobject]@{ Rc = 0; Code = $code; Err = ''; Cancelled = $false }
 }
+$global:LASTEXITCODE = 0
 . $Worker
+exit $LASTEXITCODE
 PSEOF
 
-# RUN_OUT ← вывод воркера; $1 — HTTP-код распознавания,
+# RUN_OUT ← вывод воркера, RUN_RC ← код процесса; $1 — HTTP-код распознавания,
 # $2 — overwrite_existing, $3 — каталог назначения (по умолчанию $OUT).
 run_ps() {
     local code="$1" ow="${2:-no}" out="${3:-$OUT}"
@@ -90,6 +98,7 @@ run_ps() {
         -Module "$(_w "$PROJECT_DIR/ffmpeg/asr_client.ps1")" -Worker "$(_w "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1")" \
         -MockFf "$(_w "$TESTS_DIR/mocks/ffmpeg.cmd")" -Fix "$(_w "$FIX")" \
         -In "$(_w "$IN")" -Out "$(_w "$out")" -Overwrite "$ow" > "$WORK/run.raw" 2>&1 < /dev/null
+    RUN_RC=$?
     RUN_OUT="$(tr -d '\r' < "$WORK/run.raw")"
 }
 reset_dirs() { rm -rf "$IN" "$OUT" "$WORK/ff.log" "$WORK/curl.log"; mkdir -p "$IN" "$OUT"; }
@@ -101,6 +110,7 @@ suite "ASR PS1: файл целиком — кириллица и пробел, 
 reset_dirs; mkdir -p "$IN/sub"; : > "$IN/sub/Встреча 1.mp4"
 run_ps 200
 assert_contains "ошибок нет" "Ошибки:      0" "$RUN_OUT"
+assert_eq "код возврата 0" "0" "$RUN_RC"
 _txt="$OUT/sub/Встреча 1.txt"
 assert_file_exists "расшифровка в зеркале подпапки" "$_txt"
 assert_eq "шапка называет исходный файл" "# Расшифровка: Встреча 1.mp4" "$(head -1 "$_txt" 2>/dev/null)"
@@ -130,6 +140,7 @@ suite "ASR PS1: два входа на один .txt"
 reset_dirs; : > "$IN/x.mp4"; : > "$IN/x.mkv"
 run_ps 200
 assert_contains "коллизия — одна ошибка" "Ошибки:      1" "$RUN_OUT"
+assert_eq "коллизия — код 1" "1" "$RUN_RC"
 assert_contains "конфликт назван" "конфликт выходов" "$RUN_OUT"
 posts; assert_eq "отправлен только первый" "1" "$POSTS"
 
@@ -139,6 +150,7 @@ suite "ASR PS1: 400 — провален файл, прогон продолжа
 reset_dirs; : > "$IN/a.mp4"; : > "$IN/b.mp4"
 run_ps 400
 assert_contains "две ошибки" "Ошибки:      2" "$RUN_OUT"
+assert_eq "код 1" "1" "$RUN_RC"
 posts; assert_eq "оба файла отправлены" "2" "$POSTS"
 assert_contains "detail дословно" "HTTP 400: bad-thing" "$RUN_OUT"
 assert_not_contains "прогон не останавливался" "Остановлено:" "$RUN_OUT"
@@ -149,6 +161,7 @@ suite "ASR PS1: 401 — прогон остановлен, остаток не �
 reset_dirs; : > "$IN/a.mp4"; : > "$IN/b.mp4"
 run_ps 401
 assert_contains "одна ошибка" "Ошибки:      1" "$RUN_OUT"
+assert_eq "код 1" "1" "$RUN_RC"
 posts; assert_eq "только один запрос" "1" "$POSTS"
 assert_contains "причина в сводке" "Остановлено: ключ не принят (HTTP 401)" "$RUN_OUT"
 assert_contains "остаток посчитан" "Не обработано: 1" "$RUN_OUT"
@@ -177,6 +190,68 @@ assert_file_exists "рядом с записью" "$IN/a.txt"
 rm -f "$WORK/curl.log"
 run_ps 200 no "$IN"
 posts; assert_eq "повтор in-place не отправляет" "0" "$POSTS"
+
+# ══════════════════════════════════════════════════════════════
+suite "ASR PS1: сбой извлечения звука — причина из stderr ffmpeg"
+# ══════════════════════════════════════════════════════════════
+reset_dirs; : > "$IN/bad.mp4"
+MOCK_FFMPEG_FAIL=1 MOCK_FFMPEG_ERR="moov atom not found" run_ps 200
+assert_eq "код 1" "1" "$RUN_RC"
+assert_contains "причина названа" "не удалось извлечь звук (часть 1/1): moov atom not found" "$RUN_OUT"
+posts; assert_eq "запроса нет" "0" "$POSTS"
+
+# ══════════════════════════════════════════════════════════════
+suite "ASR PS1: настройки конвертации не останавливают распознавание"
+# ══════════════════════════════════════════════════════════════
+reset_dirs; : > "$IN/a.mp4"
+ASR_T_BADCONV=1 run_ps 200
+assert_eq "код 0" "0" "$RUN_RC"
+assert_file_exists "расшифровка есть" "$OUT/a.txt"
+assert_not_contains "ошибок настроек нет" "[ОШИБКА]" "$RUN_OUT"
+
+# ══════════════════════════════════════════════════════════════
+suite "ASR PS1: «Остановить» во время выбора адреса — отмена, а не сбой"
+# ══════════════════════════════════════════════════════════════
+reset_dirs; : > "$IN/a.mp4"; : > "$WORK/cancel"; rm -f "$WORK/progress.json"
+FFMPEG_GUI_PROGRESS_FILE="$(_w "$WORK/progress.json")" FFMPEG_GUI_CANCEL_FILE="$(_w "$WORK/cancel")" run_ps 200
+# ConvertTo-Json пишет `"state":  "cancelled"` — пробелы снимаются перед сравнением.
+_prog="$(tr -d ' \r\n' < "$WORK/progress.json" 2>/dev/null)"
+assert_contains "state=cancelled" '"state":"cancelled"' "$_prog"
+assert_not_contains "не failed" '"state":"failed"' "$_prog"
+assert_eq "опрошен один адрес" "1" "$(grep -c 'speech/limits' "$WORK/curl.log" 2>/dev/null)"
+rm -f "$WORK/cancel"
+# Отмена во время первой из трёх частей: следующая часть не извлекается и не отправляется.
+reset_dirs; : > "$IN/long.mp4"; rm -f "$WORK/progress.json"
+MOCK_FFMPEG_DURATION=01:00:00.00 ASR_T_CANCEL_AFTER_POST=1 \
+FFMPEG_GUI_PROGRESS_FILE="$(_w "$WORK/progress.json")" FFMPEG_GUI_CANCEL_FILE="$(_w "$WORK/cancel")" run_ps 200
+posts; assert_eq "отправлена только первая часть" "1" "$POSTS"
+assert_eq "извлечена только первая часть" "1" "$(grep -c -- '-c:a flac' "$WORK/ff.log" 2>/dev/null)"
+assert_contains "state=cancelled" '"state":"cancelled"' "$(tr -d ' \r\n' < "$WORK/progress.json" 2>/dev/null)"
+rm -f "$WORK/cancel"
+
+# ══════════════════════════════════════════════════════════════
+suite "ASR PS1: --remote-selftest при [asr] enabled = yes"
+# ══════════════════════════════════════════════════════════════
+reset_dirs
+FFCONV_REMOTE_SELFTEST=1 run_ps 200
+assert_eq "код 1" "1" "$RUN_RC"
+assert_contains "распознавание не включено — сказано" "[asr] enabled = yes не действует" "$RUN_OUT"
+assert_contains "причина — [remote] выключен" "--remote-selftest требует [remote] enabled = yes" "$RUN_OUT"
+assert_not_contains "сервер распознавания не опрашивался" "speech/limits" "$(cat "$WORK/curl.log" 2>/dev/null)"
+
+# ══════════════════════════════════════════════════════════════
+suite "CLI .ps1: код возврата воркера доходит до процесса"
+# ══════════════════════════════════════════════════════════════
+# Настоящая обёртка run_v19.ps1 рядом с настоящим воркером: источник не найден —
+# воркер делает `exit 1`. Под -File код дот-сорснутого скрипта терялся, и
+# cron/планировщик видели 0 на любом провале.
+mkdir -p "$WORK/cli"
+cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v19.ps1" "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1" "$WORK/cli/"
+printf '[folders]\nsource = %s\n' "$(_w "$WORK/no-such-dir")" > "$WORK/cli/config.ini"
+"$PS_BIN" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(_w "$WORK/cli/FFmpeg_Converter_run_v19.ps1")" > "$WORK/cli.raw" 2>&1 < /dev/null
+_rc=$?
+assert_eq "источник не найден — код 1" "1" "$_rc"
+assert_contains "причина напечатана" "Папка источника не найдена" "$(tr -d '\r' < "$WORK/cli.raw")"
 
 rm -f "$HARNESS"
 rm -rf "$WORK"

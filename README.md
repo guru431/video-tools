@@ -286,9 +286,9 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 | `test_24_gui_worker_runspace` | Воркер запускается ТАК ЖЕ, как из GUI (AddScript-строка): `$PSScriptRoot` пуст, stderr не оседает в `Streams.Error` |
 | `test_25_asr_client` | Распознавание речи: клиент (.sh) — ключи, адреса, пределы, план частей, curl, исходы, сборка текста |
 | `test_26_asr_ps1` | Распознавание речи: PS1-модуль — те же случаи и фикстуры, запуск curl.exe и отмена |
-| `test_27_asr_parity` | Распознавание речи: .sh и .ps1 дают одинаковые план частей, аргументы curl, исходы и текст |
-| `test_28_asr_integration` | Распознавание речи: сквозной прогон script.sh с моками ffmpeg и curl |
-| `test_29_asr_ps1_integration` | Распознавание речи: сквозной прогон FFmpeg_Converter_script.ps1 (мок ffmpeg.cmd, подменённая сеть) |
+| `test_27_asr_parity` | Распознавание речи: .sh и .ps1 дают одинаковые план частей, аргументы curl, исходы, текст и разбор странных ответов сервера |
+| `test_28_asr_integration` | Распознавание речи: сквозной прогон script.sh с моками ffmpeg и curl, Ctrl+C во время публикации |
+| `test_29_asr_ps1_integration` | Распознавание речи: сквозной прогон FFmpeg_Converter_script.ps1 (мок ffmpeg.cmd, подменённая сеть), отмена из GUI, код возврата CLI .ps1 |
 
 ### Тест-модули YT-DLP (15 файлов)
 

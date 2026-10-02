@@ -43,6 +43,12 @@ $l = Get-AsrLimits ([System.IO.File]::ReadAllText((Join-Path $Fix 'limits.json')
 Write-Output ("LIM=" + (J @($l.MaxSeconds, $l.MaxBytes, $l.JobTimeout, $l.Device, $l.Diarization, $l.Ver)))
 Write-Output ("LANGS=" + $l.Languages)
 Write-Output ("LIM_BAD=" + [string]($null -eq (Get-AsrLimits '<html>502</html>')))
+$o = Get-AsrLimits '{"max_seconds":"3600","job_timeout_sec":1800.7,"device":"CPU","languages":null,"max_bytes":"x"}'
+Write-Output ("LIM_ODD=" + (J @($o.MaxSeconds, $o.MaxBytes, $o.JobTimeout, $o.Languages, (Get-AsrPlan 0 $o.MaxSeconds $o.JobTimeout $o.Device).Whole)))
+$rej = @('{"max_seconds":"abc","job_timeout_sec":1800}', '{"max_seconds":null,"job_timeout_sec":1800}',
+         '{"max_seconds":-5,"job_timeout_sec":1800}', '{"max_seconds":99999999999999999999,"job_timeout_sec":1800}',
+         '{"max_seconds":1,"job_timeout_sec":1800}', '{"max_seconds":3600,"job_timeout_sec":1,"device":"cpu"}')
+Write-Output ("LIM_REJ=" + (J @($rej | ForEach-Object { [int]($null -eq (Get-AsrLimits $_)) })))
 
 foreach ($d in 2999, 3000, 3001, 5400) { Write-Output ("PLAN_cpu_$d=" + ((Get-AsrPlan $d 3600 1800 'cpu').Parts -join ' ')) }
 $p = Get-AsrPlan 3001 3600 1800 'cpu'
@@ -57,6 +63,7 @@ Write-Output ("ARGS_PIN=" + (J @(Get-AsrCurlArgs 'https://h.example:30010' 'part
 Write-Output ("ARGS_HTTP=" + (J @(Get-AsrCurlArgs 'http://h.example:30000' 'part_000.flac' 'resp_000.json')))
 $asr_diarize = 'no'; $asr_num_speakers = '4'
 Write-Output ("ARGS_N=" + (J @(Get-AsrCurlArgs 'http://h.example:30000' 'part_001.flac' 'resp_001.json')))
+Write-Output ("ARGS_BYTES=" + (J @(Get-AsrCurlArgs 'http://h.example:30000' 'part_000.flac' 'resp_000.json' 65000000)))
 Write-Output ("FF=" + (J @(Get-AsrFfArgs '/in/a b.mp4' 1001 999 3 'part_001.flac')))
 Write-Output ("FF_LAST=" + (J @(Get-AsrFfArgs '/in/a.mp3' 2002 '' 3 'part_002.flac')))
 $asr_diarize = 'yes'; $asr_num_speakers = ''; $asr_pinned_pubkey = ''
@@ -89,7 +96,8 @@ try {
 } catch { Write-Output 'TWO=parse-error' }
 
 $vc = @('https://a:1|ru|yes|', '|ru|yes|', 'ftp://a|ru|yes|', 'https://a:1||yes|', 'https://a:1|ru|maybe|',
-        'https://a:1|ru|yes|0', 'https://a:1|ru|yes|51', 'https://a:1|ru|yes|abc', 'https://a:1|ru|yes|1', 'https://a:1|ru|yes|50')
+        'https://a:1|ru|yes|0', 'https://a:1|ru|yes|51', 'https://a:1|ru|yes|abc', 'https://a:1|ru|yes|1', 'https://a:1|ru|yes|50',
+        'https://a:1|ru|yes|99999999999999999999', 'https://a:1|ru|yes|05')
 for ($i = 0; $i -lt $vc.Count; $i++) {
     $asr_endpoint, $asr_language, $asr_diarize, $asr_num_speakers = $vc[$i].Split('|')
     $ok = Test-AsrConfigValues
@@ -127,7 +135,19 @@ if ([Environment]::OSVersion.Platform -eq 'Win32NT') {
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $r = Invoke-AsrCurl $Work @('-sS', 'https://h.example/x')
     Write-Output ("CANCEL=" + $r.Cancelled + '|' + [int]($sw.Elapsed.TotalSeconds -lt 5))
+    # The run dir is removed right after a cancel: the killed process must be gone by then.
+    Write-Output ("CANCEL_DEAD=" + [int]($r.Pid -gt 0 -and $null -eq (Get-Process -Id $r.Pid -ErrorAction SilentlyContinue)))
+    # Audio extraction: the same cancellation, and the first non-empty stderr line as the reason.
+    $ffmpeg = Join-Path $Work 'slowff.cmd'
+    [System.IO.File]::WriteAllText($ffmpeg, "@echo off`r`nping -n 8 127.0.0.1 >nul`r`n")
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $x = Invoke-AsrExtract @('-nostdin', '-i', 'in.mp4', 'out.flac')
+    Write-Output ("EX_CANCEL=" + $x.Cancelled + '|' + [int]($sw.Elapsed.TotalSeconds -lt 5))
     $script:AsrCancelCheck = $null
+    $ffmpeg = Join-Path $Work 'badff.cmd'
+    [System.IO.File]::WriteAllText($ffmpeg, "@echo off`r`necho.>&2`r`necho moov atom not found>&2`r`necho Error opening input file>&2`r`nexit /b 3`r`n")
+    $x = Invoke-AsrExtract @('-nostdin', '-i', 'in.mp4', 'out.flac')
+    Write-Output ("EX_FAIL=" + $x.Rc + '|' + $x.Err + '|' + $x.Cancelled)
     Remove-Item Env:CURL_BIN
 } else { Write-Output 'REAL=skip' }
 
@@ -137,6 +157,7 @@ $script:codes = @(); $script:calls = 0; $script:body = ''
 function Invoke-AsrCurl {
     param([string]$Dir, [string[]]$CurlArgs)
     $script:calls++
+    if ($script:cancelAll) { return [pscustomobject]@{ Rc = -1; Code = '000'; Err = 'cancelled'; Cancelled = $true } }
     $url = $CurlArgs[-1]
     if ($url -like 'https://a.example*') { return [pscustomobject]@{ Rc = 7; Code = '000'; Err = 'Failed to connect'; Cancelled = $false } }
     $i = [array]::IndexOf($CurlArgs, '-o')
@@ -151,6 +172,11 @@ function Invoke-AsrCurl {
     return [pscustomobject]@{ Rc = 0; Code = $code; Err = ''; Cancelled = $false }
 }
 $asr_endpoint = 'https://a.example:30010 https://b.example:30010'
+# Stop pressed while the first address is being asked: no second address, the reason is "cancelled".
+$script:cancelAll = $true; $script:calls = 0
+$ok = Select-AsrEndpoint
+Write-Output ("SEL_CANCEL=" + $ok + '|' + $script:calls + '|' + $script:AsrStopReason)
+$script:cancelAll = $false
 $ok = Select-AsrEndpoint
 Write-Output ("SEL=" + $ok + '|' + $script:AsrBase + '|' + $script:AsrLimits.JobTimeout)
 $env:ASR_RETRY_WAIT = '0'
@@ -178,6 +204,8 @@ assert_eq "пустая строка — ни одного" "0" "$(get_field EP_
 assert_eq "пределы" "3600|524288000|1800|cpu|true|large-v3-turbo.cpu.int8.v1" "$(get_field LIM)"
 assert_eq "языки" "en ru" "$(get_field LANGS)"
 assert_eq "не пределы — null" "True" "$(get_field LIM_BAD)"
+assert_eq "числа строкой, CPU, languages: null, нечисловой max_bytes" "3600|0|1800||3000" "$(get_field LIM_ODD)"
+assert_eq "нечисловое, null, отрицательное, огромное, W < 2 — не пределы (без исключения)" "1|1|1|1|1|1" "$(get_field LIM_REJ)"
 
 suite "ASR PS1: план частей — те же числа, что в .sh"
 assert_eq "2999" "0:2999" "$(get_field PLAN_cpu_2999)"
@@ -195,6 +223,7 @@ assert_eq "https без пина" \
 assert_contains "https с пином" "--max-time|2100|-k|--pinnedpubkey|sha256//AAA=|-F" "$(get_field ARGS_PIN)"
 assert_not_contains "http — без -k" "|-k|" "$(get_field ARGS_HTTP)"
 assert_contains "diarize=false и num_speakers" "-F|diarize=false|-F|num_speakers=4|-o" "$(get_field ARGS_N)"
+assert_contains "--max-time с отправкой части" "--max-time|2620|" "$(get_field ARGS_BYTES)"
 assert_eq "извлечение части" "-nostdin|-v|error|-y|-ss|1001|-t|999|-i|/in/a b.mp4|-map|0:a:0|-vn|-ac|1|-ar|16000|-c:a|flac|part_001.flac" "$(get_field FF)"
 assert_eq "последняя часть — без -t" "-nostdin|-v|error|-y|-ss|2002|-i|/in/a.mp3|-map|0:a:0|-vn|-ac|1|-ar|16000|-c:a|flac|part_002.flac" "$(get_field FF_LAST)"
 
@@ -221,11 +250,12 @@ assert_eq "одна часть — JSON без изменений" "$(cat "$FIX/
 assert_eq "две части — валидная обёртка" "2|1001" "$(get_field TWO)"
 
 suite "ASR PS1: проверка конфига и ключ из команды"
-_want=(0 1 1 1 1 1 1 1 0 0)
-for _i in 0 1 2 3 4 5 6 7 8 9; do assert_eq "случай $_i" "${_want[_i]}" "$(get_field "VC_$_i")"; done
+_want=(0 1 1 1 1 1 1 1 0 0 1 0)
+for _i in 0 1 2 3 4 5 6 7 8 9 10 11; do assert_eq "случай $_i" "${_want[_i]}" "$(get_field "VC_$_i")"; done
 assert_eq "api_key_command" "True|cmd-key" "$(get_field KEYCMD)"
 
 suite "ASR PS1: выбор адреса и запрос части (подменённый curl)"
+assert_eq "«Остановить» при выборе адреса — конец выбора" "False|1|отменено пользователем" "$(get_field SEL_CANCEL)"
 assert_eq "недоступный первый пропущен" "True|https://b.example:30010|1800" "$(get_field SEL)"
 assert_eq "два 503 и успех" "ok|3" "$(get_field TP_RETRY)"
 assert_eq "503 и после повторов — прогон" "stop|3" "$(get_field TP_FULL)"
@@ -244,6 +274,9 @@ else
     assert_contains "конфиг со stdin" "--config - -sS" "$(get_field REAL_ARGS)"
     assert_not_contains "ключа нет в аргументах" "k-123" "$(get_field REAL_ARGS)"
     assert_eq "отмена убивает curl быстро" "True|1" "$(get_field CANCEL)"
+    assert_eq "после отмены процесса curl нет" "1" "$(get_field CANCEL_DEAD)"
+    assert_eq "отмена прерывает извлечение звука" "True|1" "$(get_field EX_CANCEL)"
+    assert_eq "сбой извлечения: код и первая непустая строка stderr" "3|moov atom not found|False" "$(get_field EX_FAIL)"
 fi
 
 rm -rf "$WORK"

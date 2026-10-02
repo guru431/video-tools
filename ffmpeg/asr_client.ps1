@@ -43,19 +43,38 @@ function Get-AsrTlsArgs {
 	return @()
 }
 
+# Целая часть числа из ответа — по правилам asr_int в .sh: до точки только цифры,
+# не больше 15, иначе $null. Прежний [double] бросал исключение на нечисловом
+# значении, и выбор адреса обрывался trap-ом воркера.
+function ConvertTo-AsrInt {
+	param($Value)
+	if ($null -eq $Value) { return $null }
+	$s = ([string]$Value).Split('.')[0]
+	if ($s -notmatch '^[0-9]{1,15}\z') { return $null }
+	return [int64]$s
+}
+
+# $null — не пределы: нет чисел или предел «целиком» меньше двух секунд (план
+# частей делил бы на ноль). Паритет с asr_parse_limits (test_27).
 function Get-AsrLimits {
 	param([string]$Body)
 	try { $j = $Body | ConvertFrom-Json } catch { return $null }
-	if ($null -eq $j -or $null -eq $j.max_seconds -or $null -eq $j.job_timeout_sec) { return $null }
-	return [pscustomobject]@{
-		MaxSeconds  = [int64][math]::Truncate([double]$j.max_seconds)
-		MaxBytes    = if ($null -ne $j.max_bytes) { [int64][math]::Truncate([double]$j.max_bytes) } else { [int64]0 }
-		JobTimeout  = [int64][math]::Truncate([double]$j.job_timeout_sec)
+	if ($null -eq $j) { return $null }
+	$ms = ConvertTo-AsrInt $j.max_seconds
+	$jt = ConvertTo-AsrInt $j.job_timeout_sec
+	if ($null -eq $ms -or $null -eq $jt) { return $null }
+	$mb = ConvertTo-AsrInt $j.max_bytes
+	$l = [pscustomobject]@{
+		MaxSeconds  = $ms
+		MaxBytes    = if ($null -ne $mb) { $mb } else { [int64]0 }
+		JobTimeout  = $jt
 		Device      = [string]$j.device
 		Languages   = (@($j.languages | Where-Object { $_ }) -join ' ')
 		Diarization = if ($null -ne $j.diarization) { ([string]$j.diarization).ToLowerInvariant() } else { '' }
 		Ver         = [string]$j.asr_ver
 	}
+	if ((Get-AsrPlan 0 $l.MaxSeconds $l.JobTimeout $l.Device).Whole -lt 2) { return $null }
+	return $l
 }
 
 # План частей — спека §6, та же целочисленная формула, что asr_plan_parts.
@@ -78,12 +97,14 @@ function Get-AsrPlan {
 }
 
 # Порядок — контракт с asr_curl_args (test_27). Часть и ответ — относительными
-# именами: curl запускается из каталога прогона (WorkingDirectory).
+# именами: curl запускается из каталога прогона (WorkingDirectory). $Bytes —
+# размер части: --max-time покрывает и отправку на канале от 1 Мбит/с (см. .sh).
 function Get-AsrCurlArgs {
-	param([string]$Base, [string]$Part, [string]$Out)
+	param([string]$Base, [string]$Part, [string]$Out, [int64]$Bytes = 0)
 	$d = if ($asr_diarize) { $asr_diarize } else { 'yes' }
 	$diar = if ($d -ceq 'yes') { 'true' } else { 'false' }
-	$a = @('-sS', '--connect-timeout', '10', '--max-time', [string]($script:AsrLimits.JobTimeout + 300))
+	$upload = [int64][math]::Floor(($Bytes + 124999) / 125000)
+	$a = @('-sS', '--connect-timeout', '10', '--max-time', [string]($script:AsrLimits.JobTimeout + 300 + $upload))
 	$a += @(Get-AsrTlsArgs $Base)
 	$a += @('-F', "file=@$Part;type=audio/flac", '-F', 'model=whisperx', '-F', "language=$asr_language", '-F', "diarize=$diar")
 	if ($asr_num_speakers) { $a += @('-F', "num_speakers=$asr_num_speakers") }
@@ -125,10 +146,10 @@ function Test-AsrConfigValues {
 	if (-not $asr_language) { $errors += '[asr] language пуст: укажите язык записи (ru, en).' }
 	$d = if ($asr_diarize) { $asr_diarize } else { 'yes' }
 	if ($d -cne 'yes' -and $d -cne 'no') { $errors += "[asr] diarize = '$asr_diarize': ожидается yes или no." }
-	if ($asr_num_speakers) {
-		if ($asr_num_speakers -notmatch '^[0-9]+$' -or [int64]$asr_num_speakers -lt 1 -or [int64]$asr_num_speakers -gt 50) {
-			$errors += "[asr] num_speakers = '$asr_num_speakers': целое от 1 до 50 или пусто."
-		}
+	# Шаблоном, а не [int64]: на двадцати цифрах каст бросал исключение. Тот же
+	# шаблон — в asr_validate_config (.sh) и в проверке полей GUI.
+	if ($asr_num_speakers -and $asr_num_speakers -notmatch '^0*([1-9]|[1-4][0-9]|50)\z') {
+		$errors += "[asr] num_speakers = '$asr_num_speakers': целое от 1 до 50 или пусто."
 	}
 	foreach ($m in $errors) { Write-Host "[ОШИБКА] $m" }
 	if ($errors.Count -gt 0) { $script:AsrPreflightError = $errors[0]; return $false }
@@ -190,7 +211,9 @@ function ConvertTo-AsrArgLine {
 # на stdin, а не аргументом. Запрос молчит до получаса: каждые 0.5 с проверяется
 # отмена ($script:AsrCancelCheck — кнопка «Остановить» GUI), раз в 5 с —
 # $script:AsrTick (строка прогресса). finally добивает curl при Ctrl+C в CLI:
-# CTRL_C в его скрытую консоль не доставляется.
+# CTRL_C в его скрытую консоль не доставляется. После Kill() — ожидание выхода:
+# Kill асинхронен, и живой curl держал бы файлы каталога прогона, который удаляют
+# следом. Pid в ответе на отмену — для теста, что процесс действительно мёртв.
 function Invoke-AsrCurl {
 	param([string]$Dir, [string[]]$CurlArgs)
 	$psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -225,9 +248,9 @@ function Invoke-AsrCurl {
 		$t0 = [DateTime]::UtcNow; $tick = 0
 		while (-not $p.WaitForExit(500)) {
 			if ($script:AsrCancelCheck -and (& $script:AsrCancelCheck)) {
-				try { $p.Kill() } catch {}
+				try { $p.Kill(); [void]$p.WaitForExit(5000) } catch {}
 				$done = $true
-				return [pscustomobject]@{ Rc = -1; Code = '000'; Err = 'отменено'; Cancelled = $true }
+				return [pscustomobject]@{ Rc = -1; Code = '000'; Err = 'отменено'; Cancelled = $true; Pid = $p.Id }
 			}
 			$el = [int]([DateTime]::UtcNow - $t0).TotalSeconds
 			if ($script:AsrTick -and $el -ge $tick + 5) { $tick = $el; & $script:AsrTick $el }
@@ -242,7 +265,44 @@ function Invoke-AsrCurl {
 		$done = $true
 		return [pscustomobject]@{ Rc = -2; Code = '000'; Err = $_.Exception.Message; Cancelled = $false }
 	} finally {
-		if (-not $done -and $p -and -not $p.HasExited) { try { $p.Kill() } catch {} }
+		if (-not $done -and $p -and -not $p.HasExited) { try { $p.Kill(); [void]$p.WaitForExit(5000) } catch {} }
+	}
+}
+
+# Извлечение звука части — процессом, а не `& $ffmpeg`: час записи кодируется во
+# FLAC десятки секунд, и «Остановить» GUI всё это время не действовал. Каждые
+# 0.5 с — проверка отмены; finally добивает ffmpeg при Ctrl+C в CLI (скрытая
+# консоль, как у curl). Err — первая непустая строка stderr: с -v error ffmpeg
+# печатает только ошибки, и первая из них — исходная (двойник asr_first_line).
+function Invoke-AsrExtract {
+	param([string[]]$FfArgs)
+	$psi = New-Object System.Diagnostics.ProcessStartInfo
+	$psi.FileName = $ffmpeg
+	$psi.Arguments = ConvertTo-AsrArgLine $FfArgs
+	$psi.UseShellExecute = $false
+	$psi.RedirectStandardError = $true
+	$psi.StandardErrorEncoding = New-Object System.Text.UTF8Encoding($false)
+	$psi.CreateNoWindow = $true
+	$p = $null; $done = $false
+	try {
+		$p = [System.Diagnostics.Process]::Start($psi)
+		$errTask = $p.StandardError.ReadToEndAsync()
+		while (-not $p.WaitForExit(500)) {
+			if ($script:AsrCancelCheck -and (& $script:AsrCancelCheck)) {
+				try { $p.Kill(); [void]$p.WaitForExit(5000) } catch {}
+				$done = $true
+				return [pscustomobject]@{ Rc = -1; Err = ''; Cancelled = $true }
+			}
+		}
+		$p.WaitForExit()
+		$done = $true
+		$err = [string](([string]$errTask.Result -split "`r?`n" | Where-Object { $_ } | Select-Object -First 1))
+		return [pscustomobject]@{ Rc = $p.ExitCode; Err = $err; Cancelled = $false }
+	} catch {
+		$done = $true
+		return [pscustomobject]@{ Rc = -2; Err = $_.Exception.Message; Cancelled = $false }
+	} finally {
+		if (-not $done -and $p -and -not $p.HasExited) { try { $p.Kill(); [void]$p.WaitForExit(5000) } catch {} }
 	}
 }
 
@@ -253,6 +313,11 @@ function Select-AsrEndpoint {
 		$lim = Join-Path $script:AsrRunDir 'limits.json'
 		Remove-Item -LiteralPath $lim -Force -ErrorAction SilentlyContinue
 		$r = Invoke-AsrCurl $script:AsrRunDir (@('-sS', '--connect-timeout', '5', '--max-time', '15') + @(Get-AsrTlsArgs $u) + @('-o', 'limits.json', '-w', '%{http_code}', "$u/speech/limits"))
+		# «Остановить» GUI — конец выбора, а не «адрес не ответил, пробуем следующий».
+		if ($r.Cancelled) {
+			$script:AsrStopReason = 'отменено пользователем'
+			return $false
+		}
 		if ($r.Rc -eq 90) {
 			$script:AsrStopReason = "сертификат $u не совпал с закреплённым ключом [asr] pinned_pubkey (curl 90) — соединение оборвано"
 			return $false
@@ -277,10 +342,20 @@ function Select-AsrEndpoint {
 	return $false
 }
 
+# Ответ сервера текстом для ConvertFrom-Json. Экранированный \u0000 снимается до
+# разбора: awk-сборка в .sh его пропускает (строки awk — Си-строки), а здесь NUL
+# доходил бы до текста, и расшифровки двух платформ разошлись бы. Чётность слэшей
+# перед ним — чтобы не тронуть литерал \\u0000 (слэш и «u0000»).
+function Read-AsrJsonText {
+	param([string]$File)
+	$t = [System.IO.File]::ReadAllText($File, [System.Text.Encoding]::UTF8)
+	return [regex]::Replace($t, '(?<!\\)((?:\\\\)*)\\u0000', '$1')
+}
+
 function Get-AsrDetail {
 	param([string]$File)
 	if (-not $File -or -not (Test-Path -LiteralPath $File)) { return '' }
-	try { $j = [System.IO.File]::ReadAllText($File, [System.Text.Encoding]::UTF8) | ConvertFrom-Json } catch { return '' }
+	try { $j = Read-AsrJsonText $File | ConvertFrom-Json } catch { return '' }
 	if ($j -and $j.detail -is [string]) { return $j.detail }
 	return ''
 }
@@ -307,14 +382,14 @@ function Get-AsrOutcome {
 }
 
 function Invoke-AsrTranscribePart {
-	param([string]$Part, [string]$Resp)
+	param([string]$Part, [string]$Resp, [int64]$Bytes = 0)
 	$tries = if ($env:ASR_RETRIES) { [int]$env:ASR_RETRIES } else { 5 }
 	$wait = if ($env:ASR_RETRY_WAIT) { [int]$env:ASR_RETRY_WAIT } else { 60 }
 	$respPath = Join-Path $script:AsrRunDir $Resp
 	$try = 1
 	while ($true) {
 		Remove-Item -LiteralPath $respPath -Force -ErrorAction SilentlyContinue
-		$r = Invoke-AsrCurl $script:AsrRunDir @(Get-AsrCurlArgs $script:AsrBase $Part $Resp)
+		$r = Invoke-AsrCurl $script:AsrRunDir @(Get-AsrCurlArgs $script:AsrBase $Part $Resp $Bytes)
 		if ($r.Cancelled) { return [pscustomobject]@{ Outcome = 'stop'; Reason = 'отменено пользователем' } }
 		if ($r.Rc -eq 0 -and $r.Code -eq '503' -and $try -le $tries) {
 			Write-Host "[ПРЕДУПРЕЖДЕНИЕ] Очередь сервера заполнена (HTTP 503) — повтор через $wait с (попытка $try из $tries)."
@@ -365,7 +440,7 @@ function Write-AsrTranscript {
 	$low = 0
 	$lowList = New-Object System.Collections.Generic.List[string]
 	for ($pi = 0; $pi -lt $np; $pi++) {
-		$r = [System.IO.File]::ReadAllText($Parts[$pi].File, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+		$r = Read-AsrJsonText $Parts[$pi].File | ConvertFrom-Json
 		$off = [double]$Parts[$pi].Offset
 		$tag = if ($np -gt 1) { "ч.$($pi + 1): " } else { '' }
 		if ($null -ne $r.audio_seconds) { $aud += [double]$r.audio_seconds } else { $audOk = $false }
@@ -512,7 +587,8 @@ function Invoke-AsrFile {
 			$part = 'part_{0:D3}.flac' -f $i; $resp = 'resp_{0:D3}.json' -f $i
 			$tlen = if ($i -eq $n - 1) { '' } else { $len }
 			Write-Host "[DRY-RUN] $ffmpeg $((Get-AsrFfArgs $File.FullName $off $tlen $n $part) -join ' ')"
-			Write-Host "[DRY-RUN] curl $((Get-AsrCurlArgs $script:AsrBase $part $resp) -join ' ')"
+			# Части ещё нет — размер оценён сверху, как в .sh: 32000 байт/с.
+			Write-Host "[DRY-RUN] curl $((Get-AsrCurlArgs $script:AsrBase $part $resp ([int64]$len * 32000)) -join ' ')"
 		}
 		return
 	}
@@ -524,12 +600,19 @@ function Invoke-AsrFile {
 		$part = 'part_{0:D3}.flac' -f $i; $resp = 'resp_{0:D3}.json' -f $i
 		$partPath = Join-Path $script:AsrRunDir $part
 		$tlen = if ($i -eq $n - 1) { '' } else { $len }
-		$ffArgs = @(Get-AsrFfArgs $File.FullName $off $tlen $n $partPath)
-		& $ffmpeg @ffArgs 2>&1 | Out-Null
-		if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $partPath) -or (Get-FileSize $partPath) -le 0) {
-			Clear-AsrFileTemp; Write-AsrFileFail $name "не удалось извлечь звук (часть $($i + 1)/$n)"; return
+		# Отмена проверяется и перед каждой частью, и во время извлечения: иначе
+		# «Остановить» ждало конца извлечения и запроса следующей части.
+		$x = $null
+		if (-not ($script:AsrCancelCheck -and (& $script:AsrCancelCheck))) { $x = Invoke-AsrExtract @(Get-AsrFfArgs $File.FullName $off $tlen $n $partPath) }
+		if ($null -eq $x -or $x.Cancelled) {
+			Clear-AsrFileTemp; $script:AsrStopReason = 'отменено пользователем'; Write-AsrFileFail $name 'отменено пользователем'; return
 		}
-		if ($lim.MaxBytes -gt 0 -and (Get-FileSize $partPath) -gt $lim.MaxBytes) {
+		if ($x.Rc -ne 0 -or -not (Test-Path -LiteralPath $partPath) -or (Get-FileSize $partPath) -le 0) {
+			$why = if ($x.Err) { ": $($x.Err)" } else { '' }
+			Clear-AsrFileTemp; Write-AsrFileFail $name "не удалось извлечь звук (часть $($i + 1)/$n)$why"; return
+		}
+		$psz = Get-FileSize $partPath
+		if ($lim.MaxBytes -gt 0 -and $psz -gt $lim.MaxBytes) {
 			Clear-AsrFileTemp; Write-AsrFileFail $name "часть $($i + 1)/$n больше предела сервера ($($lim.MaxBytes) байт)"; return
 		}
 		Log-Msg 'INFO' "${name}: распознавание, часть $($i + 1)/$n ($(Format-AsrTs $len) записи) — ждём ответ сервера"
@@ -538,7 +621,7 @@ function Invoke-AsrFile {
 		$script:AsrTickPhase = "распознавание, часть $($i + 1)/$n"
 		Write-GUIProgress -FilePercent $script:AsrTickPercent -CurrentFile $name -Phase $script:AsrTickPhase
 		$t0 = Get-Date
-		$o = Invoke-AsrTranscribePart $part $resp
+		$o = Invoke-AsrTranscribePart $part $resp $psz
 		if ($o.Outcome -ne 'ok') {
 			Clear-AsrFileTemp
 			if ($o.Outcome -eq 'stop') { $script:AsrStopReason = $o.Reason }
@@ -551,23 +634,28 @@ function Invoke-AsrFile {
 	}
 	$tmpJson = Get-PartialPath $outJson; $tmpTxt = Get-PartialPath $outTxt
 	$date = if ($env:FFCONV_ASR_NOW) { $env:FFCONV_ASR_NOW } else { Get-Date -Format 'yyyy-MM-dd HH:mm' }
+	# Временные имена убирает finally — в том числе при Ctrl+C посреди публикации:
+	# остановка конвейера выполняет finally, а .ffconv-partial-* иначе оставались в
+	# назначении. После удачных Move-Item удалять уже нечего.
 	try {
-		Write-AsrJson $tmpJson $pairs
-		$sum = Write-AsrTranscript $name $date $plan.PartLen $tmpTxt $pairs
-	} catch {
+		try {
+			Write-AsrJson $tmpJson $pairs
+			$sum = Write-AsrTranscript $name $date $plan.PartLen $tmpTxt $pairs
+		} catch {
+			Clear-AsrFileTemp
+			Write-AsrFileFail $name "не удалось собрать расшифровку из ответа сервера: $($_.Exception.Message)"
+			return
+		}
+		try {
+			Move-Item -LiteralPath $tmpJson -Destination $outJson -Force -ErrorAction Stop
+			Move-Item -LiteralPath $tmpTxt -Destination $outTxt -Force -ErrorAction Stop
+		} catch {
+			Clear-AsrFileTemp
+			Write-AsrFileFail $name 'не удалось опубликовать результат (rename)'
+			return
+		}
+	} finally {
 		Remove-Item -LiteralPath $tmpJson, $tmpTxt -Force -ErrorAction SilentlyContinue
-		Clear-AsrFileTemp
-		Write-AsrFileFail $name "не удалось собрать расшифровку из ответа сервера: $($_.Exception.Message)"
-		return
-	}
-	try {
-		Move-Item -LiteralPath $tmpJson -Destination $outJson -Force -ErrorAction Stop
-		Move-Item -LiteralPath $tmpTxt -Destination $outTxt -Force -ErrorAction Stop
-	} catch {
-		Remove-Item -LiteralPath $tmpJson, $tmpTxt -Force -ErrorAction SilentlyContinue
-		Clear-AsrFileTemp
-		Write-AsrFileFail $name 'не удалось опубликовать результат (rename)'
-		return
 	}
 	Clear-AsrFileTemp
 	$el = (Get-Date) - $started

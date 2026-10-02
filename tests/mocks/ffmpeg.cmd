@@ -15,6 +15,7 @@ rem   MOCK_FFMPEG_VIDEO_BITRATE — битрейт ВИДЕОПОТОКА в с�
 rem   MOCK_FFMPEG_AUDIO_CODEC   — кодек в строке Stream ... Audio (по умолчанию aac)
 rem   MOCK_FFMPEG_SILENCE       — пары silence_start/silence_end через запятую,
 rem                               например "10:20,40:50" (для silencedetect)
+rem   MOCK_FFMPEG_ERR           — первой строкой stderr (как ошибка ffmpeg с -v error)
 rem ============================================================
 setlocal enabledelayedexpansion
 
@@ -49,6 +50,9 @@ if not "!ARGS:-encoders=!"=="!ARGS!" (
     )
     exit /b 0
 )
+
+rem С -v error настоящий ffmpeg печатает только ошибки, и первая — исходная.
+if defined MOCK_FFMPEG_ERR echo !MOCK_FFMPEG_ERR!>&2
 
 rem Баннер с метаданными: реальный ffmpeg пишет его в stderr.
 echo Input #0, mov,mp4,m4a, from 'mock':>&2

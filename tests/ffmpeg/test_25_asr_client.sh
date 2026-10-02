@@ -59,6 +59,21 @@ assert_eq "числа — целой частью, строки без кавы�
 assert_eq "языки списком" "en ru" "$ASR_LIM_LANGUAGES"
 asr_parse_limits '<html>502 Bad Gateway</html>'; _rc=$?
 assert_eq "не пределы — отказ" "1" "$_rc"
+# Странные данные сервера: тот же исход, что у Get-AsrLimits (сверяет test_27).
+asr_parse_limits '{"max_seconds":"3600","job_timeout_sec":1800.7,"device":"CPU","languages":null,"max_bytes":"x"}'; _rc=$?
+assert_eq "числа строкой, languages: null — пределы" "0" "$_rc"
+assert_eq "null — не язык «null»" "" "$ASR_LIM_LANGUAGES"
+assert_eq "нечисловой max_bytes — без предела" "" "$ASR_LIM_MAX_BYTES"
+assert_eq "CPU заглавными — формула процессора" "3000" "$ASR_PLAN_WHOLE"
+asr_parse_limits '{"max_seconds":"0036","job_timeout_sec":1800,"languages":["ru",null,"en"]}'
+assert_eq "ведущие нули — десятичное число" "36" "$ASR_LIM_MAX_SECONDS"
+assert_eq "null в списке языков пропущен" "ru en" "$ASR_LIM_LANGUAGES"
+for _b in '{"max_seconds":"abc","job_timeout_sec":1800}' '{"max_seconds":null,"job_timeout_sec":1800}' \
+          '{"max_seconds":-5,"job_timeout_sec":1800}' '{"max_seconds":99999999999999999999,"job_timeout_sec":1800}' \
+          '{"max_seconds":1,"job_timeout_sec":1800}' '{"max_seconds":3600,"job_timeout_sec":1,"device":"cpu"}'; do
+    asr_parse_limits "$_b"; _rc=$?
+    assert_eq "отказ: $_b" "1" "$_rc"
+done
 
 # ══════════════════════════════════════════════════════════════
 suite "план частей (спека §6)"
@@ -99,6 +114,13 @@ _join "${ASR_CURL_ARGS[@]}"
 assert_contains "diarize = no → false" "-F|diarize=false" "$JOINED"
 assert_contains "num_speakers — только когда задан" "-F|num_speakers=4|-o" "$JOINED"
 asr_diarize="yes"; asr_num_speakers=""; asr_pinned_pubkey=""
+# Отправка части входит в --max-time: 65 МБ на 1 Мбит/с — ещё 520 с сверх 2100.
+asr_curl_args "http://h.example:30000" "part_000.flac" "resp_000.json" 65000000
+_join "${ASR_CURL_ARGS[@]}"
+assert_contains "--max-time с отправкой части" "--max-time|2620|" "$JOINED"
+asr_curl_args "http://h.example:30000" "part_000.flac" "resp_000.json" 1
+_join "${ASR_CURL_ARGS[@]}"
+assert_contains "любой ненулевой размер — секунда вверх" "--max-time|2101|" "$JOINED"
 asr_extract_args "/in/a b.mp4" 1001 999 3 "part_001.flac"
 _join "${ASR_FF_ARGS[@]}"
 assert_eq "извлечение части" "-nostdin|-v|error|-y|-ss|1001|-t|999|-i|/in/a b.mp4|-map|0:a:0|-vn|-ac|1|-ar|16000|-c:a|flac|part_001.flac" "$JOINED"
@@ -132,6 +154,17 @@ assert_contains "curl 26 — причина" "не смог прочитать �
 ASR_CURL_ERR="Failed to connect"
 _cl 7 000 "";                  assert_eq "прочие коды curl — прогон с причиной" "stop|сетевая ошибка (curl 7: Failed to connect)" "$CL"
 ASR_CURL_ERR=""
+# detail декодируется, как у ConvertFrom-Json в .ps1: \" \\ \uXXXX и суррогатная пара.
+printf '%s' '{"detail":"q \"x\" s \\ да 😀 \ud800!"}' > "$WORK/detail_esc.json"
+_cl 0 422 "$WORK/detail_esc.json"
+assert_eq "detail без экранирования JSON" 'file|HTTP 422: q "x" s \ да 😀 �!' "$CL"
+
+suite "причина сбоя ffmpeg — первая непустая строка без \\r"
+printf '\r\n[in#0 @ 0x1] moov atom not found\r\nError opening input file x.\r\n' > "$WORK/ff.err"
+asr_first_line "$WORK/ff.err"
+assert_eq "первая непустая строка" "[in#0 @ 0x1] moov atom not found" "$ASR_LINE"
+: > "$WORK/ff.err"; asr_first_line "$WORK/ff.err"
+assert_eq "пустой stderr — пусто" "" "$ASR_LINE"
 
 # ══════════════════════════════════════════════════════════════
 suite "выбор адреса: первый ответивший; ключ — только в конфиге curl"
@@ -225,8 +258,9 @@ assert_contains "подсказка про переменную" 'ASR_URL' "$VC_
 _vc "ftp://a" ru yes "";       assert_eq "чужая схема" "1" "$VC"
 _vc "https://a:1" "" yes "";   assert_eq "пустой язык" "1" "$VC"
 _vc "https://a:1" ru maybe ""; assert_eq "diarize не yes/no" "1" "$VC"
-for _n in 0 51 abc -1; do _vc "https://a:1" ru yes "$_n"; assert_eq "num_speakers=$_n отвергнут" "1" "$VC"; done
-for _n in 1 50; do _vc "https://a:1" ru yes "$_n"; assert_eq "num_speakers=$_n принят" "0" "$VC"; done
+# 2^64+5 арифметика bash превращала в 5 — проверка шаблоном, без $(( )).
+for _n in 0 000 51 abc -1 99999999999999999999 18446744073709551621; do _vc "https://a:1" ru yes "$_n"; assert_eq "num_speakers=$_n отвергнут" "1" "$VC"; done
+for _n in 1 05 50; do _vc "https://a:1" ru yes "$_n"; assert_eq "num_speakers=$_n принят" "0" "$VC"; done
 
 # ══════════════════════════════════════════════════════════════
 suite "ключ из api_key_command"
@@ -261,9 +295,11 @@ _render_check empty.txt "silence.wav" "2026-10-02 12:00" 10 "$WORK/empty.txt" "$
 # рвётся, когда следующий сегмент начинается через 60 с и больше от её начала.
 _render_check monologue.txt "lecture.mp3" "2026-10-02 12:00" 130 "$WORK/monologue.txt" "$FIX/monologue.json" 0
 
-# Многомегабайтный ответ со словами: разбор обязан быть линейным. В BWK awk
-# (macOS) substr считает длину всей строки на каждом вызове, и посимвольный
-# проход по документу целиком был бы квадратичным.
+# Ответ на 2000 сегментов со словами (~400 КБ): разбор обязан быть линейным. В
+# BWK awk (macOS) substr считает длину всей строки на каждом вызове, и
+# посимвольный проход по документу целиком был бы квадратичным — минуты вместо
+# долей секунды. Предел времени ловит именно это, а не медленную машину: линейный
+# разбор укладывается в доли секунды и на CI.
 {
     printf '{"asr_ver":"x","segments":['
     for (( _i = 0; _i < 2000; _i++ )); do
@@ -273,7 +309,11 @@ _render_check monologue.txt "lecture.mp3" "2026-10-02 12:00" 130 "$WORK/monologu
     done
     printf '],"stages":{"transcribe":{"status":"ok"}},"warnings":[],"audio_seconds":2000.0,"processing_seconds":1000.0}'
 } > "$WORK/big.json"
+_t0=$SECONDS
 asr_render "big.mp4" "2026-10-02 12:00" 2000 "$WORK/big.txt" "$WORK/big.json" 0
+_el=$(( SECONDS - _t0 ))
+if [ "$_el" -le 10 ]; then pass "разбор ~400 КБ — не дольше 10 с (${_el} с)"
+else fail "разбор ~400 КБ — не дольше 10 с" "≤ 10 с" "${_el} с — разбор стал квадратичным?"; fi
 assert_eq "2000 реплик" "2000" "$(grep -c '^\[' "$WORK/big.txt")"
 assert_eq "последняя реплика цела" '[00:33:19] SPEAKER_01: реплика 1999 "q"' "$(tail -1 "$WORK/big.txt")"
 

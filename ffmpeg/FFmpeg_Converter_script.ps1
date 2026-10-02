@@ -107,6 +107,20 @@ if (-not $ffmpeg_available) {
 	}
 }
 
+# --remote-selftest проверяет службу конвертации, и распознавание при нём не
+# включается: иначе самопроверка отказывала с неверной причиной («[remote]
+# выключен» — его выключил режим распознавания) и оставляла каталог прогона.
+if ($asr_enabled -eq 'yes' -and $env:FFCONV_REMOTE_SELFTEST -eq '1') {
+	Write-Host "[ПРЕДУПРЕЖДЕНИЕ] --remote-selftest: [asr] enabled = yes не действует — проверяется служба конвертации."
+	$asr_enabled = 'no'
+}
+# Распознавание не конвертирует: [split], скорость и контейнер к нему не относятся,
+# и их проверки ниже (чч-мм-сс, диапазон скорости, контейнер с кодеками) не должны
+# останавливать режим из-за настроек, которые он не применяет. Паритет с .sh.
+if ($asr_enabled -eq 'yes') {
+	$start_coding = ':-:'; $length_coding = ':-:'; $playback_speed = ':-:1.0'; $output_container = ':-:mp4'
+}
+
 # --- Парсинг настроек (формат :+:value или :-:value) ---
 $_, $video_codec_status, $video_codec_value = $video_codec -split ":"
 $_, $video_number_frames_status, $video_number_frames_value = $video_number_frames -split ":"
@@ -1723,7 +1737,12 @@ if ($asr_enabled -eq 'yes') {
 		$remote_enabled = 'no'
 	}
 	if (-not (Invoke-AsrPreflight)) {
-		Write-GUIProgress -FilePercent 100 -CurrentFile "Ошибка" -State "failed" -ExitCode 1 -Message $script:AsrPreflightError
+		# «Остановить» во время выбора адреса — отмена, а не сбой сервера.
+		if ($guiCancelFile -and (Test-Path -LiteralPath $guiCancelFile)) {
+			Write-GUIProgress -FilePercent 100 -CurrentFile "Отменено" -State "cancelled" -ExitCode 1 -Message "Отменено пользователем"
+		} else {
+			Write-GUIProgress -FilePercent 100 -CurrentFile "Ошибка" -State "failed" -ExitCode 1 -Message $script:AsrPreflightError
+		}
 		Pause-Prompt "Нажмите [Enter], чтобы выйти..."
 		exit 1
 	}

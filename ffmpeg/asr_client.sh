@@ -65,10 +65,13 @@ asr_tls_args() {
 # --- Поле плоского JSON (ответ /speech/limits) ---
 # Ответ плоский, кроме reject_codes, а имена нужных полей в нём уникальны —
 # поэтому регулярное выражение, а не разбор целиком. Кавычки строки снимаются.
+# null — то же, что отсутствие поля (как $null у ConvertFrom-Json в .ps1): иначе
+# `languages: null` превращался в язык «null», и сервер «не принимал» ни один.
 asr_json_field() {
 	local re='"'"$2"'"[[:space:]]*:[[:space:]]*("[^"]*"|\[[^]]*\]|[^,}[:space:]]+)'
 	ASR_JSON_VAL=""
 	[[ $1 =~ $re ]] || return 1
+	[ "${BASH_REMATCH[1]}" = "null" ] && return 1
 	ASR_JSON_VAL="${BASH_REMATCH[1]}"
 	case "$ASR_JSON_VAL" in
 		\"*\") ASR_JSON_VAL="${ASR_JSON_VAL#\"}"; ASR_JSON_VAL="${ASR_JSON_VAL%\"}" ;;
@@ -76,27 +79,40 @@ asr_json_field() {
 	return 0
 }
 
+# --- Целая часть числа из ответа ---
+# Только цифры и не больше 15 (арифметика без переполнения), иначе пусто; 10# —
+# строка "0036" иначе читалась бы восьмеричной. Двойник — ConvertTo-AsrInt в .ps1.
+asr_int() {
+	ASR_INT="${1%%.*}"
+	case "$ASR_INT" in ''|*[!0-9]*) ASR_INT=""; return 0 ;; esac
+	if [ ${#ASR_INT} -gt 15 ]; then ASR_INT=""; else ASR_INT=$(( 10#$ASR_INT )); fi
+	return 0
+}
+
 # --- Пределы сервера ---
 # Опираемся на живой ответ: при переключении сервера на карту max_seconds и
-# скорость меняются, и зашитые числа завели бы план частей не туда.
+# скорость меняются, и зашитые числа завели бы план частей не туда. Предел
+# «целиком» меньше двух секунд — не пределы: план частей делил бы на ноль.
 asr_parse_limits() {
-	local v
+	local v w
 	ASR_LIM_MAX_SECONDS=""; ASR_LIM_MAX_BYTES=""; ASR_LIM_JOB_TIMEOUT=""
 	ASR_LIM_DEVICE=""; ASR_LIM_LANGUAGES=""; ASR_LIM_DIARIZATION=""; ASR_LIM_VER=""
-	asr_json_field "$1" max_seconds && ASR_LIM_MAX_SECONDS="${ASR_JSON_VAL%%.*}"
-	asr_json_field "$1" max_bytes && ASR_LIM_MAX_BYTES="${ASR_JSON_VAL%%.*}"
-	asr_json_field "$1" job_timeout_sec && ASR_LIM_JOB_TIMEOUT="${ASR_JSON_VAL%%.*}"
+	asr_json_field "$1" max_seconds && asr_int "$ASR_JSON_VAL" && ASR_LIM_MAX_SECONDS="$ASR_INT"
+	asr_json_field "$1" max_bytes && asr_int "$ASR_JSON_VAL" && ASR_LIM_MAX_BYTES="$ASR_INT"
+	asr_json_field "$1" job_timeout_sec && asr_int "$ASR_JSON_VAL" && ASR_LIM_JOB_TIMEOUT="$ASR_INT"
 	asr_json_field "$1" device && ASR_LIM_DEVICE="$ASR_JSON_VAL"
 	asr_json_field "$1" diarization && ASR_LIM_DIARIZATION="$ASR_JSON_VAL"
 	asr_json_field "$1" asr_ver && ASR_LIM_VER="$ASR_JSON_VAL"
 	if asr_json_field "$1" languages; then
 		v="${ASR_JSON_VAL#[}"; v="${v%]}"; v="${v//\"/}"; v="${v//,/ }"
 		read -r -a _asr_langs <<< "$v"
-		ASR_LIM_LANGUAGES="${_asr_langs[*]}"
+		for w in ${_asr_langs[@]+"${_asr_langs[@]}"}; do
+			[ "$w" = "null" ] || ASR_LIM_LANGUAGES="${ASR_LIM_LANGUAGES:+$ASR_LIM_LANGUAGES }$w"
+		done
 	fi
-	case "$ASR_LIM_MAX_SECONDS" in ''|*[!0-9]*) return 1 ;; esac
-	case "$ASR_LIM_JOB_TIMEOUT" in ''|*[!0-9]*) return 1 ;; esac
-	return 0
+	[ -n "$ASR_LIM_MAX_SECONDS" ] && [ -n "$ASR_LIM_JOB_TIMEOUT" ] || return 1
+	asr_plan_parts 0
+	[ "$ASR_PLAN_WHOLE" -ge 2 ]
 }
 
 # --- План частей (спека §6) ---
@@ -104,10 +120,14 @@ asr_parse_limits() {
 # что сервер успеет за свой job_timeout_sec: на процессоре ~0.5 с на секунду
 # записи (берём 0.6 с запасом), на карте в разы быстрее (0.1). Коэффициенты — в
 # целых: ×10/6 и ×10. Длиннее W — равные части не длиннее W/2: равные, чтобы не
-# было трёхсекундного хвоста, который сервер распознаёт хуже всего.
+# было трёхсекундного хвоста, который сервер распознаёт хуже всего. device — без
+# учёта регистра, как -eq в Get-AsrPlan (.ps1).
 asr_plan_parts() {
 	local d="$1" w lim p n l i off len
-	if [ "$ASR_LIM_DEVICE" = "cpu" ]; then lim=$(( ASR_LIM_JOB_TIMEOUT * 10 / 6 )); else lim=$(( ASR_LIM_JOB_TIMEOUT * 10 )); fi
+	case "$ASR_LIM_DEVICE" in
+		[Cc][Pp][Uu]) lim=$(( ASR_LIM_JOB_TIMEOUT * 10 / 6 )) ;;
+		*) lim=$(( ASR_LIM_JOB_TIMEOUT * 10 )) ;;
+	esac
 	w="$ASR_LIM_MAX_SECONDS"
 	[ "$lim" -lt "$w" ] && w="$lim"
 	ASR_PLAN_WHOLE="$w"
@@ -132,10 +152,13 @@ asr_plan_parts() {
 # нативная программа, и путь `file=@/tmp/…` MSYS в Windows-путь не переводит —
 # curl отвечает кодом 26 (проверено 2026-10-02). Порядок аргументов — контракт
 # с Get-AsrCurlArgs в .ps1 (test_27).
+# $4 — размер части в байтах: --max-time покрывает и её отправку. Отправка идёт до
+# начала распознавания, и на медленном канале (берём 1 Мбит/с = 125000 байт/с)
+# сотни мегабайт съедали бы job_timeout_sec + 300 раньше, чем сервер ответит.
 asr_curl_args() {
-	local base="$1" part="$2" out="$3" diar="false"
+	local base="$1" part="$2" out="$3" bytes="${4:-0}" diar="false"
 	[ "${asr_diarize:-yes}" = "yes" ] && diar="true"
-	ASR_CURL_ARGS=(-sS --connect-timeout 10 --max-time "$(( ASR_LIM_JOB_TIMEOUT + 300 ))")
+	ASR_CURL_ARGS=(-sS --connect-timeout 10 --max-time "$(( ASR_LIM_JOB_TIMEOUT + 300 + (bytes + 124999) / 125000 ))")
 	asr_tls_args "$base"
 	[ ${#ASR_TLS_ARGS[@]} -gt 0 ] && ASR_CURL_ARGS+=("${ASR_TLS_ARGS[@]}")
 	ASR_CURL_ARGS+=(-F "file=@${part};type=audio/flac" -F "model=whisperx"
@@ -165,6 +188,20 @@ asr_extract_args() {
 asr_hms() {
 	local s="${1%%.*}"
 	printf -v ASR_HMS '%02d:%02d:%02d' $(( s / 3600 )) $(( s % 3600 / 60 )) $(( s % 60 ))
+}
+
+# Первая непустая строка файла без \r — причина сбоя ffmpeg одной строкой: с
+# -v error он печатает только ошибки, и первая из них — исходная. Двойник —
+# Invoke-AsrExtract в .ps1.
+asr_first_line() {
+	local l
+	ASR_LINE=""
+	[ -s "$1" ] || return 0
+	while IFS= read -r l || [ -n "$l" ]; do
+		l="${l%$'\r'}"
+		if [ -n "$l" ]; then ASR_LINE="$l"; break; fi
+	done < "$1"
+	return 0
 }
 
 # Дата в шапке расшифровки. FFCONV_ASR_NOW подменяет её в тестах: реального
@@ -198,13 +235,11 @@ asr_validate_config() {
 		yes|no) ;;
 		*) echo "[ОШИБКА] [asr] diarize = '$asr_diarize': ожидается yes или no." >&2; bad=1 ;;
 	esac
+	# Шаблоном, а не арифметикой: 20 цифр переполняли $(( )) (2^64+5 становилось 5),
+	# а [int64] в .ps1 и GUI бросал исключение. Тот же шаблон — во всех трёх местах.
 	if [ -n "${asr_num_speakers:-}" ]; then
-		local n_ok=0
-		case "$asr_num_speakers" in
-			*[!0-9]*) ;;
-			*) [ "$(( 10#$asr_num_speakers ))" -ge 1 ] && [ "$(( 10#$asr_num_speakers ))" -le 50 ] && n_ok=1 ;;
-		esac
-		if [ "$n_ok" = "0" ]; then
+		local re='^0*([1-9]|[1-4][0-9]|50)$'
+		if ! [[ $asr_num_speakers =~ $re ]]; then
 			echo "[ОШИБКА] [asr] num_speakers = '$asr_num_speakers': целое от 1 до 50 или пусто." >&2
 			bad=1
 		fi
@@ -300,12 +335,20 @@ asr_select_endpoint() {
 }
 
 # --- Текст ошибки сервера: {"detail": "..."} — дословно ---
+# Экранирование JSON (\" \\ \uXXXX) снимается тем же декодером, что у текста
+# расшифровки: .ps1 получает detail из ConvertFrom-Json уже декодированным. Процесс
+# awk — только когда в строке есть обратный слэш, и только на пути ошибки.
 asr_detail() {
 	local body="" re='"detail"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)"'
 	ASR_DETAIL=""
 	[ -n "${1:-}" ] && [ -s "$1" ] || return 0
 	IFS= read -r -d '' body < "$1"
-	[[ $body =~ $re ]] && ASR_DETAIL="${BASH_REMATCH[1]}"
+	[[ $body =~ $re ]] || return 0
+	ASR_DETAIL="${BASH_REMATCH[1]}"
+	case "$ASR_DETAIL" in
+		*\\*) ASR_DETAIL="$(ASR_D="$ASR_DETAIL" LC_ALL=C awk "$ASR_AWK_JSTR"'BEGIN { printf "%s|", decode(ENVIRON["ASR_D"]) }')"
+		      ASR_DETAIL="${ASR_DETAIL%|}" ;;
+	esac
 	return 0
 }
 
@@ -344,10 +387,10 @@ asr_classify() {
 # asr_classify. 200 без поля segments (страница ошибки прокси) — провал файла, а
 # не пустая расшифровка.
 asr_transcribe_part() {
-	local part="$1" resp="$2" try=1 tries="${ASR_RETRIES:-5}" wait_s="${ASR_RETRY_WAIT:-60}"
+	local part="$1" resp="$2" bytes="${3:-0}" try=1 tries="${ASR_RETRIES:-5}" wait_s="${ASR_RETRY_WAIT:-60}"
 	while :; do
 		rm -f "$ASR_RUN_DIR/$resp"
-		asr_curl_args "$ASR_BASE" "$part" "$resp"
+		asr_curl_args "$ASR_BASE" "$part" "$resp" "$bytes"
 		asr_curl_run "$ASR_RUN_DIR" "${ASR_CURL_ARGS[@]}"
 		if [ "$ASR_CURL_RC" = "0" ] && [ "$ASR_HTTP_CODE" = "503" ] && [ "$try" -le "$tries" ]; then
 			echo "[ПРЕДУПРЕЖДЕНИЕ] Очередь сервера заполнена (HTTP 503) — повтор через ${wait_s} с (попытка $try из $tries)." >&2
@@ -405,8 +448,11 @@ asr_preflight() {
 	case "$ASR_BASE" in
 		http://*) echo "[ПРЕДУПРЕЖДЕНИЕ] $ASR_BASE — открытый http: ключ и звук идут по сети незашифрованными." ;;
 	esac
-	if [ "${asr_diarize:-yes}" = "yes" ] && [ "$ASR_LIM_DIARIZATION" = "false" ]; then
-		echo "[ПРЕДУПРЕЖДЕНИЕ] Сервер сообщает diarization = false: говорящих в расшифровке может не быть."
+	# Без учёта регистра — как .ps1, который приводит значение к нижнему.
+	if [ "${asr_diarize:-yes}" = "yes" ]; then
+		case "$ASR_LIM_DIARIZATION" in
+			[Ff][Aa][Ll][Ss][Ee]) echo "[ПРЕДУПРЕЖДЕНИЕ] Сервер сообщает diarization = false: говорящих в расшифровке может не быть." ;;
+		esac
 	fi
 	ASR_STOP_REASON=""
 	asr_plan_parts 0
@@ -428,7 +474,10 @@ asr_preflight() {
 # а сегменты без метки не склеиваются: иначе запись без разметки или лекция одного
 # говорящего превращались в одну строку с одной меткой времени на весь час.
 # В программе нет апострофов: она лежит в одинарных кавычках оболочки.
-ASR_AWK_RENDER='
+# Декодер строк JSON — отдельной частью: им же asr_detail читает detail ошибки.
+# Одиночный суррогат становится U+FFFD — так его пишет UTF8Encoding в .ps1; \u0000
+# пропускается (строки awk — Си-строки), и .ps1 снимает его до разбора.
+ASR_AWK_JSTR='
 function hexval(h,   i, v, c) {
 	if (length(h) != 4) return -1
 	v = 0; h = tolower(h)
@@ -457,6 +506,7 @@ function decode(s,   out, i, c, cp, lo) {
 				lo = hexval(substr(s, 3, 4))
 				if (lo >= 56320 && lo < 57344) { cp = 65536 + (cp - 55296) * 1024 + (lo - 56320); s = substr(s, 7) }
 			}
+			if (cp >= 55296 && cp < 57344) cp = 65533
 			if (cp > 0) out = out utf8(cp)
 			continue
 		}
@@ -470,6 +520,8 @@ function decode(s,   out, i, c, cp, lo) {
 	}
 	return out s
 }
+'
+ASR_AWK_RENDER="$ASR_AWK_JSTR"'
 function clean(t) { gsub(/[\r\n\t]/, " ", t); sub(/^ +/, "", t); sub(/ +$/, "", t); return t }
 function ts(x,   s) { s = int(x); return sprintf("%02d:%02d:%02d", int(s / 3600), int((s % 3600) / 60), s % 60) }
 function want(path) {
@@ -688,7 +740,7 @@ asr_file() {
 	asr_plan_parts "$(( 10#$h * 3600 + 10#$m * 60 + 10#$s + 1 ))"
 	local -a plan pairs=()
 	read -r -a plan <<< "$ASR_PLAN"
-	local n=${#plan[@]} i off len tlen part resp t0 started
+	local n=${#plan[@]} i off len tlen part resp t0 started psz
 
 	if [ "$dry_run" = "yes" ]; then
 		asr_hms "$ASR_PLAN_LEN"
@@ -699,7 +751,9 @@ asr_file() {
 			tlen="$len"; [ "$i" -eq $(( n - 1 )) ] && tlen=""
 			asr_extract_args "$full_path" "$off" "$tlen" "$n" "$part"
 			echo "[DRY-RUN] $ffmpeg ${ASR_FF_ARGS[*]}"
-			asr_curl_args "$ASR_BASE" "$part" "$resp"
+			# Части ещё нет — размер оценён сверху: FLAC 16 кГц моно не больше
+			# несжатых 32000 байт/с.
+			asr_curl_args "$ASR_BASE" "$part" "$resp" "$(( len * 32000 ))"
 			echo "[DRY-RUN] curl ${ASR_CURL_ARGS[*]}"
 		done
 		return 0
@@ -713,11 +767,13 @@ asr_file() {
 		tlen="$len"; [ "$i" -eq $(( n - 1 )) ] && tlen=""
 		asr_extract_args "$full_path" "$off" "$tlen" "$n" "$ASR_RUN_DIR/$part"
 		if ! "$ffmpeg" "${ASR_FF_ARGS[@]}" 2>"$ASR_RUN_DIR/ffmpeg.err" || [ ! -s "$ASR_RUN_DIR/$part" ]; then
-			log_msg "FAIL" "$name: не удалось извлечь звук (часть $((i + 1))/$n)"
+			asr_first_line "$ASR_RUN_DIR/ffmpeg.err"
+			log_msg "FAIL" "$name: не удалось извлечь звук (часть $((i + 1))/$n)${ASR_LINE:+: $ASR_LINE}"
 			asr_file_cleanup; put_result "fail"
 			return 0
 		fi
-		if [ -n "$ASR_LIM_MAX_BYTES" ] && [ "$(file_size "$ASR_RUN_DIR/$part")" -gt "$ASR_LIM_MAX_BYTES" ]; then
+		psz="$(file_size "$ASR_RUN_DIR/$part")"
+		if [ -n "$ASR_LIM_MAX_BYTES" ] && [ "$psz" -gt "$ASR_LIM_MAX_BYTES" ]; then
 			log_msg "FAIL" "$name: часть $((i + 1))/$n больше предела сервера ($ASR_LIM_MAX_BYTES байт)"
 			asr_file_cleanup; put_result "fail"
 			return 0
@@ -725,7 +781,7 @@ asr_file() {
 		asr_hms "$len"
 		log_msg "INFO" "$name: распознавание, часть $((i + 1))/$n ($ASR_HMS записи) — ждём ответ сервера"
 		now_s; t0=$NOW_S
-		asr_transcribe_part "$part" "$resp"
+		asr_transcribe_part "$part" "$resp" "$psz"
 		case "$ASR_OUTCOME" in
 			ok) ;;
 			file)
@@ -745,26 +801,29 @@ asr_file() {
 	done
 
 	# Публикация: временные имена в каталоге назначения, затем rename; .txt —
-	# последним: он маркер готовности, по нему работает пропуск.
-	local tmp_json tmp_txt el extra=""
-	tmp_json="$(partial_path "$out_json")"; tmp_txt="$(partial_path "$out_txt")"
+	# последним: он маркер готовности, по нему работает пропуск. Имена — в
+	# глобальных ASR_TMP_*, пока файлы живы: их убирает и trap Ctrl+C.
+	local el extra=""
+	ASR_TMP_JSON="$(partial_path "$out_json")"; ASR_TMP_TXT="$(partial_path "$out_txt")"
 	asr_now
-	if ! asr_write_json "$tmp_json" "${pairs[@]}" \
-		|| ! asr_render "$name" "$ASR_NOW" "$ASR_PLAN_LEN" "$tmp_txt" "${pairs[@]}"; then
+	if ! asr_write_json "$ASR_TMP_JSON" "${pairs[@]}" \
+		|| ! asr_render "$name" "$ASR_NOW" "$ASR_PLAN_LEN" "$ASR_TMP_TXT" "${pairs[@]}"; then
 		log_msg "FAIL" "$name: не удалось собрать расшифровку из ответа сервера"
-		rm -f "$tmp_json" "$tmp_txt"; asr_file_cleanup; put_result "fail"
+		rm -f "$ASR_TMP_JSON" "$ASR_TMP_TXT"; ASR_TMP_JSON=""; ASR_TMP_TXT=""
+		asr_file_cleanup; put_result "fail"
 		return 0
 	fi
-	if mv -f "$tmp_json" "$out_json" 2>/dev/null && mv -f "$tmp_txt" "$out_txt" 2>/dev/null && [ -f "$out_txt" ]; then
+	if mv -f "$ASR_TMP_JSON" "$out_json" 2>/dev/null && mv -f "$ASR_TMP_TXT" "$out_txt" 2>/dev/null && [ -f "$out_txt" ]; then
 		now_s; el=$(( NOW_S - started ))
 		[ -n "$ASR_R_BAD" ] && extra=", этапы с ошибкой: $ASR_R_BAD"
 		log_msg "OK" "$name -> ${stem}.txt (говорящих: $ASR_R_SPEAKERS, сомнительных сегментов: $ASR_R_LOW$extra) ($((el / 60))m $((el % 60))s)"
 		put_result "ok:0:0"
 	else
 		log_msg "FAIL" "$name: не удалось опубликовать результат (rename)"
-		rm -f "$tmp_json" "$tmp_txt"
+		rm -f "$ASR_TMP_JSON" "$ASR_TMP_TXT"
 		put_result "fail"
 	fi
+	ASR_TMP_JSON=""; ASR_TMP_TXT=""
 	asr_file_cleanup
 	return 0
 }

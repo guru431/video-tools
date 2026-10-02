@@ -11,6 +11,7 @@
 #   MOCK_FFMPEG_SILENCE="10:12 25:27" — при -af silencedetect эмитить пары
 #                                       silence_start/silence_end (секунды)
 #   MOCK_FFMPEG_NO_AUDIO=1     — в выводе -i нет строки Stream … Audio
+#   MOCK_FFMPEG_ERR="текст"    — первой строкой stderr (как ошибка ffmpeg с -v error)
 # ============================================================
 
 LOG_FILE="${MOCK_FFMPEG_LOG:-/tmp/mock_ffmpeg_calls.txt}"
@@ -52,6 +53,10 @@ if [[ "$*" == *"-version"* ]]; then
     echo "ffmpeg version 6.0 (mock)"
     exit 0
 fi
+
+# С -v error настоящий ffmpeg печатает только ошибки, и первая — исходная: по ней
+# распознавание называет причину сбоя извлечения звука.
+[ -n "${MOCK_FFMPEG_ERR:-}" ] && printf '%s\n' "$MOCK_FFMPEG_ERR" >&2
 
 # При наличии -i — всегда выводить медиа-информацию в stderr
 # (как реальный ffmpeg при любом вызове с -i)

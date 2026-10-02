@@ -70,7 +70,8 @@ $cases = @(
     @{ Want = 'basic.txt';   Src = 'meeting.mp4'; Len = 480;  Parts = @(,@('basic.json', 0)) },
     @{ Want = 'escapes.txt'; Src = 'escapes.mkv'; Len = 76;   Parts = @(,@('escapes.json', 0)) },
     @{ Want = 'chunks.txt';  Src = 'long.mp4';    Len = 1001; Parts = @(@('basic.json', 0), @('escapes.json', 1001)) },
-    @{ Want = 'empty.txt';   Src = 'silence.wav'; Len = 10;   Parts = @(,@('empty.json', 0)) }
+    @{ Want = 'empty.txt';   Src = 'silence.wav'; Len = 10;   Parts = @(,@('empty.json', 0)) },
+    @{ Want = 'monologue.txt'; Src = 'lecture.mp3'; Len = 130; Parts = @(,@('monologue.json', 0)) }
 )
 foreach ($case in $cases) {
     $parts = @($case.Parts | ForEach-Object { [pscustomobject]@{ File = (Join-Path $Fix $_[0]); Offset = [int64]$_[1] } })
@@ -208,7 +209,7 @@ assert_contains "curl 26 — файл" "не смог прочитать изв�
 assert_eq "curl 7" "stop|сетевая ошибка (curl 7: Failed to connect)" "$(get_field CL_7_000)"
 
 suite "ASR PS1: текст — те же ожидаемые .txt, что у .sh"
-for _f in basic escapes chunks empty; do
+for _f in basic escapes chunks empty monologue; do
     if cmp -s "$FIX/$_f.txt" "$WORK/ps_$_f.txt"; then pass "$_f.txt: байт в байт"
     else fail "$_f.txt: байт в байт" "$(cat "$FIX/$_f.txt")" "$(cat "$WORK/ps_$_f.txt" 2>/dev/null)"; fi
 done

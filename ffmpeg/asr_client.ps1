@@ -388,7 +388,9 @@ function Write-AsrTranscript {
 				$low++
 				if ($lowList.Count -lt 3) { $lowList.Add((Format-AsrTs $st)) }
 			}
-			if ($buf -ne '' -and $sp -cne $cur) { $reps.Add("[$(Format-AsrTs $t0)] ${cur}: $buf"); $buf = '' }
+			# Реплика — не дольше минуты от начала, сегменты без метки не склеиваются
+			# (запись без разметки иначе становилась одной строкой на весь час).
+			if ($buf -ne '' -and ($sp -cne $cur -or $sp -ceq 'SPEAKER_?' -or ($st - $t0) -ge 60)) { $reps.Add("[$(Format-AsrTs $t0)] ${cur}: $buf"); $buf = '' }
 			if ($buf -eq '') { $cur = $sp; $t0 = $st; $buf = $t } else { $buf = "$buf $t" }
 		}
 		if ($buf -ne '') { $reps.Add("[$(Format-AsrTs $t0)] ${cur}: $buf") }

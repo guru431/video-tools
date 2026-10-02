@@ -252,6 +252,9 @@ assert_eq "этапы с ошибкой в сводке" "align=unavailable, dia
 _render_check chunks.txt "long.mp4" "2026-10-02 12:00" 1001 "$WORK/chunks.txt" "$FIX/basic.json" 0 "$FIX/escapes.json" 1001
 assert_eq "говорящие по частям" "2,1" "$ASR_R_SPEAKERS"
 _render_check empty.txt "silence.wav" "2026-10-02 12:00" 10 "$WORK/empty.txt" "$FIX/empty.json" 0
+# Один говорящий час подряд — не одна строка с одной меткой времени: реплика
+# рвётся, когда следующий сегмент начинается через 60 с и больше от её начала.
+_render_check monologue.txt "lecture.mp3" "2026-10-02 12:00" 130 "$WORK/monologue.txt" "$FIX/monologue.json" 0
 
 # Многомегабайтный ответ со словами: разбор обязан быть линейным. В BWK awk
 # (macOS) substr считает длину всей строки на каждом вызове, и посимвольный

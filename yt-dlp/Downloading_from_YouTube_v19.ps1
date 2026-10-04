@@ -160,14 +160,32 @@ $cfg_proxyPass = ""
 # socks5h/socks4a — обычные схемы (Tor, ssh -D с удалённым DNS), yt-dlp их понимает,
 # а .sh передаёт дословно. Без них GUI молча выставлял «нет прокси»: загрузка шла
 # напрямую, то есть мимо задуманного маршрута и с утечкой реального IP.
-if ($cfg_proxy_raw -match '^(https?|socks5h|socks4a|socks[45]?)://(?:([^:]+):([^@]+)@)?(\[[^\]]+\]|[^:/]+)(?::(\d+))?') {
-    $cfg_proxyType = $Matches[1]
+# Кредиты отделяются от хоста по ПОСЛЕДНЕМУ '@' (жадный пароль): в host:port собаки
+# не бывает, а в пароле, записанном в config.ini без процент-кодирования, — бывает.
+# Прежний ([^@]+) резал пароль на первой собаке, и хвост пароля уезжал в поле хоста.
+# Логин и пароль делятся по ПЕРВОМУ ':' — двоеточие в пароле допустимо, в логине нет.
+function Split-ProxyUrl {
+    param([string]$Raw)
+    if ($Raw -notmatch '^(https?|socks5h|socks4a|socks[45]?)://(?:([^:]+):(.+)@)?(\[[^\]]+\]|[^:/]+)(?::(\d+))?') {
+        return $null
+    }
     # Логин/пароль в URL закодированы процентами (p%40ss), а поля GUI держат их как
     # есть: Join-ProxyUrl кодирует обратно, без раскодирования здесь вышло бы p%2540ss.
-    $cfg_proxyUser = if ($Matches[2]) { [System.Uri]::UnescapeDataString($Matches[2]) } else { "" }
-    $cfg_proxyPass = if ($Matches[3]) { [System.Uri]::UnescapeDataString($Matches[3]) } else { "" }
-    $cfg_proxyHost = $Matches[4]
-    $cfg_proxyPort = if ($Matches[5]) { $Matches[5] } else { "" }
+    return @{
+        Type = $Matches[1]
+        User = if ($Matches[2]) { [System.Uri]::UnescapeDataString($Matches[2]) } else { "" }
+        Pass = if ($Matches[3]) { [System.Uri]::UnescapeDataString($Matches[3]) } else { "" }
+        Host = $Matches[4]
+        Port = if ($Matches[5]) { $Matches[5] } else { "" }
+    }
+}
+$_proxyParts = Split-ProxyUrl $cfg_proxy_raw
+if ($_proxyParts) {
+    $cfg_proxyType = $_proxyParts.Type
+    $cfg_proxyUser = $_proxyParts.User
+    $cfg_proxyPass = $_proxyParts.Pass
+    $cfg_proxyHost = $_proxyParts.Host
+    $cfg_proxyPort = $_proxyParts.Port
 } elseif (-not [string]::IsNullOrWhiteSpace($cfg_proxy_raw)) {
     # Прокси задан, но не разобран — молчать нельзя: «нет прокси» означает загрузку
     # напрямую, мимо задуманного маршрута. Собирается в очередь и показывается при

@@ -188,6 +188,18 @@ Write-Output ("px_round=" + (Join-ProxyUrl $cfg_proxyType $cfg_proxyHost $cfg_pr
 Write-Output ("px_special=" + (Join-ProxyUrl 'socks5' 'h.example' '1080' 'a:b' ('p' + '@' + '/:%x')))
 Write-Output ("px_nocreds=" + (Join-ProxyUrl 'http' 'h.example' '8080' '' ''))
 Write-Output ("px_useronly=" + (Join-ProxyUrl 'http' 'h.example' '' 'u' ''))
+# Пароль с НЕзакодированной собакой и двоеточием: хост — после последнего '@',
+# логин — до первого ':'. Закодированная собака (p%40ss) раскодируется и кодируется
+# обратно той же p%40ss.
+$sp = Split-ProxyUrl ('socks5://u:p' + '@' + 's:s' + '@' + 'h.example:1080')
+Write-Output ("sp_raw=" + $sp.User + '|' + $sp.Pass + '|' + $sp.Host + '|' + $sp.Port)
+Write-Output ("sp_raw_round=" + (Join-ProxyUrl $sp.Type $sp.Host $sp.Port $sp.User $sp.Pass))
+$sp = Split-ProxyUrl ('http://u:p%40ss' + '@' + 'h.example:3128')
+Write-Output ("sp_enc=" + $sp.User + '|' + $sp.Pass + '|' + $sp.Host + '|' + $sp.Port)
+Write-Output ("sp_enc_round=" + (Join-ProxyUrl $sp.Type $sp.Host $sp.Port $sp.User $sp.Pass))
+$sp = Split-ProxyUrl 'socks5h://[::1]:9050'
+Write-Output ("sp_nocreds=" + $sp.User + '|' + $sp.Pass + '|' + $sp.Host + '|' + $sp.Port)
+Write-Output ("sp_bad=" + ($null -eq (Split-ProxyUrl 'ftp://h.example:21')))
 
 # Метка фрагмента: только грамматика формы (паритет с validate_time в .sh и .cmd).
 foreach ($t in @('90','0','1.5','1:30','01:02:03','01:02:03.250','100:00','1:99:99',
@@ -299,6 +311,17 @@ assert_eq "':' в логине и '@ / : %' в пароле закодирова
     "socks5://a%3Ab:p%40%2F%3A%25x${AT}h.example:1080" "$(get_field "$out" px_special)"
 assert_eq "без кредов — только хост и порт"   "http://h.example:8080" "$(get_field "$out" px_nocreds)"
 assert_eq "логин без пароля не подставляется" "http://h.example"      "$(get_field "$out" px_useronly)"
+# Разбор делил кредиты и хост по ПЕРВОЙ собаке: незакодированный пароль p@s:s
+# превращался в пароль «p» и хост «s:s@h.example».
+assert_eq "незакодированная '@' в пароле: хост — после последней" \
+    "u|p${AT}s:s|h.example|1080" "$(get_field "$out" sp_raw)"
+assert_eq "такой пароль уходит в URL закодированным" \
+    "socks5://u:p%40s%3As${AT}h.example:1080" "$(get_field "$out" sp_raw_round)"
+assert_eq "закодированная %40 раскодирована"  "u|p${AT}ss|h.example|3128" "$(get_field "$out" sp_enc)"
+assert_eq "и кодируется обратно той же %40" \
+    "http://u:p%40ss${AT}h.example:3128" "$(get_field "$out" sp_enc_round)"
+assert_eq "без кредов, IPv6-хост в скобках"   "||[::1]|9050" "$(get_field "$out" sp_nocreds)"
+assert_eq "чужая схема не разбирается"         "True"         "$(get_field "$out" sp_bad)"
 
 suite "PS1 yt-dlp: Test-TrimTime (грамматика метки фрагмента)"
 # Точное сравнение префикса, а не get_field: '.' в значении — метасимвол grep, и

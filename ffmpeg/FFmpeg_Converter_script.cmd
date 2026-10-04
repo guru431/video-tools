@@ -1299,8 +1299,12 @@ set "_mfp=%~1"
 set "_mfsrc=%~2"
 set "_mfsig=%~3"
 if not exist "!_mfp!" exit /b
-findstr /x /c:"state=complete" "!_mfp!" >nul 2>&1
-if errorlevel 1 exit /b
+rem S15. state=complete - через for /f, а не findstr /x: findstr /x строку с одним LF
+rem (manifest от .sh) не находит, и такой manifest для CMD не был законченным никогда.
+rem for /f режет строки и по CRLF, и по LF, поэтому остальные поля читаются одинаково.
+set "_mf_state="
+for /f "usebackq tokens=1,* delims==" %%a in ("!_mfp!") do if "%%a"=="state" if "%%b"=="complete" set "_mf_state=1"
+if not defined _mf_state exit /b
 rem Размер источника: изменился файл - manifest недействителен.
 for %%A in ("!_mfsrc!") do set "_mfsz=%%~zA"
 set "_mf_rec="

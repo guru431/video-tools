@@ -849,11 +849,12 @@ fi
 
 # Сценарий A: вход ov.mp4, в manifest — 3 части mp4 (удаляются), часть в прежнем
 # формате mkv и часть в чужом каталоге (обе остаются). $1 = posix|win.
-# Manifest в форме платформы: Windows-пути и CRLF, как пишут его .ps1 и .cmd (findstr /x
-# в :manifest_is_complete строку state=complete с одним LF не находит).
+# Manifest в форме платформы: Windows-пути и CRLF, как пишут его .ps1 и .cmd.
+# winlf — Windows-пути с LF-концами (manifest от .sh): CMD обязан понимать и его.
 d2_setup() {
     local dd="$DST" od="$D2_OTHER" sep="/" eol="" k
-    if [ "$1" = "win" ]; then dd="$W_DST"; od="$W_OTHER"; sep='\'; eol=$'\r'; fi
+    if [ "$1" != "posix" ]; then dd="$W_DST"; od="$W_OTHER"; sep='\'; fi
+    if [ "$1" = "win" ]; then eol=$'\r'; fi
     rm -f "$DST"/ov* "$DST/.ov.ffconv" "$D2_OTHER"/ov*
     : > "$IN/ov.mp4"
     for k in 1 2 3; do : > "$DST/ov (part.$k).mp4"; done
@@ -1055,6 +1056,18 @@ CSEOF
         d2_skip_setup win
         d2_cmd "$W_IN" "$W_DST" 'set "overwrite_existing=no"'
         d2_skip_check "CMD"
+        # S15. Manifest с LF-концами (так его пишет .sh): findstr /x строку state=complete
+        # с одним LF не находил, и законченный manifest для CMD не был законченным никогда.
+        # Обесцененный (settings=old) — хвост прошлого прогона убирается.
+        d2_setup winlf
+        d2_cmd "$W_IN" "$W_DST" 'set "overwrite_existing=no"'
+        d2_check "CMD overwrite=no, manifest с LF" real "$D2_OUT"
+        # Действительный (подпись — из manifest, только что записанного CMD), переведённый
+        # в LF. Выход перечислен под другим именем, базового нет — пропуск решает manifest.
+        mv "$DST/ov.mp4" "$DST/ov (part.1).mp4"
+        sed -i -e 's/\r$//' -e 's/ov\.mp4$/ov (part.1).mp4/' "$DST/.ov.ffconv"
+        d2_cmd "$W_IN" "$W_DST" 'set "overwrite_existing=no"'
+        if [ ! -f "$DST/ov.mp4" ]; then pass "CMD: законченный manifest с LF — файл пропущен"; else fail "CMD: законченный manifest с LF — файл пропущен" "ov.mp4 не создан" "перекодирован; вывод: $(printf '%s' "$D2_OUT" | tr '\n' '|')"; fi
         # S13. F12 в CMD сверял %~f: длинное и 8.3-написание одного каталога давали
         # «разные» пути, и in-place с destination в 8.3-форме источника (или наоборот)
         # не отклонялся. Маркер — ASCII-часть строки FAIL: «[FAIL] same.mp4:».

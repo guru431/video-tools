@@ -801,12 +801,20 @@ rem а goto из тела for обрывал бы перечисление фа�
 		rem чтобы перекодировать заново, а не пропустить как готовый.
 		rem D7. Удаление — мутация; при dry_run её быть не должно (SH/PS1 файл сохраняют,
 		rem CMD удалял его при ЛЮБОМ значении overwrite_existing — расхождение паритета).
+		rem S18. dry_run оставляет на месте выход, который настоящий прогон убрал бы (битый
+		rem или при overwrite_existing=yes), и ворота «выхода нет» ниже его пропускали, а
+		rem SH/PS1 показывают команду кодирования. Ворота - _do_encode: выхода нет или
+		rem dry_run кодировал бы поверх. Проверка валидности, как в SH/PS1, - только при
+		rem overwrite_existing=no.
+		set "_do_encode="
+		if "%dry_run%"=="yes" if "%overwrite_existing%"=="yes" set "_do_encode=1"
 		set "_existing_out=%folder_destination%!file_path!!file_name!!part_suffix_known!.!current_format_out!"
-		if exist "!_existing_out!" (
+		if not "%overwrite_existing%"=="yes" if exist "!_existing_out!" (
 			"!ffmpeg!" -nostdin -v error -i "!_existing_out!" -f null - >nul 2>&1
 			if errorlevel 1 (
 				if "%dry_run%"=="yes" (
 					echo [WARN] [DRY-RUN] битый файл был бы удалён: !_existing_out!& call :log_msg "WARN" "[DRY-RUN] битый файл был бы удалён: !_existing_out!"
+					set "_do_encode=1"
 				) else (
 					echo [WARN] Удаление битого файла: !_existing_out!& call :log_msg "WARN" "Удаление битого файла: !_existing_out!"
 					del "!_existing_out!"
@@ -828,7 +836,8 @@ rem а goto из тела for обрывал бы перечисление фа�
 			goto :eof
 		)
 
-		if not exist "%folder_destination%!file_path!!file_name!!part_suffix_known!.!current_format_out!" (
+		if not exist "%folder_destination%!file_path!!file_name!!part_suffix_known!.!current_format_out!" set "_do_encode=1"
+		if defined _do_encode (
 				rem S11. overwrite_existing=no, но manifest этого входа обесценен - источник или
 				rem настройки сменились - и файл всё-таки перекодируется: хвост прошлого прогона
 				rem убирается так же, как при overwrite=yes, - иначе новый [split] length с

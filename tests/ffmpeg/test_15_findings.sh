@@ -992,8 +992,9 @@ else
 fi
 
 # --- CMD (настоящий script.cmd, мок ffmpeg.exe) ---
-# Мок обязан быть exe: script.cmd зовёт "%ffmpeg%" без call, а батник без call
+# Мок обязан быть exe: script.cmd зовёт "!ffmpeg!" без call, а батник без call
 # обрывает вызывающий скрипт. Выход создаётся, когда последний аргумент — -y.
+# MOCK_FFMPEG_BROKEN — проверка валидности выхода (-f null) проваливается.
 if ! cmd //c "exit 0" >/dev/null 2>&1 || [ -z "$_ps_bin" ]; then
     skip "CMD: D2 — очистка по manifest" "нужны cmd.exe и PowerShell (сборка мока)"
 else
@@ -1004,6 +1005,7 @@ public class M {
         System.Console.Error.WriteLine("  Duration: 00:00:10.00, start: 0.000000, bitrate: 1000 kb/s");
         string log = System.Environment.GetEnvironmentVariable("MOCK_FFMPEG_LOG");
         if (log != null) System.IO.File.AppendAllText(log, string.Join(" ", a) + System.Environment.NewLine);
+        if (System.Environment.GetEnvironmentVariable("MOCK_FFMPEG_BROKEN") != null && System.Array.IndexOf(a, "null") >= 0) return 1;
         if (a.Length > 1 && a[a.Length - 1] == "-y") System.IO.File.WriteAllText(a[a.Length - 2], "MOCK");
         return 0;
     }
@@ -1106,6 +1108,24 @@ CSEOF
             di_check "source в 8.3-форме, destination внутри"
         fi
         rm -rf "$DI_DIR"
+        # S18. dry_run оставляет на месте выход, который настоящий прогон убрал бы, и CMD
+        # пропускал файл, а SH/PS1 показывают команду кодирования: битый выход при
+        # overwrite=no и любой существующий при overwrite=yes. Выход не трогается.
+        DR_IN="$WORK/dr_in"; DR_OUT="$WORK/dr_out"
+        rm -rf "$DR_IN" "$DR_OUT"; mkdir -p "$DR_IN" "$DR_OUT"; : > "$DR_IN/dr.mp4"
+        W_DR_IN=$(cygpath -w "$DR_IN"); W_DR_OUT=$(cygpath -w "$DR_OUT")
+        printf 'BROKEN' > "$DR_OUT/dr.mp4"
+        d2_cmd "$W_DR_IN" "$W_DR_OUT" $'set "overwrite_existing=no"\nset "dry_run=yes"\nset "MOCK_FFMPEG_BROKEN=1"'
+        assert_contains "CMD dry_run, битый выход: назван" "dr.mp4" "$D2_OUT"
+        assert_contains "CMD dry_run, битый выход: команда кодирования показана" "-c:v libx264" "$D2_OUT"
+        assert_eq "CMD dry_run, битый выход: файл не тронут" "BROKEN" "$(cat "$DR_OUT/dr.mp4" 2>/dev/null)"
+        printf 'MOCK' > "$DR_OUT/dr.mp4"
+        d2_cmd "$W_DR_IN" "$W_DR_OUT" $'set "overwrite_existing=no"\nset "dry_run=yes"'
+        assert_not_contains "CMD dry_run, валидный выход, overwrite=no: пропущен" "-c:v libx264" "$D2_OUT"
+        d2_cmd "$W_DR_IN" "$W_DR_OUT" 'set "dry_run=yes"'
+        assert_contains "CMD dry_run, overwrite=yes: команда кодирования показана" "-c:v libx264" "$D2_OUT"
+        assert_eq "CMD dry_run, overwrite=yes: файл не тронут" "MOCK" "$(cat "$DR_OUT/dr.mp4" 2>/dev/null)"
+        rm -rf "$DR_IN" "$DR_OUT"
     fi
 fi
 rm -rf "$D2_IP" "$D2_OTHER" "$IN/ov.mp4" "$DST"/ov* "$DST/.ov.ffconv"

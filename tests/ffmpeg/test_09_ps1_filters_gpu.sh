@@ -104,6 +104,19 @@ G typo      'nvida'  'libx264'    $nv
 G off       'off'    'libx264'    $nv
 # Text of the typo warning: the key lives in [gpu], and off is a valid value.
 $w = (Resolve-HwEncoder -HwAccelValue 'nvida' -VideoCodec 'libx264' -EncodersList $nv).Warning
+# [audio] normalize outside loudnorm/dynaudnorm: the worker's own if-statement (AST).
+$nIf = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.IfStatementAst] -and
+    $n.Clauses[0].Item1.Extent.Text.Contains('$audio_normalize_value -notin') }, $true)
+function N([string]$Tag, [string]$S, [string]$V) {
+    if (-not $nIf) { Write-Output "$Tag=NOIF"; return }
+    $audio_normalize_status = $S; $audio_normalize_value = $V
+    $o = (& { . ([scriptblock]::Create($nIf.Extent.Text)) } 6>&1 | ForEach-Object { "$_" }) -join '//'
+    Write-Output ("{0}={1}|{2}" -f $Tag, [int][bool]$o, ($o.Contains("[audio] normalize = '$V' (") -and $o.Contains('dynaudnorm).')))
+}
+N nwarn  '+' 'loudness'
+N nok    '+' 'loudnorm'
+N nokdyn '+' 'dynaudnorm'
+N noff   '-' 'loudness'
 Write-Output ("typotext={0}|{1}" -f $w.Contains("[gpu] hw_accel = 'nvida'"), ($w.Contains('nvidia, intel') -and $w.Contains(' off)')))
 PSEOF
 _chains_out=$("$PS_CMD" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$_chain_ps")" \
@@ -203,6 +216,12 @@ chain loud;    assert_eq "loudnorm → loudnorm=I=-16"           "loudnorm=I=-16
 chain dyn;     assert_eq "dynaudnorm → dynaudnorm"             "dynaudnorm"                     "$result"
 chain normoff; assert_eq "normalize выключена → нет фильтра"   ""                               "$result"
 chain spnorm;  assert_eq "скорость + loudnorm → atempo первым" "atempo=1.5,loudnorm=I=-16:TP=-1.5:LRA=11" "$result"
+# Значение вне loudnorm/dynaudnorm функция не применяет — воркер предупреждает
+# (настоящий оператор if воркера из AST; текст как в SH/CMD).
+chain nwarn;   assert_eq "normalize +loudness → предупреждение с ключом и списком" "1|True"  "$result"
+chain nok;     assert_eq "normalize +loudnorm → без предупреждения"              "0|False" "$result"
+chain nokdyn;  assert_eq "normalize +dynaudnorm → без предупреждения"            "0|False" "$result"
+chain noff;    assert_eq "normalize выключена → без предупреждения"              "0|False" "$result"
 
 # ══════════════════════════════════════════════════════════════
 suite "PS1: GPU encoder check (NVIDIA)"

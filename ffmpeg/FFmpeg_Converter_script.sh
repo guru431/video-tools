@@ -489,6 +489,8 @@ if [ "$audio_normalize_status" = "+" ]; then
 	case "$audio_normalize_value" in
 		loudnorm) af_chain="${af_chain:+$af_chain,}loudnorm=I=-16:TP=-1.5:LRA=11" ;;
 		dynaudnorm) af_chain="${af_chain:+$af_chain,}dynaudnorm" ;;
+		# Иное значение молча не делало ничего. Паритет с .ps1 и .cmd.
+		*) echo "[ПРЕДУПРЕЖДЕНИЕ] Неизвестное значение [audio] normalize = '$audio_normalize_value' (ожидается loudnorm или dynaudnorm). Нормализация звука не применяется." ;;
 	esac
 fi
 

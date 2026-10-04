@@ -67,12 +67,14 @@ run_script() {
         # shellcheck disable=SC2064
         trap "_dump '$dump'" EXIT
 
-        source "$SCRIPT" > /dev/null 2>&1
+        # Вывод скрипта — в дамп следом за переменными: тесты предупреждений
+        # проверяют его текст (getv читает только строки «ключ=…»).
+        source "$SCRIPT" > "$dump.out" 2>&1
     ) < /dev/null
 
     # Читаем файл после завершения subshell
-    cat "$dump"
-    rm -f "$dump"
+    cat "$dump" "$dump.out"
+    rm -f "$dump" "$dump.out"
 }
 
 # Значения ключа из дампа: все строки «ключ=…», часть после первого «=» — как
@@ -129,6 +131,15 @@ assert_contains "dynaudnorm" "dynaudnorm"     "$(getv "$OUT" af_chain)"
 
 OUT=$(run_script 'audio_normalize=":-:loudnorm"')
 assert_empty "normalize -"  "$(getv "$OUT" af_chain)"
+assert_not_contains "normalize -: без предупреждения" "[audio] normalize" "$OUT"
+
+# Значение вне loudnorm/dynaudnorm раньше молча не делало ничего.
+OUT=$(run_script 'audio_normalize=":+:loudness"')
+assert_empty "normalize +loudness: фильтра нет" "$(getv "$OUT" af_chain)"
+assert_contains "normalize +loudness: предупреждение (текст как в PS1/CMD)" \
+    "[ПРЕДУПРЕЖДЕНИЕ] Неизвестное значение [audio] normalize = 'loudness' (ожидается loudnorm или dynaudnorm). Нормализация звука не применяется." "$OUT"
+OUT=$(run_script 'audio_normalize=":+:loudnorm"')
+assert_not_contains "normalize +loudnorm: без предупреждения" "[audio] normalize" "$OUT"
 
 # ══════════════════════════════════════════════════════════════
 suite "Аудио: audio_only (F06 — контейнер/кодек из [audio] codec)"

@@ -332,6 +332,8 @@ if "!audio_normalize_status!"=="+" (
 	if "!audio_normalize_value!"=="dynaudnorm" (
 		if defined af_chain (set "af_chain=!af_chain!,dynaudnorm") else (set "af_chain=dynaudnorm")
 	)
+	rem Иное значение молча не делало ничего. Паритет с .sh и .ps1.
+	if not "!audio_normalize_value!"=="loudnorm" if not "!audio_normalize_value!"=="dynaudnorm" echo [ПРЕДУПРЕЖДЕНИЕ] Неизвестное значение [audio] normalize = '!audio_normalize_value!' ^(ожидается loudnorm или dynaudnorm^). Нормализация звука не применяется.
 )
 
 set "audio_settings=!set_audio_codec! !set_audio_number_channels! !set_audio_bitrate! !set_audio_sampling_rate!"

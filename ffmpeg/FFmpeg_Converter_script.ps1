@@ -558,6 +558,11 @@ if ($playback_speed_status -eq "+" -and $playback_speed_value -ne "1.0") {
 	}
 }
 # D6 (каскад atempo) + D5 (нормализация) — Get-AudioFilterChain (выше).
+# Значение вне loudnorm/dynaudnorm функция не применяет — говорим вслух, а не молча
+# (сравнение без учёта регистра, как switch в функции). Паритет с .sh и .cmd.
+if ($audio_normalize_status -eq "+" -and $audio_normalize_value -notin @("loudnorm", "dynaudnorm")) {
+	Write-Host "[ПРЕДУПРЕЖДЕНИЕ] Неизвестное значение [audio] normalize = '$audio_normalize_value' (ожидается loudnorm или dynaudnorm). Нормализация звука не применяется."
+}
 $af_parts = @(Get-AudioFilterChain -SpeedStatus $playback_speed_status -SpeedValue $playback_speed_value `
 	-NormalizeStatus $audio_normalize_status -NormalizeValue $audio_normalize_value)
 

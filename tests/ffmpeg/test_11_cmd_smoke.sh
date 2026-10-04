@@ -160,6 +160,19 @@ assert_not_contains "webm-валидация: нет parse error" "was unexpecte
 assert_contains "webm+libx264: сообщение о несовместимости" "WebM не поддерживает" "$SMOKE_OUT"
 
 # ══════════════════════════════════════════════════════════════
+suite "CMD: [audio] normalize — неизвестное значение не молчит"
+# ══════════════════════════════════════════════════════════════
+# Значение вне loudnorm/dynaudnorm раньше молча не делало ничего (как и в SH/PS1).
+build_and_run 'set "audio_normalize=:+:loudness"'
+assert_not_contains "normalize = loudness: нет parse error" "was unexpected at this time" "$SMOKE_OUT"
+assert_contains "normalize = loudness: предупреждение (текст как в SH/PS1)" \
+    "[ПРЕДУПРЕЖДЕНИЕ] Неизвестное значение [audio] normalize = 'loudness' (ожидается loudnorm или dynaudnorm). Нормализация звука не применяется." "$SMOKE_OUT"
+assert_not_contains "normalize = loudness: фильтра нет" "loudnorm=I=" "$SMOKE_OUT"
+build_and_run 'set "audio_normalize=:+:dynaudnorm"'
+assert_not_contains "normalize = dynaudnorm: без предупреждения" "[audio] normalize" "$SMOKE_OUT"
+assert_contains "normalize = dynaudnorm: фильтр в команде" "dynaudnorm" "$SMOKE_OUT"
+
+# ══════════════════════════════════════════════════════════════
 suite "CMD: '!' в пути ffmpeg не теряется"
 # ══════════════════════════════════════════════════════════════
 # run_v19 находит ffmpeg.exe рядом со скриптом, и каталог скрипта может содержать

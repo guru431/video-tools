@@ -1,21 +1,21 @@
-﻿{
+{
     "build_version":  "19.0.0.0",
-    "source_commit":  "0ba6b295016a6bd7dc9b48182ba099a24c8d513f",
+    "source_commit":  "47b7cde5889abbe0e768853c06a29bb37f358ea4",
     "source_tree_dirty":  false,
     "ps2exe":  {
                    "commit":  "d32d5ce21c458696e860a7533943b1466d925be9",
-                   "sha256":  "6AD15CBF4382B7F2F17A19F8723B2263D7202C4982BA9DA8DEF8E221E25F8B5F"
+                   "sha256":  "D9EBC34E7AE83FDE75DE935175A333745B3D8DDD04900F47DD267036B5527F53"
                },
     "artifacts":  [
                       {
                           "path":  "ffmpeg/_VideoConverter_v19.exe",
                           "source":  "ffmpeg/FFmpeg_Converter_run_win_v19.ps1",
-                          "sha256":  "8CAB2EF18683E83F1BCD7E43EEE1B527EFF98ABB698A252EBD74E71B3966787D"
+                          "sha256":  "019E2AA2C3713A0248305C7E24E0C88198DB6C4CB63D9CB1AC996B6F8151A634"
                       },
                       {
                           "path":  "yt-dlp/_VideoDownloader_v19.exe",
                           "source":  "yt-dlp/Downloading_from_YouTube_v19.ps1",
-                          "sha256":  "43D7C9BA34B7F3E37F23F9DFAAEC4363E92134887715BE5D30B3BF2B9478A4EE"
+                          "sha256":  "8802A97DCBE5F97869207F3D717E58AF9A3CCED39D86846668D9C270249B4E81"
                       }
                   ]
 }

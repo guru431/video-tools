@@ -20,7 +20,9 @@ rem ============================================================
 setlocal enabledelayedexpansion
 
 set "ARGS=%*"
-if defined MOCK_FFMPEG_LOG echo %ARGS%>>"%MOCK_FFMPEG_LOG%"
+rem Перенаправление стоит ПЕРЕД echo: цифра вплотную к знаку перенаправления -
+rem номер дескриптора, и строка аргументов с цифрой в конце уходила мимо лога.
+if defined MOCK_FFMPEG_LOG >>"%MOCK_FFMPEG_LOG%" echo %ARGS%
 
 if not defined MOCK_FFMPEG_DURATION set "MOCK_FFMPEG_DURATION=00:01:00.00"
 if not defined MOCK_FFMPEG_BITRATE  set "MOCK_FFMPEG_BITRATE=2000"
@@ -64,12 +66,17 @@ echo     Stream #0:0(und): Video: h264 ^(High^) ^(avc1 / 0x31637661^), yuv420p^(
 echo     Stream #0:1(und): Audio: %MOCK_FFMPEG_AUDIO_CODEC% ^(LC^) ^(mp4a / 0x6134706D^), 48000 Hz, stereo, fltp, 128 kb/s ^(default^)>&2
 
 rem silencedetect: пары «начало:конец» через запятую в MOCK_FFMPEG_SILENCE.
+rem Перенаправление в stderr стоит ПЕРЕД echo. Прежний хвост "silence_duration: 5"
+rem вплотную к знаку перенаправления cmd читал как поток 5: silence_end уходил в
+rem stdout, silence_start - в stderr. PowerShell читает два потока разными нитями, порядок строк
+rem плавал, и под нагрузкой silence_end приходил раньше silence_start - пауза
+rem пропадала, границы частей не притягивались (нестабильный test_15).
 if defined MOCK_FFMPEG_SILENCE (
     if not "!ARGS:silencedetect=!"=="!ARGS!" (
         for %%P in (%MOCK_FFMPEG_SILENCE%) do (
             for /f "tokens=1,2 delims=:" %%a in ("%%P") do (
-                echo [silencedetect @ 0000] silence_start: %%a>&2
-                echo [silencedetect @ 0000] silence_end: %%b ^| silence_duration: 5>&2
+                >&2 echo [silencedetect @ 0000] silence_start: %%a
+                >&2 echo [silencedetect @ 0000] silence_end: %%b ^| silence_duration: 5
             )
         )
     )

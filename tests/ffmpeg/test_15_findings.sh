@@ -450,6 +450,13 @@ for _c in powershell pwsh; do command -v "$_c" >/dev/null 2>&1 && _ps_bin="$_c" 
 if [ -z "$_ps_ok" ] || [ -z "$_ps_bin" ]; then
     skip "PS1: те же границы, что у SH" "нужен Windows PowerShell (мок ffmpeg — .cmd)"
 else
+    # Мок обязан печатать строки silencedetect целиком в stderr, как настоящий ffmpeg.
+    # Хвост «silence_duration: 5>&2» cmd читал как перенаправление потока 5, и
+    # silence_end уходил в stdout: PowerShell с 2>&1 читает потоки разными нитями,
+    # под нагрузкой silence_end опережал silence_start, пауза пропадала, и сюит ниже
+    # изредка получал -ss 14 вместо -ss 11 (замер: 25 из 480 вызовов при 6 параллельных).
+    _mock_stdout=$(MOCK_FFMPEG_SILENCE="10:12" cmd //c "$(cygpath -w "$MOCKS_DIR/ffmpeg.cmd") -i x.mp4 -af silencedetect=n=-30dB:d=2.0 -f null -" 2>/dev/null < /dev/null)
+    assert_not_contains "мок ffmpeg.cmd: строки silencedetect — только в stderr" "silence_" "$_mock_stdout"
     _ps_log="$WORK/mock_ps.log"; rm -f "$_ps_log"
     MOCK_FFMPEG_ENCODERS="" MOCK_FFMPEG_LOG="$(cygpath -w "$_ps_log")" \
     MOCK_FFMPEG_DURATION="00:00:30.00" MOCK_FFMPEG_SILENCE="10:12" \

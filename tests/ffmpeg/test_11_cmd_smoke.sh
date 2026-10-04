@@ -32,7 +32,7 @@ printf 'fake video data' > "$TMP_DIR/src/sample.mp4"
 printf 'fake video data' > "$TMP_DIR/src/50% off.mp4"
 
 # ── Мок ffmpeg.exe / ffprobe.exe ──
-# ВАЖНО: мок обязан быть exe, а не .bat — script.cmd вызывает "%ffmpeg%"
+# ВАЖНО: мок обязан быть exe, а не .bat — script.cmd вызывает "!ffmpeg!"
 # без call, а вызов батника без call в CMD обрывает вызывающий скрипт.
 # Собираем крошечный exe через PowerShell Add-Type (.NET csc).
 WIN_BIN_FOR_PS=$(cygpath -w "$TMP_DIR/bin")
@@ -171,6 +171,25 @@ WIN_BANG_FFMPEG=$(cygpath -w "$BANG_BIN/ffmpeg.exe")
 build_and_run "set \"ffmpeg=$WIN_BANG_FFMPEG\""
 assert_eq "ffmpeg из каталога с '!': exit code 0" "0" "$SMOKE_RC"
 assert_contains "DRY-RUN зовёт ffmpeg по пути с '!'" "\"$WIN_BANG_FFMPEG\" -hide_banner" "$SMOKE_OUT"
+
+# ══════════════════════════════════════════════════════════════
+suite "CMD: '!' в пути [folders] — явный отказ"
+# ══════════════════════════════════════════════════════════════
+# Пути [folders] подставляются в script.cmd как %folder_*% под EnableDelayedExpansion,
+# и '!' пропадали молча: источник «не найден» по чужому пути, выходы уезжали мимо
+# destination. Это санкционированное ограничение CMD, но оно называется явно.
+BANG_SRC="$TMP_DIR/src"'!'"x"; BANG_DST="$TMP_DIR/dst"'!'"y"
+mkdir -p "$BANG_SRC"; printf 'fake video data' > "$BANG_SRC/sample.mp4"
+WIN_BANG_SRC=$(cygpath -w "$BANG_SRC"); WIN_BANG_DST=$(cygpath -w "$BANG_DST")
+build_and_run "set \"folder_sources=$WIN_BANG_SRC\""
+assert_eq "source с '!': exit code 1" "1" "$SMOKE_RC"
+assert_contains "source с '!': отказ назван" "не поддерживается CMD-версией" "$SMOKE_OUT"
+assert_contains "source с '!': путь напечатан целиком" "$WIN_BANG_SRC" "$SMOKE_OUT"
+assert_not_contains "source с '!': кодирование не начиналось" "DRY-RUN" "$SMOKE_OUT"
+build_and_run "set \"folder_destination=$WIN_BANG_DST\""
+assert_eq "destination с '!': exit code 1" "1" "$SMOKE_RC"
+assert_contains "destination с '!': путь напечатан целиком" "$WIN_BANG_DST" "$SMOKE_OUT"
+if [ ! -e "$BANG_DST" ]; then pass "destination с '!': каталог не создан"; else fail "destination с '!': каталог не создан" "нет $BANG_DST" "создан"; fi
 
 rm -rf "$TMP_DIR"
 

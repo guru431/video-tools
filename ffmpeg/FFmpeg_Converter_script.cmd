@@ -7,6 +7,26 @@ rem Известное ограничение: имена файлов с ! по
 rem символы % и ^ после call также могут искажаться. Для таких имён — SH/PS1.
 rem ============================================================
 
+rem --- S17. Пути [folders] с '!' - явный отказ ---
+rem Пути подставляются как %folder_*% под EnableDelayedExpansion (десятки мест, и
+rem :norm_folder тоже), и '!' пропадали молча: источник «не найден» по чужому пути,
+rem выходы уезжали мимо destination. Ограничение CMD санкционировано, но называется
+rem явно. Проверка - до :norm_folder и под DisableDelayedExpansion, где '!' литерален;
+rem значения склеены в одну заведомо определённую переменную: подстановка %var:!=%
+rem по неопределённой переменной - синтаксическая ошибка, обрывающая скрипт.
+setlocal disabledelayedexpansion
+set "_bang_folders=#%folder_sources%#%folder_destination%"
+if not "%_bang_folders:!=%"=="%_bang_folders%" (
+	echo.
+	echo [ОШИБКА] Путь [folders] с '!' не поддерживается CMD-версией - используйте .sh/.ps1/GUI.
+	echo   source      = "%folder_sources%"
+	echo   destination = "%folder_destination%"
+	echo.
+	pause
+	exit /b 1
+)
+endlocal
+
 rem --- F-path. Нормализация корневых путей ---
 rem Хвостовой разделитель в [folders] source/destination — обычный пользовательский
 rem ввод, но относительный путь подпапки считается ВЫЧИТАНИЕМ строки folder_sources

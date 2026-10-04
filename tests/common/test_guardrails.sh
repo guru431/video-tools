@@ -660,6 +660,28 @@ assert_not_contains "PS1: нет безусловного Read-Host"  'Read-Host
 assert_contains     "PS1: пауза через Pause-Prompt"    "function Pause-Prompt" "$ffps1"
 assert_contains     "PS1: пауза проверяет stdin"       "IsInputRedirected" "$ffps1"
 
+# Каждый отказ воркера (строка из одного `exit 1`) идёт сразу после паузы: окно
+# консоли, открытое двойным щелчком, иначе закрывается раньше, чем прочитана
+# причина. Так PS1 молча закрывался на неверной playback_speed, хотя SH и CMD
+# держали паузу. Номера строк-нарушителей — в $_EWP (без $( ) и без grep).
+_exit_without_pause() {
+    local _l _t _prev="" _n=0
+    _EWP=""
+    while IFS= read -r _l; do
+        _n=$((_n + 1)); _l="${_l%$'\r'}"
+        _t="${_l#"${_l%%[![:space:]]*}"}"
+        [ -n "$_t" ] || continue
+        if [ "$_t" = "exit 1" ]; then
+            case "$_prev" in "$2 "*) ;; *) _EWP="$_EWP $_n" ;; esac
+        fi
+        _prev="$_t"
+    done < "$1"
+}
+_exit_without_pause "$FF_SH" "pause_prompt"
+assert_empty "SH: каждый exit 1 воркера — после pause_prompt" "$_EWP"
+_exit_without_pause "$FF_PS1" "Pause-Prompt"
+assert_empty "PS1: каждый exit 1 воркера — после Pause-Prompt" "$_EWP"
+
 # Метки чч-мм-сс проверяются ДО арифметики на всех платформах: [int]"1:00:00" бросает
 # исключение (trap рвал весь батч), set /a молча даёт 0, $(( )) оставляет пустое.
 assert_contains "SH: валидатор check_hms"            "check_hms()"                "$ffsh"

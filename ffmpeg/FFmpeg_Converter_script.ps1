@@ -536,6 +536,7 @@ if ($playback_speed_status -eq "+" -and $playback_speed_value -ne "1.0") {
 		Write-Host "[ОШИБКА] playback_speed должен быть числом в диапазоне 0 < speed <= 100 (получено: '$playback_speed_value')"
 		Write-Host ""
 		Write-GUIProgress -FilePercent 100 -CurrentFile "Ошибка" -State "failed" -ExitCode 1 -Message "playback_speed должен быть числом в диапазоне 0 < speed <= 100 (получено: '$playback_speed_value')"
+		Pause-Prompt "Нажмите [Enter], чтобы выйти..."
 		exit 1
 	}
 }
@@ -1897,10 +1898,12 @@ if ($remote_enabled -eq 'yes') {
 if ($env:FFCONV_REMOTE_SELFTEST -eq '1') {
 	if ($remote_enabled -ne 'yes') {
 		Write-Host "[ОШИБКА] --remote-selftest требует [remote] enabled = yes в config.ini."
+		Pause-Prompt "Нажмите [Enter], чтобы выйти..."
 		exit 1
 	}
 	if (-not (Get-Command Invoke-RemoteSelftest -ErrorAction SilentlyContinue)) {
 		Write-Host "[ОШИБКА] Рядом со скриптом нет remote_client.ps1 — самопроверка невозможна."
+		Pause-Prompt "Нажмите [Enter], чтобы выйти..."
 		exit 1
 	}
 	$_stRc = Invoke-RemoteSelftest

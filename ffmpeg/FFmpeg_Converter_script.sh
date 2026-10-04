@@ -2108,10 +2108,12 @@ fi
 if [ "${FFCONV_REMOTE_SELFTEST:-}" = "1" ]; then
 	if [ "$remote_enabled" != "yes" ]; then
 		echo "[ОШИБКА] --remote-selftest требует [remote] enabled = yes в config.ini." >&2
+		pause_prompt "Нажмите [Enter], чтобы выйти..."
 		exit 1
 	fi
 	if ! type remote_selftest >/dev/null 2>&1; then
 		echo "[ОШИБКА] Рядом со скриптом нет remote_client.sh — самопроверка невозможна." >&2
+		pause_prompt "Нажмите [Enter], чтобы выйти..."
 		exit 1
 	fi
 	remote_selftest; _st_rc=$?

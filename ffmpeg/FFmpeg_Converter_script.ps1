@@ -835,16 +835,23 @@ function Write-Manifest {
 	} catch {}
 }
 
+# Помимо результата ставит $script:ManifestStale = $true, когда manifest законченный,
+# но обесценен: источник изменился или подпись настроек не совпала. Только тогда набор
+# имён выходов может отличаться от прошлого, и хвост прошлого прогона убирает
+# Remove-ManifestOutputs (см. вызов в Encode-File). Пропавший или усечённый выход при
+# прежних источнике и настройках обесцененным не считается: те же настройки дают те же
+# имена частей, и новый прогон перепишет их сам. Паритет с manifest_is_complete (.sh).
 function Test-ManifestComplete {
 	param([string]$ManifestPath, [string]$Source, [string]$Signature)
+	$script:ManifestStale = $false
 	if (!(Test-Path -LiteralPath $ManifestPath)) { return $false }
 	try { $lines = [System.IO.File]::ReadAllLines($ManifestPath) } catch { return $false }
 	if ($lines -notcontains "state=complete") { return $false }
 	$recSize = ($lines | Where-Object { $_ -like "source_size=*" } | Select-Object -First 1)
-	if ($null -eq $recSize -or $recSize.Substring(12) -ne [string](Get-FileSize $Source)) { return $false }
+	if ($null -eq $recSize -or $recSize.Substring(12) -ne [string](Get-FileSize $Source)) { $script:ManifestStale = $true; return $false }
 	# Подпись настроек: смена контейнера/кодека/фильтров обязана обесценить manifest.
 	$recSig = ($lines | Where-Object { $_ -like "settings=*" } | Select-Object -First 1)
-	if ($null -eq $recSig -or $recSig.Substring(9) -ne $Signature) { return $false }
+	if ($null -eq $recSig -or $recSig.Substring(9) -ne $Signature) { $script:ManifestStale = $true; return $false }
 	foreach ($l in ($lines | Where-Object { $_ -like "output=*" })) {
 		$rest = $l.Substring(7)
 		$sep = $rest.IndexOf('|')
@@ -864,6 +871,8 @@ function Test-ManifestComplete {
 # место), текущее расширение (выход в прежнем формате новым прогоном не пересоздаётся)
 # и сам входной файл (при destination == source прошлый выход бывает текущим входом).
 # dry_run ничего не удаляет, а называет (D7). Паритет с purge_manifest_outputs (.sh).
+# S11: зовётся и при overwrite_existing = no, когда manifest обесценен
+# ($script:ManifestStale) и файл перекодируется.
 function Remove-ManifestOutputs {
 	param([string]$ManifestPath, [string]$Source, [string]$Ext)
 	if (!(Test-Path -LiteralPath $ManifestPath)) { return }
@@ -1163,6 +1172,13 @@ function Encode-File {
 				Remove-Item -LiteralPath "$out_base$part_suffix_known.$current_format_out" -Force
 			}
 		}
+		# S11. overwrite_existing = no, но manifest этого входа обесценен (источник или
+		# настройки сменились) и файл всё-таки перекодируется: хвост прошлого прогона
+		# убирается так же, как при overwrite = yes, — иначе новый [split] length с
+		# меньшим числом частей оставлял старые (part.k) рядом с новыми. Стоит ПОСЛЕ
+		# проверки готового выхода: валидный выход при overwrite = no пропускается, и
+		# его соседей это правило не трогает. Паритет с .sh.
+		if ($script:ManifestStale) { Remove-ManifestOutputs $manifest $full_path $current_format_out }
 	}
 
 	# E4 + J1. Один вызов ffmpeg -i для битрейта и длительности (раньше запускались

@@ -849,18 +849,18 @@ fi
 
 # Сценарий A: вход ov.mp4, в manifest — 3 части mp4 (удаляются), часть в прежнем
 # формате mkv и часть в чужом каталоге (обе остаются). $1 = posix|win.
+# Manifest в форме платформы: Windows-пути и CRLF, как пишут его .ps1 и .cmd (findstr /x
+# в :manifest_is_complete строку state=complete с одним LF не находит).
 d2_setup() {
-    local dd="$DST" od="$D2_OTHER" sep="/" k
-    if [ "$1" = "win" ]; then dd="$W_DST"; od="$W_OTHER"; sep='\'; fi
+    local dd="$DST" od="$D2_OTHER" sep="/" eol="" k
+    if [ "$1" = "win" ]; then dd="$W_DST"; od="$W_OTHER"; sep='\'; eol=$'\r'; fi
     rm -f "$DST"/ov* "$DST/.ov.ffconv" "$D2_OTHER"/ov*
     : > "$IN/ov.mp4"
-    {
-        echo "# ffconv-manifest v1"; echo "source=x"; echo "source_size=0"; echo "settings=old"
-        for k in 1 2 3; do : > "$DST/ov (part.$k).mp4"; echo "output=0|$dd${sep}ov (part.$k).mp4"; done
-        : > "$DST/ov (part.2).mkv"; echo "output=0|$dd${sep}ov (part.2).mkv"
-        : > "$D2_OTHER/ov (part.3).mp4"; echo "output=0|$od${sep}ov (part.3).mp4"
-        echo "state=complete"
-    } > "$DST/.ov.ffconv"
+    for k in 1 2 3; do : > "$DST/ov (part.$k).mp4"; done
+    : > "$DST/ov (part.2).mkv"; : > "$D2_OTHER/ov (part.3).mp4"
+    printf "%s$eol\n" "# ffconv-manifest v1" "source=x" "source_size=0" "settings=old" \
+        "output=0|$dd${sep}ov (part.1).mp4" "output=0|$dd${sep}ov (part.2).mp4" "output=0|$dd${sep}ov (part.3).mp4" \
+        "output=0|$dd${sep}ov (part.2).mkv" "output=0|$od${sep}ov (part.3).mp4" "state=complete" > "$DST/.ov.ffconv"
 }
 # Проверки сценария A. $1 = платформа, $2 = dry|real, $3 = вывод прогона.
 d2_check() {
@@ -888,6 +888,30 @@ d2_inplace() {
     rm -rf "$D2_IP"; mkdir -p "$D2_IP"; printf 'ORIGINAL' > "$D2_IP/ip.mp4"
     printf '%s\n' "# ffconv-manifest v1" "source=x" "source_size=0" "settings=old" "output=8|$d" "state=complete" > "$D2_IP/.ip.ffconv"
 }
+# S11. overwrite_existing=no. Manifest сценария A обесценен подписью (settings=old), и
+# файл перекодируется — хвост убирается так же (d2_check с overwrite=no). Ещё два исхода:
+# валидный готовый выход пропускается, и его соседи не трогаются; manifest при прежних
+# источнике и подписи, у которого пропал выход, обесцененным не считается — файл
+# перекодируется, а прочее перечисленное в нём не удаляется.
+d2_skip_setup() { d2_setup "$1"; printf 'MOCK' > "$DST/ov.mp4"; }
+d2_skip_check() {   # $1 = платформа
+    local k left=""
+    for k in 1 2 3; do [ -f "$DST/ov (part.$k).mp4" ] && left="$left part.$k"; done
+    assert_eq "$1 overwrite=no: валидный выход пропущен, части прошлого прогона не тронуты" " part.1 part.2 part.3" "$left"
+}
+# Зовётся после настоящего прогона: его manifest действителен. Убираем выход и дописываем
+# в manifest ещё один (part.9) — подпись и источник прежние, manifest лишь неполон.
+d2_incomplete_setup() {   # $1 = posix|win
+    local dd="$DST" sep="/" eol="" body
+    if [ "$1" = "win" ]; then dd="$W_DST"; sep='\'; eol=$'\r'; fi
+    rm -f "$DST/ov.mp4"; : > "$DST/ov (part.9).mp4"
+    body=$(grep -v '^state=complete' "$DST/.ov.ffconv")
+    printf '%s\n' "$body" "output=0|$dd${sep}ov (part.9).mp4$eol" "state=complete$eol" > "$DST/.ov.ffconv"
+}
+d2_incomplete_check() {   # $1 = платформа, $2 = вывод прогона
+    if [ -f "$DST/ov (part.9).mp4" ]; then pass "$1 overwrite=no, прежние настройки: прочие выходы manifest не удалены"; else fail "$1 overwrite=no, прежние настройки: прочие выходы manifest не удалены" "есть ov (part.9).mp4" "удалён"; fi
+    if [ -f "$DST/ov.mp4" ]; then pass "$1 overwrite=no, прежние настройки: пропавший выход перекодирован"; else fail "$1 overwrite=no, прежние настройки: пропавший выход перекодирован" "есть ov.mp4" "нет; вывод: $(printf '%s' "$2" | tr '\n' '|')"; fi
+}
 
 # --- SH ---
 d2_setup posix
@@ -899,6 +923,17 @@ d2_inplace posix
 run_capture 'folder_sources="$D2_IP"' 'folder_destination="$D2_IP"' 'start_coding=":+:00-00-10"' 'overwrite_existing="yes"' 'format_files_in="mp4"'
 assert_eq "SH in-place: входной файл, перечисленный в manifest, не удалён" "ORIGINAL" "$(cat "$D2_IP/ip.mp4" 2>/dev/null)"
 if log_has "-c:v libx264"; then pass "SH in-place: вход перекодирован"; else fail "SH in-place: вход перекодирован" "ffmpeg вызван" "нет"; fi
+d2_setup posix
+run_capture 'dry_run="yes"'
+d2_check "SH overwrite=no" dry "$OUT_TEXT"
+run_capture
+d2_check "SH overwrite=no" real "$OUT_TEXT"
+d2_incomplete_setup posix
+run_capture
+d2_incomplete_check "SH" "$OUT_TEXT"
+d2_skip_setup posix
+run_capture
+d2_skip_check "SH"
 
 # --- PS1 (настоящий воркер, мок ffmpeg.cmd) ---
 d2_ps1() {   # $1 = source, $2 = destination (Windows-пути), дальше — PS-присваивания
@@ -942,6 +977,17 @@ else
     assert_not_contains "PS1 in-place: вход, перечисленный в manifest, не удалялся" "Удаление выхода прошлого прогона" "$(cat "$WORK/d2_ps1.log" 2>/dev/null)"
     assert_contains "PS1 in-place: лог записан (проверка выше не пустая)" "Кодирование" "$(cat "$WORK/d2_ps1.log" 2>/dev/null)"
     if [ -f "$D2_IP/ip (part.1).mp4" ]; then pass "PS1 in-place: вход перекодирован"; else fail "PS1 in-place: вход перекодирован" "есть ip (part.1).mp4" "нет; вывод: $(printf '%s' "$D2_OUT" | tr '\n' '|')"; fi
+    d2_setup win
+    d2_ps1 "$W_IN" "$W_DST" "\$overwrite_existing='no'; \$dry_run='yes'"
+    d2_check "PS1 overwrite=no" dry "$D2_OUT"
+    d2_ps1 "$W_IN" "$W_DST" "\$overwrite_existing='no'"
+    d2_check "PS1 overwrite=no" real "$D2_OUT"
+    d2_incomplete_setup win
+    d2_ps1 "$W_IN" "$W_DST" "\$overwrite_existing='no'"
+    d2_incomplete_check "PS1" "$D2_OUT"
+    d2_skip_setup win
+    d2_ps1 "$W_IN" "$W_DST" "\$overwrite_existing='no'"
+    d2_skip_check "PS1"
 fi
 
 # --- CMD (настоящий script.cmd, мок ffmpeg.exe) ---
@@ -998,6 +1044,17 @@ CSEOF
         d2_cmd "$W_IP" "$W_IP" 'set "start_coding=:+:00-00-10"'
         assert_eq "CMD in-place: входной файл, перечисленный в manifest, не удалён" "ORIGINAL" "$(cat "$D2_IP/ip.mp4" 2>/dev/null)"
         if [ -f "$D2_IP/ip (part.1).mp4" ]; then pass "CMD in-place: вход перекодирован"; else fail "CMD in-place: вход перекодирован" "есть ip (part.1).mp4" "нет; вывод: $(printf '%s' "$D2_OUT" | tr '\n' '|')"; fi
+        d2_setup win
+        d2_cmd "$W_IN" "$W_DST" $'set "overwrite_existing=no"\nset "dry_run=yes"'
+        d2_check "CMD overwrite=no" dry "$D2_OUT"
+        d2_cmd "$W_IN" "$W_DST" 'set "overwrite_existing=no"'
+        d2_check "CMD overwrite=no" real "$D2_OUT"
+        d2_incomplete_setup win
+        d2_cmd "$W_IN" "$W_DST" 'set "overwrite_existing=no"'
+        d2_incomplete_check "CMD" "$D2_OUT"
+        d2_skip_setup win
+        d2_cmd "$W_IN" "$W_DST" 'set "overwrite_existing=no"'
+        d2_skip_check "CMD"
     fi
 fi
 rm -rf "$D2_IP" "$D2_OTHER" "$IN/ov.mp4" "$DST"/ov* "$DST/.ov.ffconv"

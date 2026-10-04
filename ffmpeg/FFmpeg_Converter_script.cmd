@@ -787,6 +787,7 @@ rem а goto из тела for обрывал бы перечисление фа�
 		set "_mf=%folder_destination%!file_path!.!file_name!.ffconv"
 		set "_file_sig=!settings_sig!|fmt=!current_format_out!|copy=%copy_codecs%"
 		set "_mf_complete="
+		set "_mf_stale="
 		if not "%overwrite_existing%"=="yes" call :manifest_is_complete "!_mf!" "!full_path!" "!_file_sig!"
 		if defined _mf_complete (
 			set /a "total_skip+=1"
@@ -794,6 +795,13 @@ rem а goto из тела for обрывал бы перечисление фа�
 		)
 
 		if not exist "%folder_destination%!file_path!!file_name!!part_suffix_known!.!current_format_out!" (
+				rem S11. overwrite_existing=no, но manifest этого входа обесценен - источник или
+				rem настройки сменились - и файл всё-таки перекодируется: хвост прошлого прогона
+				rem убирается так же, как при overwrite=yes, - иначе новый [split] length с
+				rem меньшим числом частей оставлял старые (part.k) рядом с новыми. Стоит внутри
+				rem ветки кодирования: валидный выход при overwrite=no пропускается, и его
+				rem соседей это правило не трогает. Паритет с .sh/.ps1.
+				if defined _mf_stale call :purge_manifest_outputs "!_mf!" "!full_path!" "!current_format_out!"
 				rem P3. Один вызов ffmpeg -i на файл — раньше было 2: bitrate + Duration.
 				rem ffmpeg печатает metadata в stderr → перенаправляем в файл, stdout → nul.
 				set "_ff_info_tmp=%temp%\ffinfo_!random!!random!.txt"
@@ -1271,8 +1279,14 @@ rem сопоставимо с самим перекодированием, а р
 rem
 rem Аргументы: %1 = путь manifest, %2 = путь источника, %3 = подпись настроек.
 rem Результат: переменная _mf_complete определена <=> manifest подтверждает готовность.
+rem _mf_stale определена, когда manifest законченный, но обесценен: источник изменился
+rem или подпись настроек не совпала. Только тогда набор имён выходов может отличаться
+rem от прошлого, и хвост прошлого прогона убирает :purge_manifest_outputs. Пропавший
+rem или усечённый выход при прежних источнике и настройках обесцененным не считается:
+rem те же настройки дают те же имена частей. Паритет с manifest_is_complete (.sh).
 :manifest_is_complete
 set "_mf_complete="
+set "_mf_stale="
 set "_mfp=%~1"
 set "_mfsrc=%~2"
 set "_mfsig=%~3"
@@ -1283,11 +1297,11 @@ rem Размер источника: изменился файл - manifest не
 for %%A in ("!_mfsrc!") do set "_mfsz=%%~zA"
 set "_mf_rec="
 for /f "usebackq tokens=1,* delims==" %%a in ("!_mfp!") do if "%%a"=="source_size" if not defined _mf_rec set "_mf_rec=%%b"
-if not "!_mf_rec!"=="!_mfsz!" exit /b
+if not "!_mf_rec!"=="!_mfsz!" (set "_mf_stale=1" & exit /b)
 rem Подпись настроек: смена контейнера/кодека/фильтров обязана обесценить manifest.
 set "_mf_rec="
 for /f "usebackq tokens=1,* delims==" %%a in ("!_mfp!") do if "%%a"=="settings" if not defined _mf_rec set "_mf_rec=%%b"
-if not "!_mf_rec!"=="!_mfsig!" exit /b
+if not "!_mf_rec!"=="!_mfsig!" (set "_mf_stale=1" & exit /b)
 rem Каждый перечисленный выход обязан существовать и совпадать по размеру.
 for /f "usebackq tokens=1,* delims==" %%a in ("!_mfp!") do (
 	if "%%a"=="output" (
@@ -1305,6 +1319,8 @@ set "_mf_complete=1"
 exit /b
 
 rem --- D2. Выходы прошлого прогона при overwrite_existing=yes ---
+rem S11: и при overwrite_existing=no, когда manifest обесценен (_mf_stale) и файл
+rem перекодируется.
 rem Иначе прогон с меньшим числом частей оставлял старые "(part.k)" на диске - вне
 rem нового manifest, вперемешку с новыми. Список берётся из manifest, а не из маски
 rem имени: удаляется только то, что этот вход действительно создал. Фильтры: каталог

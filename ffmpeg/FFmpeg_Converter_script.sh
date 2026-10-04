@@ -844,8 +844,15 @@ manifest_write() {
 	} > "$tmp" && mv -f "$tmp" "$mf"
 }
 
+# Помимо кода возврата ставит MANIFEST_STALE=yes, когда manifest законченный, но
+# обесценен: источник изменился или подпись настроек не совпала. Только тогда набор
+# имён выходов может отличаться от прошлого, и хвост прошлого прогона убирает
+# purge_manifest_outputs (см. вызов в encode_file). Пропавший или усечённый выход при
+# прежних источнике и настройках обесцененным не считается: те же настройки дают те
+# же имена частей, и новый прогон перепишет их сам.
 manifest_is_complete() {
 	local mf="$1" src="$2" sig="$3"
+	MANIFEST_STALE="no"
 	[ -f "$mf" ] || return 1
 	# Один проход чтением самого bash вместо трёх grep-конвейеров: проверка стоит
 	# на каждом файле повторного прогона. Берутся ПЕРВЫЕ строки source_size= и
@@ -863,9 +870,9 @@ manifest_is_complete() {
 		esac
 	done < "$mf"
 	[ "$complete" = "yes" ] || return 1
-	[ "$rec_size" = "$(file_size "$src")" ] || return 1
+	[ "$rec_size" = "$(file_size "$src")" ] || { MANIFEST_STALE="yes"; return 1; }
 	# Подпись настроек: смена контейнера/кодека/фильтров обязана обесценить manifest.
-	[ "$rec_sig" = "$sig" ] || return 1
+	[ "$rec_sig" = "$sig" ] || { MANIFEST_STALE="yes"; return 1; }
 	local sz path
 	while IFS= read -r line; do
 		case "$line" in output=*) ;; *) continue ;; esac
@@ -885,6 +892,8 @@ manifest_is_complete() {
 # место), текущее расширение (выход в прежнем формате новым прогоном не пересоздаётся)
 # и сам входной файл (при destination == source прошлый выход бывает текущим входом).
 # dry_run ничего не удаляет, а называет (D7). Аргументы: manifest, источник, расширение.
+# S11: зовётся и при overwrite_existing = no, когда manifest обесценен (MANIFEST_STALE)
+# и файл перекодируется.
 purge_manifest_outputs() {
 	local mf="$1" src="$2" ext="$3"
 	[ -f "$mf" ] || return 0
@@ -1286,6 +1295,15 @@ encode_file() {
 				log_msg "WARN" "Удаление битого файла: ${folder_destination}${file_path}${file_name}${part_suffix_known}.${current_format_out}"
 				rm -f "${folder_destination}${file_path}${file_name}${part_suffix_known}.${current_format_out}"
 			fi
+		fi
+		# S11. overwrite_existing = no, но manifest этого входа обесценен (источник или
+		# настройки сменились) и файл всё-таки перекодируется: хвост прошлого прогона
+		# убирается так же, как при overwrite = yes, — иначе новый [split] length с
+		# меньшим числом частей оставлял старые (part.k) рядом с новыми. Стоит ПОСЛЕ
+		# проверки готового выхода: валидный выход при overwrite = no пропускается, и
+		# его соседей это правило не трогает.
+		if [ "${MANIFEST_STALE:-no}" = "yes" ]; then
+			purge_manifest_outputs "$manifest" "$full_path" "$current_format_out"
 		fi
 	fi
 

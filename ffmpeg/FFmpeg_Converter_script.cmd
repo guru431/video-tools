@@ -43,8 +43,12 @@ rem подхватывает уже сконвертированные выхо�
 rem поверх). Канонизируем оба пути (%%~fI снимает ../ и относительность), затем
 rem проверяем, что dest начинается с "source\". dest == source (in-place) вложенностью
 rem НЕ считается — там файлы это источники, а коллизию «выход==вход» снимает F12.
-for %%I in ("%folder_sources%")     do set "canon_src=%%~fI"
-for %%I in ("%folder_destination%") do set "canon_dst=%%~fI"
+rem S16. Сравнивается короткая форма %%~sf: %%~f не сводит длинное и 8.3-написание
+rem одного каталога, и destination в 8.3-форме внутри источника (или наоборот) не
+rem распознавался. Оба каталога к этому месту существуют (destination создан выше),
+rem поэтому %%~sf укорачивает весь путь. Так же сверяется файл в :process_file.
+for %%I in ("%folder_sources%")     do set "canon_src=%%~sfI"
+for %%I in ("%folder_destination%") do set "canon_dst=%%~sfI"
 if "%canon_src:~-1%"=="\" set "canon_src=%canon_src:~0,-1%"
 if "%canon_dst:~-1%"=="\" set "canon_dst=%canon_dst:~0,-1%"
 set "dest_inside_source="
@@ -603,8 +607,10 @@ rem а goto из тела for обрывал бы перечисление фа�
 		rem F-collision. Файл внутри каталога назначения — наш собственный выход
 		rem (dest строго внутри source). Пропускаем, иначе перекодируем по кругу.
 		if defined dest_inside_source (
-			set "_pf_probe=!full_path:%canon_dst%\=!"
-			if not "!_pf_probe!"=="!full_path!" (
+			rem S16. canon_dst - короткая форма; файл существует, %%~sf сводит и его.
+			for %%I in ("!full_path!") do set "_pf_short=%%~sfI"
+			set "_pf_probe=!_pf_short:%canon_dst%\=!"
+			if not "!_pf_probe!"=="!_pf_short!" (
 				echo [SKIP] внутри каталога назначения - собственный выход: !pf_nx!
 				call :log_msg "SKIP" "внутри каталога назначения: !full_path!"
 				exit /b

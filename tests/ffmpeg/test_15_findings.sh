@@ -1083,6 +1083,29 @@ CSEOF
             assert_eq "CMD F12: оригинал не тронут" "ORIGINAL" "$(cat "$F12_DIR/same.mp4" 2>/dev/null)"
         fi
         rm -rf "$F12_DIR"
+        # S16. «Назначение внутри источника» сверяло %~f — тот же класс, что F12: при
+        # destination в 8.3-форме подкаталога источника (или source в 8.3-форме) прошлый
+        # выход old.mp4 в destination становился входом и уезжал в "Out Sub\Out Sub".
+        DI_DIR="$WORK/Long Dir DI"
+        di_setup() { rm -rf "$DI_DIR"; mkdir -p "$DI_DIR/Out Sub"; : > "$DI_DIR/a.mp4"; printf 'OLD' > "$DI_DIR/Out Sub/old.mp4"; }
+        di_check() {   # $1 = название сценария
+            assert_contains "CMD $1: прошлый выход в destination пропущен" "[SKIP]" "$D2_OUT"
+            if [ ! -e "$DI_DIR/Out Sub/Out Sub" ]; then pass "CMD $1: выход не перекодирован по кругу"; else fail "CMD $1: выход не перекодирован по кругу" "нет Out Sub/Out Sub" "создан; вывод: $(printf '%s' "$D2_OUT" | tr '\n' '|')"; fi
+            if [ -f "$DI_DIR/Out Sub/a.mp4" ]; then pass "CMD $1: вход источника закодирован"; else fail "CMD $1: вход источника закодирован" "есть Out Sub/a.mp4" "нет"; fi
+        }
+        di_setup
+        W_DI_LONG=$(cygpath -w "$DI_DIR"); W_DI_SHORT=$(cygpath -d "$DI_DIR")
+        W_DIO_LONG=$(cygpath -w "$DI_DIR/Out Sub"); W_DIO_SHORT=$(cygpath -d "$DI_DIR/Out Sub")
+        if [ "$W_DI_SHORT" = "$W_DI_LONG" ] || [ "$W_DIO_SHORT" = "$W_DIO_LONG" ]; then
+            skip "CMD: destination внутри источника, длинный и 8.3-путь" "на томе нет 8.3-имён"
+        else
+            d2_cmd "$W_DI_LONG" "$W_DIO_SHORT" ''
+            di_check "destination внутри source в 8.3-форме"
+            di_setup
+            d2_cmd "$W_DI_SHORT" "$W_DIO_LONG" ''
+            di_check "source в 8.3-форме, destination внутри"
+        fi
+        rm -rf "$DI_DIR"
     fi
 fi
 rm -rf "$D2_IP" "$D2_OTHER" "$IN/ov.mp4" "$DST"/ov* "$DST/.ov.ffconv"

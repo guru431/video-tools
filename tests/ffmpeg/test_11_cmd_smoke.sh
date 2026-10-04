@@ -159,6 +159,19 @@ build_and_run 'set "output_container=:+:webm"'
 assert_not_contains "webm-валидация: нет parse error" "was unexpected at this time" "$SMOKE_OUT"
 assert_contains "webm+libx264: сообщение о несовместимости" "WebM не поддерживает" "$SMOKE_OUT"
 
+# ══════════════════════════════════════════════════════════════
+suite "CMD: '!' в пути ffmpeg не теряется"
+# ══════════════════════════════════════════════════════════════
+# run_v19 находит ffmpeg.exe рядом со скриптом, и каталог скрипта может содержать
+# '!'. script.cmd подставлял "%ffmpeg%" под EnableDelayedExpansion — '!' пропадали,
+# и ffmpeg «не найден» при лежащем рядом exe.
+BANG_BIN="$TMP_DIR/bin"'!'"x"
+mkdir -p "$BANG_BIN"; cp "$TMP_DIR/bin/ffmpeg.exe" "$BANG_BIN/"
+WIN_BANG_FFMPEG=$(cygpath -w "$BANG_BIN/ffmpeg.exe")
+build_and_run "set \"ffmpeg=$WIN_BANG_FFMPEG\""
+assert_eq "ffmpeg из каталога с '!': exit code 0" "0" "$SMOKE_RC"
+assert_contains "DRY-RUN зовёт ffmpeg по пути с '!'" "\"$WIN_BANG_FFMPEG\" -hide_banner" "$SMOKE_OUT"
+
 rm -rf "$TMP_DIR"
 
 summary

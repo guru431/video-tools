@@ -51,10 +51,13 @@ set "dest_inside_source="
 call set "_di_probe=%%canon_dst:%canon_src%\=%%"
 if not "%_di_probe%"=="%canon_dst%" set "dest_inside_source=1"
 
-"%ffmpeg%" -version >nul 2>&1
+rem S14. Путь ffmpeg - только !ffmpeg!: run_v19 находит ffmpeg.exe рядом со скриптом,
+rem и в каталоге с "!" процентная подстановка под EnableDelayedExpansion теряла
+rem восклицательные знаки - ffmpeg "не найден" при лежащем рядом exe.
+"!ffmpeg!" -version >nul 2>&1
 if errorlevel 1 (
 	echo.
-	echo [ОШИБКА] ffmpeg не найден: %ffmpeg%
+	echo [ОШИБКА] ffmpeg не найден: !ffmpeg!
 	echo.
 	pause
 	exit /b 1
@@ -534,18 +537,18 @@ if "%merge_files%"=="yes" (
 				set /a "total_fail+=1"
 				del "!full_path!" "!full_path!.u16" 2>nul
 			) else if "%dry_run%"=="yes" (
-				echo [DRY-RUN] "%ffmpeg%" -hide_banner -nostdin -strict -2 -f concat -safe 0 -i "!full_path!" -c copy -map 0 -y "!_merge_tmp!"
+				echo [DRY-RUN] "!ffmpeg!" -hide_banner -nostdin -strict -2 -f concat -safe 0 -i "!full_path!" -c copy -map 0 -y "!_merge_tmp!"
 				del "!full_path!" "!full_path!.u16" 2>nul
 			) else (
 				echo [INFO] Объединение файлов& call :log_msg "INFO" "Объединение файлов"
 				if exist "!_merge_tmp!" del "!_merge_tmp!" 2>nul
-				"%ffmpeg%" -hide_banner -nostdin -strict -2 -f concat -safe 0 -i "!full_path!" -c copy -map 0 -y "!_merge_tmp!"
+				"!ffmpeg!" -hide_banner -nostdin -strict -2 -f concat -safe 0 -i "!full_path!" -c copy -map 0 -y "!_merge_tmp!"
 				rem rc=0 сам по себе не гарантирует читаемый контейнер — валидируем тем же
 				rem `-f null -`, что и обычные выходные файлы, и только потом подменяем цель.
 				set "_merge_ok="
 				if not errorlevel 1 (
 					if exist "!_merge_tmp!" (
-						"%ffmpeg%" -nostdin -v error -i "!_merge_tmp!" -f null - >nul 2>&1
+						"!ffmpeg!" -nostdin -v error -i "!_merge_tmp!" -f null - >nul 2>&1
 						if not errorlevel 1 set "_merge_ok=1"
 					)
 				)
@@ -630,7 +633,7 @@ rem а goto из тела for обрывал бы перечисление фа�
 		if "%extract_audio_copy%"=="yes" (
 			set "audio_ext=mka"
 			set "audio_line="
-			for /f "delims=" %%c in ('""%ffmpeg%" -i "!full_path!" 2^>^&1 ^| find "Audio:""') do if not defined audio_line set "audio_line=%%c"
+			for /f "delims=" %%c in ('""!ffmpeg!" -i "!full_path!" 2^>^&1 ^| find "Audio:""') do if not defined audio_line set "audio_line=%%c"
 			if not "!audio_line!"=="" (
 				if not "!audio_line:Audio: aac=!"=="!audio_line!" set "audio_ext=m4a"
 				if not "!audio_line:Audio: mp3=!"=="!audio_line!" set "audio_ext=mp3"
@@ -661,10 +664,10 @@ rem а goto из тела for обрывал бы перечисление фа�
 			if exist "!out_audio!" if "%overwrite_existing%"=="yes" if not "%dry_run%"=="yes" del "!out_audio!"
 			if not exist "!out_audio!" (
 				if "%dry_run%"=="yes" (
-					echo [DRY-RUN] "%ffmpeg%" -hide_banner -nostdin -strict -2 -i "!full_path!" -vn -c:a copy "!out_audio!" -y
+					echo [DRY-RUN] "!ffmpeg!" -hide_banner -nostdin -strict -2 -i "!full_path!" -vn -c:a copy "!out_audio!" -y
 				) else (
 					echo [INFO] Извлечение аудио: !file_name!& call :log_msg "INFO" "Извлечение аудио: !file_name!"
-					"%ffmpeg%" -hide_banner -nostdin -strict -2 -i "!full_path!" -vn -c:a copy "!out_audio!" -y
+					"!ffmpeg!" -hide_banner -nostdin -strict -2 -i "!full_path!" -vn -c:a copy "!out_audio!" -y
 					if errorlevel 1 (
 						echo [FAIL] !file_name!& call :log_msg "FAIL" "!file_name!"
 						if exist "!out_audio!" del "!out_audio!"
@@ -691,12 +694,12 @@ rem а goto из тела for обрывал бы перечисление фа�
 				set /a "total_skip+=1"
 			) else (
 				if "%dry_run%"=="yes" (
-					echo [DRY-RUN] "%ffmpeg%" -hide_banner -nostdin -strict -2 -i "!full_path!" -r 1/1 "!frame_dir!\!file_name!_%%05d.png"
+					echo [DRY-RUN] "!ffmpeg!" -hide_banner -nostdin -strict -2 -i "!full_path!" -r 1/1 "!frame_dir!\!file_name!_%%05d.png"
 				) else (
 					if exist "!frame_dir!\" rd /s /q "!frame_dir!"
 					md "!frame_dir!"
 					echo [INFO] Извлечение кадров: !full_path!& call :log_msg "INFO" "Извлечение кадров: !full_path!"
-					"%ffmpeg%" -hide_banner -nostdin -strict -2 -i "!full_path!" -r 1/1 "!frame_dir!\!file_name!_%%05d.png"
+					"!ffmpeg!" -hide_banner -nostdin -strict -2 -i "!full_path!" -r 1/1 "!frame_dir!\!file_name!_%%05d.png"
 					if errorlevel 1 (
 						echo [FAIL] !full_path!& call :log_msg "FAIL" "!full_path!"
 						if exist "!frame_dir!\" rd /s /q "!frame_dir!"
@@ -774,7 +777,7 @@ rem а goto из тела for обрывал бы перечисление фа�
 		rem CMD удалял его при ЛЮБОМ значении overwrite_existing — расхождение паритета).
 		set "_existing_out=%folder_destination%!file_path!!file_name!!part_suffix_known!.!current_format_out!"
 		if exist "!_existing_out!" (
-			"%ffmpeg%" -nostdin -v error -i "!_existing_out!" -f null - >nul 2>&1
+			"!ffmpeg!" -nostdin -v error -i "!_existing_out!" -f null - >nul 2>&1
 			if errorlevel 1 (
 				if "%dry_run%"=="yes" (
 					echo [WARN] [DRY-RUN] битый файл был бы удалён: !_existing_out!& call :log_msg "WARN" "[DRY-RUN] битый файл был бы удалён: !_existing_out!"
@@ -810,7 +813,7 @@ rem а goto из тела for обрывал бы перечисление фа�
 				rem P3. Один вызов ffmpeg -i на файл — раньше было 2: bitrate + Duration.
 				rem ffmpeg печатает metadata в stderr → перенаправляем в файл, stdout → nul.
 				set "_ff_info_tmp=%temp%\ffinfo_!random!!random!.txt"
-				"%ffmpeg%" -nostdin -i "!full_path!" 1>nul 2>"!_ff_info_tmp!"
+				"!ffmpeg!" -nostdin -i "!full_path!" 1>nul 2>"!_ff_info_tmp!"
 				rem E4. Получение битрейта.
 				rem Берём подстроку после "bitrate: " и первый токен — число кб/с; надёжнее
 				rem позиционного tokens=6, который ломался при смене формата строки. Если ffmpeg
@@ -1019,10 +1022,10 @@ rem а goto из тела for обрывал бы перечисление фа�
 					rem -ss располагается ДО -i: fast seek по контейнеру вместо декодирования от 0.
 					if %%b==0 (set "in_seek=" & set "out_seek=") else (if "!sub_burned!"=="1" (set "in_seek=" & set "out_seek=-ss %%b") else (set "in_seek=-ss %%b" & set "out_seek="))
 					if "%dry_run%"=="yes" (
-						echo [DRY-RUN] "%ffmpeg%" -hide_banner -nostdin -strict -2 !hw_decode_args! !in_seek! -i "!full_path!" !subtitles_params! !convert_settings! !thread_args! !vf_args! !af_args! !current_set_length! !out_seek! "!out_file!"
+						echo [DRY-RUN] "!ffmpeg!" -hide_banner -nostdin -strict -2 !hw_decode_args! !in_seek! -i "!full_path!" !subtitles_params! !convert_settings! !thread_args! !vf_args! !af_args! !current_set_length! !out_seek! "!out_file!"
 					) else (
 						echo [INFO] Кодирование: !full_path!& call :log_msg "INFO" "Кодирование: !full_path!"
-						"%ffmpeg%" -hide_banner -nostdin -strict -2 !hw_decode_args! !in_seek! -i "!full_path!" !subtitles_params! !convert_settings! !thread_args! !vf_args! !af_args! !current_set_length! !out_seek! "!out_tmp!" -y
+						"!ffmpeg!" -hide_banner -nostdin -strict -2 !hw_decode_args! !in_seek! -i "!full_path!" !subtitles_params! !convert_settings! !thread_args! !vf_args! !af_args! !current_set_length! !out_seek! "!out_tmp!" -y
 						if errorlevel 1 (
 							echo [FAIL] !full_path!
 							if exist "!out_tmp!" del "!out_tmp!"
@@ -1153,10 +1156,10 @@ if not defined hw_candidate (
 rem Якорим имя по границе столбца: пробел слева и конец строки справа, иначе
 rem av1_nvenc матчился бы внутри av1_nvenc_hypothetical.
 set "encoder_check="
-rem Кавычки: `""%ffmpeg%"` — обёртка пути с пробелами; закрывающих кавычек ДВЕ —
+rem Кавычки: `""!ffmpeg!"` — обёртка пути с пробелами; закрывающих кавычек ДВЕ —
 rem одна закрывает аргумент findstr, вторая внешнюю обёртку (иначе "The syntax of
 rem the command is incorrect" ещё до запуска ffmpeg).
-for /f "tokens=*" %%i in ('""%ffmpeg%" -encoders 2^>^&1 ^| findstr /r /c:" !hw_candidate!$""') do set "encoder_check=%%i"
+for /f "tokens=*" %%i in ('""!ffmpeg!" -encoders 2^>^&1 ^| findstr /r /c:" !hw_candidate!$""') do set "encoder_check=%%i"
 if not defined encoder_check (
 	echo [ПРЕДУПРЕЖДЕНИЕ] Энкодер !hw_candidate! отсутствует в данной сборке ffmpeg. Используется программное кодирование.
 	exit /b 0

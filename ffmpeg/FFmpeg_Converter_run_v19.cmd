@@ -1,5 +1,13 @@
 @echo off
 chcp 65001 >nul 2>&1
+rem %~dp0 снимаем ДО EnableDelayedExpansion: под ним путь каталога скрипта с "!"
+rem терял восклицательные знаки при каждой подстановке %~dp0 - config.ini и
+rem ffmpeg.exe рядом со скриптом не находились молча, относительные пути
+rem резолвились в чужой каталог, script.cmd "не найден". Дальше путь читается
+rem только как !SCRIPT_DIR!: результат delayed expansion повторно не сканируется.
+rem Первый setlocal - чтобы SCRIPT_DIR не утекал в вызвавшую консоль.
+setlocal
+set "SCRIPT_DIR=%~dp0"
 setlocal enabledelayedexpansion
 
 :: ============================================================
@@ -7,7 +15,7 @@ setlocal enabledelayedexpansion
 :: ============================================================
 
 :: --- Авто-определение ffmpeg рядом со скриптом ---
-if exist "%~dp0ffmpeg.exe" (set "ffmpeg=%~dp0ffmpeg.exe") else (set "ffmpeg=ffmpeg")
+if exist "!SCRIPT_DIR!ffmpeg.exe" (set "ffmpeg=!SCRIPT_DIR!ffmpeg.exe") else (set "ffmpeg=ffmpeg")
 
 :: --- Значения по умолчанию ---
 set "folder_sources=_video_\0"
@@ -68,14 +76,14 @@ set "asr_diarize=yes"
 set "asr_num_speakers="
 
 :: --- Чтение config.ini ---
-set "CONFIG_FILE=%~dp0config.ini"
-if not exist "%CONFIG_FILE%" goto :start_coding
+set "CONFIG_FILE=!SCRIPT_DIR!config.ini"
+if not exist "!CONFIG_FILE!" goto :start_coding
 
 set "_section="
 :: Ограничение CMD: значения с '!' (напр. C:\My!Folder!) не поддерживаются — enabledelayedexpansion
 :: раскрывает '!...!' при чтении строки, а отключить его нельзя без потери поддержки '&' в значениях
 :: (напр. дефолтный subtitles_style=...&HFFFFFF&). Для путей с '!' используйте SH/PS1.
-for /f "usebackq tokens=* delims=" %%L in ("%CONFIG_FILE%") do (
+for /f "usebackq tokens=* delims=" %%L in ("!CONFIG_FILE!") do (
 	set "_line=%%L"
 	rem UTF-8 BOM в начале файла: Notepad и часть редакторов Windows сохраняют его
 	rem по умолчанию, а он приклеивается к ПЕРВОЙ строке — проверка на "[" на ней
@@ -341,12 +349,12 @@ rem Паритет с SH-правилом /*|[A-Za-z]:* (раньше drive-rela
 if "!folder_sources:~1,1!"==":" set "_abs=1"
 if "!folder_sources:~0,1!"=="\" set "_abs=1"
 if "!folder_sources:~0,1!"=="/" set "_abs=1"
-if not defined _abs set "folder_sources=%~dp0!folder_sources!"
+if not defined _abs set "folder_sources=!SCRIPT_DIR!!folder_sources!"
 set "_abs="
 if "!folder_destination:~1,1!"==":" set "_abs=1"
 if "!folder_destination:~0,1!"=="\" set "_abs=1"
 if "!folder_destination:~0,1!"=="/" set "_abs=1"
-if not defined _abs set "folder_destination=%~dp0!folder_destination!"
+if not defined _abs set "folder_destination=!SCRIPT_DIR!!folder_destination!"
 
 rem F28. Относительный log_file резолвим от папки скрипта — как source/destination выше.
 rem Иначе лог уезжал в cwd процесса: запуск из другого каталога (ярлык, планировщик)
@@ -356,7 +364,7 @@ set "_abs="
 if "!log_file:~1,1!"==":" set "_abs=1"
 if "!log_file:~0,1!"=="\" set "_abs=1"
 if "!log_file:~0,1!"=="/" set "_abs=1"
-if not defined _abs set "log_file=%~dp0!log_file!"
+if not defined _abs set "log_file=!SCRIPT_DIR!!log_file!"
 
 rem Тестовый хук: --print-config печатает распарсенные переменные и выходит, не запуская script
 if "%~1"=="--print-config" (
@@ -379,8 +387,8 @@ if /i "%asr_enabled%"=="yes" (
 )
 
 :: start coding
-if not exist "%~dp0FFmpeg_Converter_script.cmd" (
+if not exist "!SCRIPT_DIR!FFmpeg_Converter_script.cmd" (
 	echo Ошибка: не найден FFmpeg_Converter_script.cmd рядом с этим файлом.
 	exit /b 1
 )
-call "%~dp0FFmpeg_Converter_script.cmd"
+call "!SCRIPT_DIR!FFmpeg_Converter_script.cmd"

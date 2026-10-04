@@ -30,7 +30,7 @@ suite "CMD: парсер config.ini (run_v19, --print-config)"
 TMP_DIR=$(mktemp -d /tmp/test_cmd_run_parser_XXXXXX)
 cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v19.cmd" "$TMP_DIR/"
 
-# Тестовый config.ini рядом с run-скриптом (run ищет %~dp0config.ini).
+# Тестовый config.ini рядом с run-скриптом (run ищет его в каталоге скрипта).
 # quality имеет 5 хвостовых пробелов (баг г), codec пустой (баг д),
 # subtitles_style содержит &HFFFFFF& (баг в), source — абсолютный путь.
 cat > "$TMP_DIR/config.ini" << 'INIEOF'
@@ -102,7 +102,7 @@ assert_eq "[audio] codec= (пусто) -> остался дефолт audio_code
 assert_eq "subtitles_style дошёл целиком с &HFFFFFF&" \
     "subtitles_style=FontSize=20,PrimaryColour=&HFFFFFF&" "$(get_line subtitles_style)"
 
-# Резолвинг путей: абсолютный source не префиксуется, относительный destination — префиксуется %~dp0
+# Резолвинг путей: абсолютный source не префиксуется, относительный destination — префиксуется каталогом скрипта
 assert_eq "абсолютный source не префиксован" \
     "folder_sources=C:\\abs\\src" "$(get_line folder_sources)"
 assert_contains "относительный destination префиксован папкой скрипта" \
@@ -197,6 +197,32 @@ assert_eq "enabled = yes — код 1" "1" "$asr_run_rc"
 assert_contains "отказ объяснён" "Распознавание речи" "$asr_run_out"
 # В TMP_DIR нет script.cmd: дошёл бы до вызова — сказал бы «не найден».
 assert_not_contains "конвертация не запускалась" "не найден FFmpeg_Converter_script.cmd" "$asr_run_out"
+
+# ══════════════════════════════════════════════════════════════
+suite "CMD: '!' в пути каталога скрипта не теряется"
+# ══════════════════════════════════════════════════════════════
+# %~dp0 под EnableDelayedExpansion терял '!': config.ini и ffmpeg.exe рядом со
+# скриптом не находились молча, относительные пути уезжали в чужой каталог, а
+# script.cmd объявлялся ненайденным. Путь снимается в SCRIPT_DIR до setlocal.
+# Вместо script.cmd — заглушка: она печатает, что ей передал run (тот же контекст
+# delayed expansion, что у настоящего script.cmd).
+BANG_DIR="$TMP_DIR/dir"'!'"bang"
+mkdir -p "$BANG_DIR"
+cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v19.cmd" "$BANG_DIR/"
+: > "$BANG_DIR/ffmpeg.exe"
+printf '[audio]\r\ncodec = +opus\r\n[folders]\r\ndestination = outdir\r\n' > "$BANG_DIR/config.ini"
+printf '@echo off\r\necho STUB ffmpeg=!ffmpeg!\r\necho STUB dst=!folder_destination!\r\n' > "$BANG_DIR/FFmpeg_Converter_script.cmd"
+WIN_BANG=$(cygpath -w "$BANG_DIR")
+bang_out=$(cmd //c "$WIN_BANG\\FFmpeg_Converter_run_v19.cmd --print-config" < /dev/null 2>&1 | tr -d '\r')
+assert_eq "config.ini рядом со скриптом прочитан" "audio_codec=:+:opus" \
+    "$(printf '%s\n' "$bang_out" | grep '^audio_codec=' | head -1)"
+assert_eq "относительный destination резолвится в каталог с '!'" "folder_destination=$WIN_BANG\\outdir" \
+    "$(printf '%s\n' "$bang_out" | grep '^folder_destination=' | head -1)"
+assert_eq "относительный log_file резолвится в каталог с '!'" "log_file=$WIN_BANG\\ffmpeg_convert.log" \
+    "$(printf '%s\n' "$bang_out" | grep '^log_file=' | head -1)"
+bang_run=$(cmd //c "$WIN_BANG\\FFmpeg_Converter_run_v19.cmd" < /dev/null 2>&1 | tr -d '\r')
+assert_contains "ffmpeg.exe рядом со скриптом найден" "STUB ffmpeg=$WIN_BANG\\ffmpeg.exe" "$bang_run"
+assert_contains "script.cmd рядом со скриптом вызван" "STUB dst=$WIN_BANG\\outdir" "$bang_run"
 
 rm -rf "$TMP_DIR"
 

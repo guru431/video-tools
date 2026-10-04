@@ -12,6 +12,16 @@
 # совпадать с REMOTE_CLIENT_ARGS_VERSION в .sh — это сверяет test_23_remote_parity.sh.
 $script:RemoteClientArgsVersion = '2'
 
+# Главная причина отказа preflight — ПЕРВАЯ его [ОШИБКА]-строка, тем же текстом.
+# Без неё итог прогона в GUI говорил общей фразой «проверка службы не прошла», и
+# причину приходилось искать в логе. Двойник $script:AsrPreflightError в asr_client.ps1.
+$script:RemotePreflightError = ''
+function Write-RemotePreflightError {
+	param([string]$Message)
+	Write-Host "[ОШИБКА] $Message"
+	if (-not $script:RemotePreflightError) { $script:RemotePreflightError = $Message }
+}
+
 function Get-RemoteCodec {
 	param([string]$Encoder)
 	switch -Regex ($Encoder) {
@@ -51,19 +61,19 @@ function Resolve-RemoteApiKey {
 	try {
 		$out = & ([scriptblock]::Create($remote_api_key_command)) 2>$null
 	} catch {
-		Write-Host "[ОШИБКА] [remote] api_key_command завершилась с ошибкой — ключ не получен."
+		Write-RemotePreflightError "[remote] api_key_command завершилась с ошибкой — ключ не получен."
 		return $false
 	}
 	# Ненулевой код возврата — отказ, а не «ключ получен»: раньше stdout упавшей
 	# команды принимался как ключ (в .sh такой ветки нет).
 	if ($LASTEXITCODE -ne 0) {
-		Write-Host "[ОШИБКА] [remote] api_key_command завершилась с кодом $LASTEXITCODE — ключ не получен."
+		Write-RemotePreflightError "[remote] api_key_command завершилась с кодом $LASTEXITCODE — ключ не получен."
 		return $false
 	}
 	$val = (@($out) | Where-Object { $_ } | Select-Object -First 1)
 	if ($val) { $val = ([string]$val).Trim() }
 	if (-not $val) {
-		Write-Host "[ОШИБКА] [remote] api_key_command ничего не напечатала — ключ не получен."
+		Write-RemotePreflightError "[remote] api_key_command ничего не напечатала — ключ не получен."
 		return $false
 	}
 	$script:remote_api_key = $val
@@ -77,27 +87,27 @@ function Resolve-RemoteApiKey {
 function Test-RemoteConfigValues {
 	$ok = $true
 	if ("$(if ($remote_wait_timeout) { $remote_wait_timeout } else { 1800 })" -notmatch '^\d+$') {
-		Write-Host "[ОШИБКА] [remote] wait_timeout должен быть целым числом секунд (получено: '$remote_wait_timeout')."; $ok = $false
+		Write-RemotePreflightError "[remote] wait_timeout должен быть целым числом секунд (получено: '$remote_wait_timeout')."; $ok = $false
 	}
 	if ("$(if ($remote_stall_timeout) { $remote_stall_timeout } else { 900 })" -notmatch '^\d+$') {
-		Write-Host "[ОШИБКА] [remote] stall_timeout должен быть целым числом секунд (получено: '$remote_stall_timeout')."; $ok = $false
+		Write-RemotePreflightError "[remote] stall_timeout должен быть целым числом секунд (получено: '$remote_stall_timeout')."; $ok = $false
 	}
 	$pref = if ($remote_prefer) { $remote_prefer } else { 'auto' }
 	if ($pref -notin @('auto', 'gpu', 'cpu')) {
-		Write-Host "[ОШИБКА] [remote] prefer принимает auto, gpu или cpu (получено: '$remote_prefer')."; $ok = $false
+		Write-RemotePreflightError "[remote] prefer принимает auto, gpu или cpu (получено: '$remote_prefer')."; $ok = $false
 	}
 	$onf = if ($remote_on_failure) { $remote_on_failure } else { 'abort' }
 	if ($onf -notin @('abort', 'local')) {
-		Write-Host "[ОШИБКА] [remote] on_failure принимает abort или local (получено: '$remote_on_failure')."; $ok = $false
+		Write-RemotePreflightError "[remote] on_failure принимает abort или local (получено: '$remote_on_failure')."; $ok = $false
 	}
 	if ($video_resolution_status -eq '+' -and $video_resolution_value -notmatch '^\d+x\d+$') {
-		Write-Host "[ОШИБКА] [video] resolution ожидается в виде ШИРИНАxВЫСОТА без пробелов (получено: '$video_resolution_value')."; $ok = $false
+		Write-RemotePreflightError "[video] resolution ожидается в виде ШИРИНАxВЫСОТА без пробелов (получено: '$video_resolution_value')."; $ok = $false
 	}
 	if ($video_bitrate_status -eq '+' -and "$video_bitrate_value" -notmatch '^\d+$') {
-		Write-Host "[ОШИБКА] [video] bitrate ожидается числом в кбит/с без суффикса (получено: '$video_bitrate_value')."; $ok = $false
+		Write-RemotePreflightError "[video] bitrate ожидается числом в кбит/с без суффикса (получено: '$video_bitrate_value')."; $ok = $false
 	}
 	if ($audio_bitrate_status -eq '+' -and "$audio_bitrate_value" -notmatch '^\d+$') {
-		Write-Host "[ОШИБКА] [audio] bitrate ожидается числом в кбит/с без суффикса (получено: '$audio_bitrate_value')."; $ok = $false
+		Write-RemotePreflightError "[audio] bitrate ожидается числом в кбит/с без суффикса (получено: '$audio_bitrate_value')."; $ok = $false
 	}
 	# Остальные поля того же класса: уезжают в JSON БЕЗ кавычек (quality, fps,
 	# threads, channels, rate — см. Get-RemoteOpForConfig), то есть «23 кбит» даёт
@@ -106,23 +116,23 @@ function Test-RemoteConfigValues {
 	# обнаруживалась ошибка ровно тем способом, который он называет недопустимым —
 	# после полной отправки файла. Паритет с remote_validate_config в .sh.
 	if ($video_quality_status -eq '+' -and "$video_quality_value" -notmatch '^\d+$') {
-		Write-Host "[ОШИБКА] [video] quality (CRF/CQ) ожидается целым числом без суффикса (получено: '$video_quality_value')."; $ok = $false
+		Write-RemotePreflightError "[video] quality (CRF/CQ) ожидается целым числом без суффикса (получено: '$video_quality_value')."; $ok = $false
 	}
 	if ($video_number_frames_status -eq '+' -and "$video_number_frames_value" -notmatch '^\d+$') {
-		Write-Host "[ОШИБКА] [video] number_frames (fps) ожидается целым числом без суффикса (получено: '$video_number_frames_value')."; $ok = $false
+		Write-RemotePreflightError "[video] number_frames (fps) ожидается целым числом без суффикса (получено: '$video_number_frames_value')."; $ok = $false
 	}
 	if ($audio_number_channels_status -eq '+' -and "$audio_number_channels_value" -notmatch '^\d+$') {
-		Write-Host "[ОШИБКА] [audio] number_channels ожидается целым числом без суффикса (получено: '$audio_number_channels_value')."; $ok = $false
+		Write-RemotePreflightError "[audio] number_channels ожидается целым числом без суффикса (получено: '$audio_number_channels_value')."; $ok = $false
 	}
 	if ($audio_sampling_rate_status -eq '+' -and "$audio_sampling_rate_value" -notmatch '^\d+$') {
-		Write-Host "[ОШИБКА] [audio] sampling_rate ожидается целым числом без суффикса (получено: '$audio_sampling_rate_value')."; $ok = $false
+		Write-RemotePreflightError "[audio] sampling_rate ожидается целым числом без суффикса (получено: '$audio_sampling_rate_value')."; $ok = $false
 	}
 	if ("$(if ($threads) { $threads } else { 4 })" -notmatch '^\d+$') {
-		Write-Host "[ОШИБКА] [performance] threads ожидается целым числом без суффикса (получено: '$threads')."; $ok = $false
+		Write-RemotePreflightError "[performance] threads ожидается целым числом без суффикса (получено: '$threads')."; $ok = $false
 	}
 	# speed — дробное: «1.5» допустимо, «1,5» и «быстро» нет.
 	if ($playback_speed_status -eq '+' -and "$playback_speed_value" -notmatch '^\d+(\.\d+)?$') {
-		Write-Host "[ОШИБКА] [speed] playback_speed ожидается числом с точкой (получено: '$playback_speed_value')."; $ok = $false
+		Write-RemotePreflightError "[speed] playback_speed ожидается числом с точкой (получено: '$playback_speed_value')."; $ok = $false
 	}
 	return $ok
 }
@@ -413,15 +423,16 @@ function Invoke-RemoteHttpRetry {
 }
 
 function Invoke-RemotePreflight {
+	$script:RemotePreflightError = ''
 	$script:remote_endpoint = Format-RemoteEndpoint $remote_endpoint
 	if (-not $remote_endpoint) {
-		Write-Host "[ОШИБКА] [remote] enabled = yes, но адрес службы пуст. Задайте [remote] endpoint в config.ini (или переменную окружения TRANSCODE_URL)."
+		Write-RemotePreflightError "[remote] enabled = yes, но адрес службы пуст. Задайте [remote] endpoint в config.ini (или переменную окружения TRANSCODE_URL)."
 		return $false
 	}
 	if (-not (Test-RemoteConfigValues)) { return $false }
 	if (-not (Resolve-RemoteApiKey)) { return $false }
 	if (-not $remote_api_key) {
-		Write-Host "[ОШИБКА] [remote] enabled = yes, но ключ службы пуст. Задайте [remote] api_key (или api_key_command) в config.ini, либо переменную окружения TRANSCODE_API_KEY."
+		Write-RemotePreflightError "[remote] enabled = yes, но ключ службы пуст. Задайте [remote] api_key (или api_key_command) в config.ini, либо переменную окружения TRANSCODE_API_KEY."
 		return $false
 	}
 	# Версия API живёт В АДРЕСЕ: клиент собирает "<endpoint>/capabilities", а
@@ -433,16 +444,16 @@ function Invoke-RemotePreflight {
 	}
 	$r = Invoke-RemoteHttp GET '/capabilities'
 	if ($r.Code -ne 200) {
-		Write-Host "[ОШИБКА] Служба конвертации недоступна: HTTP $($r.Code) (запрошено $remote_endpoint/capabilities)."
+		Write-RemotePreflightError "Служба конвертации недоступна: HTTP $($r.Code) (запрошено $remote_endpoint/capabilities)."
 		if ($r.Code -eq 404) {
-			Write-Host "[ОШИБКА] 404 на /capabilities обычно означает адрес без версии API: проверьте, что [remote] endpoint оканчивается на /v1."
+			Write-RemotePreflightError "404 на /capabilities обычно означает адрес без версии API: проверьте, что [remote] endpoint оканчивается на /v1."
 		}
 		return $false
 	}
 	$caps = $null
 	try { $caps = $r.Body | ConvertFrom-Json } catch {}
 	if ($null -eq $caps) {
-		Write-Host "[ОШИБКА] Служба вернула неразбираемый ответ на /capabilities."
+		Write-RemotePreflightError "Служба вернула неразбираемый ответ на /capabilities."
 		return $false
 	}
 	# chunk_size живёт в limits (args_version 2); на верхнем уровне его больше
@@ -466,24 +477,24 @@ function Invoke-RemotePreflight {
 	# Пустой список и отсутствие ключа — разные вещи: первое означает «служба не
 	# умеет ничего» и обязано быть отказом, второе — «служба ничего не сказала».
 	if (($caps.PSObject.Properties.Name -contains 'encoders') -and @($script:RemoteEncoders).Count -eq 0) {
-		Write-Host "[ОШИБКА] Служба объявила пустой список энкодеров — считать нечем."
+		Write-RemotePreflightError "Служба объявила пустой список энкодеров — считать нечем."
 		return $false
 	}
 	# Энкодер — здесь, а не на каждом файле: отказать на сотом файле из двухсот
 	# дороже, чем на нулевом. Раньше список encoders игнорировался вовсе.
 	$family = Get-RemoteCodec $set_video_codec
 	if (-not $family) {
-		Write-Host "[ОШИБКА] Кодек «$set_video_codec» удалённой службе неизвестен (ожидаются h264/hevc/av1-энкодеры)."
+		Write-RemotePreflightError "Кодек «$set_video_codec» удалённой службе неизвестен (ожидаются h264/hevc/av1-энкодеры)."
 		return $false
 	}
 	if (-not (Test-RemoteCodecSupported $family $script:RemoteEncoders)) {
-		Write-Host "[ОШИБКА] Служба не умеет кодек «$family» (из [video] codec = $set_video_codec). Служба объявила: $($script:RemoteEncoders -join ', ')"
+		Write-RemotePreflightError "Служба не умеет кодек «$family» (из [video] codec = $set_video_codec). Служба объявила: $($script:RemoteEncoders -join ', ')"
 		return $false
 	}
 	if ($script:RemoteCapsWaitMax -and [int]$script:RemoteCapsWaitMax -gt 0) {
 		$wantWait = if ($remote_wait_timeout) { [int]$remote_wait_timeout } else { 1800 }
 		if ($wantWait -gt [int]$script:RemoteCapsWaitMax) {
-			Write-Host "[ОШИБКА] [remote] wait_timeout = $wantWait больше потолка службы ($($script:RemoteCapsWaitMax) с) — задача была бы отвергнута после загрузки файла."
+			Write-RemotePreflightError "[remote] wait_timeout = $wantWait больше потолка службы ($($script:RemoteCapsWaitMax) с) — задача была бы отвергнута после загрузки файла."
 			return $false
 		}
 	}
@@ -492,7 +503,7 @@ function Invoke-RemotePreflight {
 	if (@($script:RemoteCapsContainers).Count -gt 0) {
 		$wantContainer = if ($output_container_status -eq '+') { "$output_container_value" } else { 'mp4' }
 		if ($script:RemoteCapsContainers -notcontains $wantContainer) {
-			Write-Host "[ОШИБКА] Служба не умеет контейнер «$wantContainer» (из [video] container). Служба объявила: $($script:RemoteCapsContainers -join ', ')"
+			Write-RemotePreflightError "Служба не умеет контейнер «$wantContainer» (из [video] container). Служба объявила: $($script:RemoteCapsContainers -join ', ')"
 			return $false
 		}
 	}
@@ -996,9 +1007,16 @@ function Wait-RemoteJob {
 
 function Receive-RemoteResult {
 	param([string]$JobId, [string]$Destination)
-	# Скачивание результата — долгий запрос, 60 с общего таймаута ему мало.
+	# Таймаут здесь — КОРОТКИЙ, как у опроса: HttpWebRequest.Timeout ограничивает только
+	# путь до заголовков ответа (соединение + ожидание ответа). В .NET Framework таймер
+	# снимается в ProcessResponse (CancelTimer) при разборе заголовков, а чтению потока
+	# ответа ставится ReadTimeout = ReadWriteTimeout; в .NET (pwsh) ответ читается с
+	# ResponseHeadersRead, а ReadWriteTimeout становится таймаутом приёма сокета. Тело
+	# в гигабайты этим таймаутом не рвётся — его стережёт ReadWriteTimeout (застой
+	# чтения), а заголовки /result служба отдаёт сразу и шлёт тело потоком. Прежний час
+	# означал, что служба, принявшая соединение и молчащая, вешала клиента на час.
 	$script:RemoteResultVerified = 'no'
-	$r = Invoke-RemoteHttpRetry GET "/jobs/$JobId/result" '' @{} $Destination '' $null 3600000
+	$r = Invoke-RemoteHttpRetry GET "/jobs/$JobId/result" '' @{} $Destination '' $null 60000
 	if ($r.Code -eq -1) {
 		# Служба результат отдала, не смогли сохранить мы (см. Invoke-RemoteHttp).
 		Write-Host "[ОШИБКА] Результат получен, но $($r.Body)"

@@ -1810,7 +1810,7 @@ if ($remote_enabled -eq 'yes') {
 		# Preflight не прошёл — не трогаем ни одного файла. Отказать на сотом
 		# файле из двухсот дороже, чем на нулевом. Подробная причина уже
 		# напечатана preflight'ом ([ОШИБКА]-строки GUI собирает сам).
-		Write-GUIProgress -FilePercent 100 -CurrentFile "Ошибка" -State "failed" -ExitCode 1 -Message "Удалённый бэкенд: проверка службы конвертации не прошла"
+		Write-GUIProgress -FilePercent 100 -CurrentFile "Ошибка" -State "failed" -ExitCode 1 -Message $(if ($script:RemotePreflightError) { "Удалённый бэкенд: $($script:RemotePreflightError)" } else { "Удалённый бэкенд: проверка службы конвертации не прошла" })
 		Pause-Prompt "Нажмите [Enter], чтобы выйти..."
 		exit 1
 	}

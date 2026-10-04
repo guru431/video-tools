@@ -190,11 +190,31 @@ $script:capsBody = '{"args_version":"2","chunk_size":1048576}'
 Write-Output ("NOOPS=" + [bool](Invoke-RemotePreflight 6>$null))
 $script:capsBody = '{"args_version":"2","chunk_size":1048576,"ops":{"transcode":{"values":{"container":["mkv"]}}}}'
 Write-Output ("MKVONLY=" + [bool](Invoke-RemotePreflight 6>$null))
+# Причина отказа запоминается для итогового сообщения GUI: первая [ОШИБКА]-строка.
+$script:capsBody = '{"args_version":"2","chunk_size":1048576}'
+Write-Output ("MKVERR=" + $script:RemotePreflightError)
+$remote_endpoint = ''
+[void](Invoke-RemotePreflight 6>$null)
+Write-Output ("EMPTYERR=" + $script:RemotePreflightError)
+$remote_endpoint = 'http://mock.invalid/v1'
+# Две ошибки конфига подряд — главной остаётся первая.
+$video_quality_status = '+'; $video_quality_value = 'x'; $threads = 'y'
+[void](Invoke-RemotePreflight 6>$null)
+Write-Output ("CFGERR=" + $script:RemotePreflightError)
+$video_quality_status = '-'; $threads = 4
+# Успешный повтор сбрасывает прежнюю причину.
+[void](Invoke-RemotePreflight 6>$null)
+Write-Output ("RESETERR=[" + $script:RemotePreflightError + "]")
 PSEOF
 _out="$("$PS_BIN" -NoProfile -NonInteractive -File "$_harness" -Module "$MODULE" 2>&1 | tr -d '\r')"
 _f() { printf '%s\n' "$_out" | grep "^${1}=" | sed "s/^${1}=//"; }
 assert_eq "контейнеры не объявлены — служба принята" "True"  "$(_f NOOPS)"
 assert_eq "объявлен только mkv — mp4 отвергнут"       "False" "$(_f MKVONLY)"
+assert_contains "причина отказа запомнена (контейнер)" "mkv" "$(_f MKVERR)"
+assert_contains "причина отказа: пустой адрес"        "TRANSCODE_URL" "$(_f EMPTYERR)"
+assert_contains "главная причина — первая ошибка"      "quality" "$(_f CFGERR)"
+assert_not_contains "вторая ошибка не перетирает первую" "threads" "$(_f CFGERR)"
+assert_eq "успешный preflight сбрасывает причину"     "[]" "$(_f RESETERR)"
 rm -f "$_harness"
 
 # ══════════════════════════════════════════════════════════════
@@ -277,6 +297,10 @@ function Invoke-RemoteHttp {
 	[void]\$script:calls.Add("\$Method \$Path")
 	return [pscustomobject]@{ Code = 200; Body = '{"state":"running","progress":10}' }
 }
+# Время виртуальное (как в сценариях ожидания карты ниже): пауза опроса двигает часы.
+\$script:now = [datetime]'2026-01-01T00:00:00'
+function Get-Date { return \$script:now }
+function Start-Sleep { param([int]\$Seconds) \$script:now = \$script:now.AddSeconds(\$Seconds) }
 \$remote_stall_timeout = 1
 \$env:REMOTE_POLL_SECONDS = '1'
 \$ok = Wait-RemoteJob 'job-5' 'файл'
@@ -356,6 +380,10 @@ function Invoke-RemoteHttp {
 	if (\$Method -eq 'DELETE') { return [pscustomobject]@{ Code = 200; Body = '{}' } }
 	return [pscustomobject]@{ Code = 502; Body = 'bad gateway' }
 }
+# Пауза между сбойными опросами — виртуальная: реального ожидания нет.
+\$script:now = [datetime]'2026-01-01T00:00:00'
+function Get-Date { return \$script:now }
+function Start-Sleep { param([int]\$Seconds) \$script:now = \$script:now.AddSeconds(\$Seconds) }
 \$env:REMOTE_POLL_SECONDS = '1'
 \$env:REMOTE_POLL_MAX_FAILS = '2'
 \$ok = Wait-RemoteJob 'job-6' 'файл'
@@ -562,14 +590,26 @@ cat > "$_harness" <<PSEOF
 \$env:REMOTE_RETRY_SECONDS = '0'
 \$tl = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
 \$tl.Start()
-\$hits = [hashtable]::Synchronized(@{ n = 0 })
+\$hits = [hashtable]::Synchronized(@{ n = 0; mode = 'ok' })
 \$srv = [PowerShell]::Create().AddScript({
 	param(\$tl, \$hits)
 	while (\$true) {
 		\$c = \$tl.AcceptTcpClient(); \$hits.n++
-		\$s = \$c.GetStream(); \$b = New-Object byte[] 8192; [void]\$s.Read(\$b, 0, \$b.Length)
-		\$r = [System.Text.Encoding]::ASCII.GetBytes("HTTP/1.1 200 OK\`r\`nContent-Length: 6\`r\`nConnection: close\`r\`n\`r\`nRESULT")
-		\$s.Write(\$r, 0, \$r.Length); \$s.Flush(); \$c.Close()
+		try {
+			\$s = \$c.GetStream(); \$b = New-Object byte[] 8192; [void]\$s.Read(\$b, 0, \$b.Length)
+			\$head = "HTTP/1.1 200 OK\`r\`nContent-Length: 6\`r\`nConnection: close\`r\`n\`r\`n"
+			# silent — соединение принято, заголовков нет; stall — заголовки сразу, тело с паузой.
+			if (\$hits.mode -eq 'silent') { Start-Sleep -Milliseconds 900 }
+			if (\$hits.mode -eq 'stall') {
+				\$r = [System.Text.Encoding]::ASCII.GetBytes(\$head + 'RES'); \$s.Write(\$r, 0, \$r.Length); \$s.Flush()
+				Start-Sleep -Milliseconds 900
+				\$r = [System.Text.Encoding]::ASCII.GetBytes('ULT')
+			} else {
+				\$r = [System.Text.Encoding]::ASCII.GetBytes(\$head + 'RESULT')
+			}
+			\$s.Write(\$r, 0, \$r.Length); \$s.Flush()
+		} catch {}
+		\$c.Close()
 	}
 }).AddArgument(\$tl).AddArgument(\$hits)
 [void]\$srv.BeginInvoke()
@@ -585,7 +625,30 @@ Write-Output ("OKBODY=" + [System.IO.File]::ReadAllText(\$ok))
 Write-Output ("BADCODE=" + \$r.Code)
 Write-Output ("BADHITS=" + \$hits.n)
 Write-Output ("RECV=" + (Receive-RemoteResult 'j' \$bad))
+# Timeout у HttpWebRequest ограничивает путь ДО заголовков, а не чтение тела — на
+# этом стоит короткий таймаут скачивания в Receive-RemoteResult. Проверяем на живом
+# сокете обе стороны: молчащая служба отваливается по Timeout, а тело, идущее дольше
+# Timeout с паузой, читается целиком (его стережёт ReadWriteTimeout).
+# Порядок важен: сервер однопоточный, и после молчащего ответа он ещё спит, а это
+# съело бы Timeout следующего запроса. Поэтому сначала тело с паузой, потом молчание.
+\$hits.mode = 'stall'
+Remove-Item -LiteralPath \$ok -Force -ErrorAction SilentlyContinue
+\$r = Invoke-RemoteHttp GET '/jobs/j/result' '' @{} \$ok '' \$null 400
+Write-Output ("STALLCODE=" + \$r.Code)
+Write-Output ("STALLBODY=" + [System.IO.File]::ReadAllText(\$ok))
+\$hits.mode = 'silent'
+\$r = Invoke-RemoteHttp GET '/jobs/j/result' '' @{} \$ok '' \$null 400
+Write-Output ("SILENTCODE=" + \$r.Code)
 \$tl.Stop()
+# Какой Timeout Receive-RemoteResult на самом деле передаёт в HTTP-слой.
+function Invoke-RemoteHttp {
+	param([string]\$Method, [string]\$Path, [string]\$Body = '', [hashtable]\$Headers = @{},
+	      [string]\$OutFile = '', [string]\$InFile = '', [byte[]]\$InBytes = \$null, [int]\$TimeoutMs = 60000)
+	\$script:seenTimeout = \$TimeoutMs
+	return [pscustomobject]@{ Code = 200; Body = '' }
+}
+[void](Receive-RemoteResult 'j' \$ok)
+Write-Output ("RESULTTIMEOUT=" + \$script:seenTimeout)
 PSEOF
 _out="$("$PS_BIN" -NoProfile -NonInteractive -File "$_harness" 2>&1 | tr -d '\r')"
 _f() { printf '%s\n' "$_out" | grep "^${1}=" | sed "s/^${1}=//"; }
@@ -595,6 +658,11 @@ assert_eq "сбой записи — отдельный код -1"          "-1"
 assert_eq "сбой записи не повторяется"              "1"      "$(_f BADHITS)"
 assert_eq "Receive-RemoteResult отдаёт отказ"       "False"  "$(_f RECV)"
 assert_contains "причина названа, а не «HTTP -1»"   "запись на диск не удалась" "$_out"
+assert_eq "молчащая служба: отказ по Timeout, а не ожидание" "0"      "$(_f SILENTCODE)"
+assert_eq "тело дольше Timeout не обрывается"                "200"    "$(_f STALLCODE)"
+assert_eq "тело с паузой дочитано целиком"                   "RESULT" "$(_f STALLBODY)"
+# Прежний час означал, что принявшая соединение и молчащая служба вешала клиента на час.
+assert_eq "скачивание результата — короткий Timeout"         "60000"  "$(_f RESULTTIMEOUT)"
 rm -f "$_harness"; rm -rf "$_nodir"
 
 # ══════════════════════════════════════════════════════════════

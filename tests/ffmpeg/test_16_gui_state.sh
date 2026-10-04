@@ -103,7 +103,10 @@ assert_contains "отмена: state=cancelled"       '"state":"cancelled"' "$JS
 JSON=$(run_worker 0 no "\$remote_enabled='yes'; \$remote_endpoint=''; \$remote_api_key=''")
 assert_contains "remote preflight: state=failed"   '"state":"failed"'  "$JSON"
 assert_contains "remote preflight: exitCode=1"     '"exitCode":1'      "$JSON"
-assert_contains "remote preflight: message с причиной" 'проверкаслужбыконвертациинепрошла' "$JSON"
+# message называет КОНКРЕТНУЮ причину (первую [ОШИБКА]-строку preflight), а не
+# общую фразу «проверка службы не прошла», с которой причину искали в логе.
+assert_contains "remote preflight: message с конкретной причиной" 'адресслужбыпуст' "$JSON"
+assert_not_contains "remote preflight: не общая фраза" 'проверкаслужбыконвертациинепрошла' "$JSON"
 # Ранний отказ ДО строки, где раньше определялась Write-GUIProgress: функция
 # обязана быть доступна первой же проверке конфига.
 JSON=$(run_worker 0 no "\$playback_speed=':+:0'")

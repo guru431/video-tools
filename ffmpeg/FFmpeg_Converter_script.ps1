@@ -59,14 +59,86 @@ function Pause-Prompt {
 	try { if ([Console]::IsInputRedirected) { return } } catch {}
 	Read-Host $Text | Out-Null
 }
+
+# --- GUI-прогресс (переменная из Runspace или env) ---
+# Файл прогресса и Write-GUIProgress стоят ДО первой проверки конфига: каждый
+# отказ до начала обработки (`exit 1`) обязан записать state=failed с причиной.
+# Функция в PowerShell определяется только когда до неё дошло исполнение, и
+# стоявшая ниже, она была недоступна ранним отказам — GUI получал «без отчёта».
+if (-not $guiProgressFile) { $guiProgressFile = $env:FFMPEG_GUI_PROGRESS_FILE }
+if (-not $guiCancelFile)   { $guiCancelFile   = $env:FFMPEG_GUI_CANCEL_FILE }
+
+# --- Запись GUI-прогресса ---
+function Write-GUIProgress {
+	# F17. state/exitCode/message — контракт с GUI. Раньше воркер писал финальное
+	# «Готово» независимо от countFail, а `exit 1` не создаёт ErrorRecord, поэтому GUI
+	# не мог отличить успешный батч от провального и показывал «Готово» после ошибок.
+	# $Phase — подпись фазы удалённого пути (отправка → очередь/ожидание карты →
+	# кодирование → скачивание). Локальный путь состоит из одной фазы и подписи
+	# не ставит; удалённый без неё показывал «ничего не происходит» минутами,
+	# что неотличимо от зависания.
+	param([int]$FilePercent = 0, [string]$CurrentFile = "", [string]$Command = "",
+	      [ValidateSet("running","success","failed","cancelled")][string]$State = "running",
+	      [int]$ExitCode = -1, [string]$Message = "", [string]$Phase = "")
+	if (-not $guiProgressFile) { return }
+	if ($Command) { $script:_lastCommand = $Command }
+	$totalPct = if ($script:totalFiles -gt 0) { [int](($script:fileNum - 1 + $FilePercent / 100) * 100 / $script:totalFiles) } else { 0 }
+	$data = [ordered]@{
+		state        = $State
+		exitCode     = $ExitCode
+		message      = $Message
+		filePercent  = $FilePercent
+		totalPercent = $totalPct
+		fileNum      = $script:fileNum
+		totalFiles   = $script:totalFiles
+		currentFile  = if ($CurrentFile) { $CurrentFile } else { "" }
+		phase        = $Phase
+		ok           = $script:countOk
+		fail         = $script:countFail
+		skip         = $script:countSkip
+		command      = if ($script:_lastCommand) { $script:_lastCommand } else { "" }
+		pid          = 0
+	}
+	# Пишем в соседний temp и подменяем целиком: GUI читает этот файл таймером каждые
+	# 400 мс, и при прямой записи он регулярно попадал на полузаписанный JSON —
+	# ConvertFrom-Json падал в пустой catch, а прогресс замирал до следующего тика.
+	# Замена файла целиком означает, что читатель видит либо старую версию, либо новую.
+	# Путь резервной копии обязателен: PowerShell превращает $null в пустую строку, и
+	# трёхаргументный Replace падает с «The path is not of a legal form» — прогресс
+	# замирал бы на первой же записи. Копию сразу удаляем, она нужна только API.
+	# Replace/Move конкурируют с ReadAllText из таймера GUI (400 мс): если тик
+	# открыл файл ровно в этот момент, вызов бросает IOException. Одиночная
+	# попытка в пустом catch означала потерянную запись — и если терялась
+	# ПОСЛЕДНЯЯ, успешный батч показывался как «Ошибка (state='running')».
+	# Три коротких повтора закрывают гонку, не удорожая обычный путь.
+	for ($_try = 1; $_try -le 3; $_try++) {
+		try {
+			$_tmp = "$guiProgressFile.tmp"
+			[System.IO.File]::WriteAllText($_tmp, ($data | ConvertTo-Json))
+			if ([System.IO.File]::Exists($guiProgressFile)) {
+				$_bak = "$guiProgressFile.bak"
+				[System.IO.File]::Replace($_tmp, $guiProgressFile, $_bak)
+				[System.IO.File]::Delete($_bak)
+			} else {
+				[System.IO.File]::Move($_tmp, $guiProgressFile)
+			}
+			break
+		} catch {
+			if ($_try -lt 3) { Start-Sleep -Milliseconds 40 }
+		}
+	}
+}
+
 if ([string]::IsNullOrWhiteSpace($folder_sources) -or !(Test-Path -LiteralPath $folder_sources)) {
 	Write-Host "`n[ОШИБКА] Папка источника не найдена: $folder_sources`n"
+	Write-GUIProgress -FilePercent 100 -CurrentFile "Ошибка" -State "failed" -ExitCode 1 -Message "Папка источника не найдена: $folder_sources"
 	Pause-Prompt "Нажмите [Enter], чтобы выйти..."
 	exit 1
 }
 
 if ([string]::IsNullOrWhiteSpace($folder_destination)) {
 	Write-Host "`n[ОШИБКА] Папка назначения не задана`n"
+	Write-GUIProgress -FilePercent 100 -CurrentFile "Ошибка" -State "failed" -ExitCode 1 -Message "Папка назначения не задана"
 	Pause-Prompt "Нажмите [Enter], чтобы выйти..."
 	exit 1
 }
@@ -102,6 +174,7 @@ if (-not $ffmpeg_available) {
 		Write-Host "[ПРЕДУПРЕЖДЕНИЕ] Без локального ffmpeg отключены: проверка скачанного результата и определение длительности.`n"
 	} else {
 		Write-Host "`n[ОШИБКА] ffmpeg не найден: $ffmpeg`n"
+		Write-GUIProgress -FilePercent 100 -CurrentFile "Ошибка" -State "failed" -ExitCode 1 -Message "ffmpeg не найден: $ffmpeg"
 		Pause-Prompt "Нажмите [Enter], чтобы выйти..."
 		exit 1
 	}
@@ -228,6 +301,7 @@ function ConvertTo-Seconds {
 	param([string]$Value, [string]$What)
 	if ($Value -notmatch '^\s*(\d{1,2})-(\d{1,2})-(\d{1,2})\s*$') {
 		Write-Host "`n[ОШИБКА] ${What}: ожидается чч-мм-сс (например 00-01-30), получено: '$Value'`n"
+		Write-GUIProgress -FilePercent 100 -CurrentFile "Ошибка" -State "failed" -ExitCode 1 -Message "${What}: ожидается чч-мм-сс (например 00-01-30), получено: '$Value'"
 		Pause-Prompt "Нажмите [Enter], чтобы выйти..."
 		exit 1
 	}
@@ -248,6 +322,7 @@ if ($length_coding_status -eq "+") {
 	# давала `-t 0`: ffmpeg честно создавал пустые файлы и отчитывался успехом.
 	if ($length_coding_value -le 0) {
 		Write-Host "`n[ОШИБКА] [split] length: длительность должна быть больше нуля, получено: '00-00-00'`n"
+		Write-GUIProgress -FilePercent 100 -CurrentFile "Ошибка" -State "failed" -ExitCode 1 -Message "[split] length: длительность должна быть больше нуля"
 		Pause-Prompt "Нажмите [Enter], чтобы выйти..."
 		exit 1
 	}
@@ -406,6 +481,7 @@ if ($playback_speed_status -eq "+" -and $playback_speed_value -ne "1.0") {
 		Write-Host ""
 		Write-Host "[ОШИБКА] playback_speed должен быть числом в диапазоне 0 < speed <= 100 (получено: '$playback_speed_value')"
 		Write-Host ""
+		Write-GUIProgress -FilePercent 100 -CurrentFile "Ошибка" -State "failed" -ExitCode 1 -Message "playback_speed должен быть числом в диапазоне 0 < speed <= 100 (получено: '$playback_speed_value')"
 		exit 1
 	}
 	if ($speed -gt 2.0) {
@@ -495,6 +571,7 @@ if ($audio_only -ne "yes" -and $copy_codecs -ne "yes" -and $merge_files -ne "yes
 	}
 	if ($_incompat.Count -gt 0) {
 		Write-Host "`n[ОШИБКА] Несовместимая комбинация контейнера и кодеков:`n$($_incompat -join "`n")`n"
+		Write-GUIProgress -FilePercent 100 -CurrentFile "Ошибка" -State "failed" -ExitCode 1 -Message "Несовместимая комбинация контейнера и кодеков"
 		Pause-Prompt "Нажмите [Enter], чтобы выйти..."
 		exit 1
 	}
@@ -529,10 +606,6 @@ if ($dest_inside_source) {
 		-not ([System.IO.Path]::GetFullPath($_.FullName)).StartsWith($canon_destination + $_sep, [System.StringComparison]::OrdinalIgnoreCase)
 	}
 }
-
-# --- GUI-прогресс (переменная из Runspace или env) ---
-if (-not $guiProgressFile) { $guiProgressFile = $env:FFMPEG_GUI_PROGRESS_FILE }
-if (-not $guiCancelFile)   { $guiCancelFile   = $env:FFMPEG_GUI_CANCEL_FILE }
 
 # --- J2. Счётчики ---
 $script:totalFiles  = ($format_files_in_list | Measure-Object).Count
@@ -795,67 +868,6 @@ function Log-Msg {
 		# -Encoding UTF8 обязателен: без него Add-Content пишет в ANSI-кодировке системы,
 		# и один и тот же лог, дописанный из .sh и из .ps1, читается наполовину.
 		Add-Content -LiteralPath $log_file -Value $logLine -Encoding UTF8
-	}
-}
-
-# --- Запись GUI-прогресса ---
-function Write-GUIProgress {
-	# F17. state/exitCode/message — контракт с GUI. Раньше воркер писал финальное
-	# «Готово» независимо от countFail, а `exit 1` не создаёт ErrorRecord, поэтому GUI
-	# не мог отличить успешный батч от провального и показывал «Готово» после ошибок.
-	# $Phase — подпись фазы удалённого пути (отправка → очередь/ожидание карты →
-	# кодирование → скачивание). Локальный путь состоит из одной фазы и подписи
-	# не ставит; удалённый без неё показывал «ничего не происходит» минутами,
-	# что неотличимо от зависания.
-	param([int]$FilePercent = 0, [string]$CurrentFile = "", [string]$Command = "",
-	      [ValidateSet("running","success","failed","cancelled")][string]$State = "running",
-	      [int]$ExitCode = -1, [string]$Message = "", [string]$Phase = "")
-	if (-not $guiProgressFile) { return }
-	if ($Command) { $script:_lastCommand = $Command }
-	$totalPct = if ($script:totalFiles -gt 0) { [int](($script:fileNum - 1 + $FilePercent / 100) * 100 / $script:totalFiles) } else { 0 }
-	$data = [ordered]@{
-		state        = $State
-		exitCode     = $ExitCode
-		message      = $Message
-		filePercent  = $FilePercent
-		totalPercent = $totalPct
-		fileNum      = $script:fileNum
-		totalFiles   = $script:totalFiles
-		currentFile  = if ($CurrentFile) { $CurrentFile } else { "" }
-		phase        = $Phase
-		ok           = $script:countOk
-		fail         = $script:countFail
-		skip         = $script:countSkip
-		command      = if ($script:_lastCommand) { $script:_lastCommand } else { "" }
-		pid          = 0
-	}
-	# Пишем в соседний temp и подменяем целиком: GUI читает этот файл таймером каждые
-	# 400 мс, и при прямой записи он регулярно попадал на полузаписанный JSON —
-	# ConvertFrom-Json падал в пустой catch, а прогресс замирал до следующего тика.
-	# Замена файла целиком означает, что читатель видит либо старую версию, либо новую.
-	# Путь резервной копии обязателен: PowerShell превращает $null в пустую строку, и
-	# трёхаргументный Replace падает с «The path is not of a legal form» — прогресс
-	# замирал бы на первой же записи. Копию сразу удаляем, она нужна только API.
-	# Replace/Move конкурируют с ReadAllText из таймера GUI (400 мс): если тик
-	# открыл файл ровно в этот момент, вызов бросает IOException. Одиночная
-	# попытка в пустом catch означала потерянную запись — и если терялась
-	# ПОСЛЕДНЯЯ, успешный батч показывался как «Ошибка (state='running')».
-	# Три коротких повтора закрывают гонку, не удорожая обычный путь.
-	for ($_try = 1; $_try -le 3; $_try++) {
-		try {
-			$_tmp = "$guiProgressFile.tmp"
-			[System.IO.File]::WriteAllText($_tmp, ($data | ConvertTo-Json))
-			if ([System.IO.File]::Exists($guiProgressFile)) {
-				$_bak = "$guiProgressFile.bak"
-				[System.IO.File]::Replace($_tmp, $guiProgressFile, $_bak)
-				[System.IO.File]::Delete($_bak)
-			} else {
-				[System.IO.File]::Move($_tmp, $guiProgressFile)
-			}
-			break
-		} catch {
-			if ($_try -lt 3) { Start-Sleep -Milliseconds 40 }
-		}
 	}
 }
 
@@ -1754,13 +1766,16 @@ $remote_active = 'no'
 if ($remote_enabled -eq 'yes') {
 	if (-not (Get-Command Set-RemoteActive -ErrorAction SilentlyContinue)) {
 		Write-Host "[ОШИБКА] [remote] enabled = yes, но рядом со скриптом нет remote_client.ps1."
+		Write-GUIProgress -FilePercent 100 -CurrentFile "Ошибка" -State "failed" -ExitCode 1 -Message "Нет модуля remote_client.ps1"
 		Pause-Prompt "Нажмите [Enter], чтобы выйти..."
 		exit 1
 	}
 	Set-RemoteActive | Out-Null
 	if ($script:remote_fatal) {
 		# Preflight не прошёл — не трогаем ни одного файла. Отказать на сотом
-		# файле из двухсот дороже, чем на нулевом.
+		# файле из двухсот дороже, чем на нулевом. Подробная причина уже
+		# напечатана preflight'ом ([ОШИБКА]-строки GUI собирает сам).
+		Write-GUIProgress -FilePercent 100 -CurrentFile "Ошибка" -State "failed" -ExitCode 1 -Message "Удалённый бэкенд: проверка службы конвертации не прошла"
 		Pause-Prompt "Нажмите [Enter], чтобы выйти..."
 		exit 1
 	}
@@ -1775,6 +1790,7 @@ if ($remote_enabled -eq 'yes') {
 		# явно, чем молча разбить файл не там.
 		if (-not $ffmpeg_available -and $split_by_silence -eq 'yes') {
 			Write-Host "[ОШИБКА] split_by_silence = yes требует локального ffmpeg (silencedetect), а он не найден."
+			Write-GUIProgress -FilePercent 100 -CurrentFile "Ошибка" -State "failed" -ExitCode 1 -Message "split_by_silence = yes требует локального ffmpeg (silencedetect), а он не найден"
 			Pause-Prompt "Нажмите [Enter], чтобы выйти..."
 			exit 1
 		}
@@ -1784,6 +1800,7 @@ if ($remote_enabled -eq 'yes') {
 	# идти некуда, и сказать об этом надо здесь, а не падать на первом файле.
 	if ($remote_active -ne 'yes' -and -not $ffmpeg_available) {
 		Write-Host "`n[ОШИБКА] ffmpeg не найден ($ffmpeg), а этот режим считается локально.`n"
+		Write-GUIProgress -FilePercent 100 -CurrentFile "Ошибка" -State "failed" -ExitCode 1 -Message "ffmpeg не найден ($ffmpeg), а этот режим считается локально"
 		Pause-Prompt "Нажмите [Enter], чтобы выйти..."
 		exit 1
 	}

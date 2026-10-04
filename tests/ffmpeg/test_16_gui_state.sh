@@ -31,9 +31,10 @@ mkdir -p "$IN" "$DST"
 : > "$IN/a.mp4"
 
 # Запускает воркер с заданным mock-поведением и печатает содержимое progress JSON.
-# $1 — MOCK_FFMPEG_FAIL (0/1), $2 — создать ли cancel-файл (yes/no).
+# $1 — MOCK_FFMPEG_FAIL (0/1), $2 — создать ли cancel-файл (yes/no),
+# $3 — дополнительные присваивания PowerShell перед запуском (перекрывают базовые).
 run_worker() {
-    local mock_fail="$1" want_cancel="${2:-no}"
+    local mock_fail="$1" want_cancel="${2:-no}" extra="${3:-}"
     local prog="$WORK/progress.json" cancel="$WORK/cancel.flag"
     rm -f "$prog" "$cancel"
     [ "$want_cancel" = "yes" ] && : > "$cancel"
@@ -65,6 +66,7 @@ run_worker() {
 \$subtitles_style=''; \$dry_run='no'; \$enable_log='no'; \$log_file=''
 \$audio_only='no'; \$merge_files='no'; \$create_frame='no'
 \$copy_codecs='no'; \$extract_audio_copy='no'; \$overwrite_existing='yes'
+$extra
 . '$w_script'
 " > /dev/null 2>&1
     # ConvertTo-Json выравнивает значения переменным числом пробелов ("ok":  0) —
@@ -94,6 +96,19 @@ assert_contains "провал: message объясняет причину" "ош�
 # Отмена пользователем отличается от провала.
 JSON=$(run_worker 0 yes)
 assert_contains "отмена: state=cancelled"       '"state":"cancelled"' "$JSON"
+
+# Отказ до начала обработки. `exit 1` раньше уходил без финальной записи, и GUI
+# показывал «завершился без отчёта о результате (state='')» вместо причины.
+# Preflight удалённого бэкенда: пустой адрес → $script:remote_fatal.
+JSON=$(run_worker 0 no "\$remote_enabled='yes'; \$remote_endpoint=''; \$remote_api_key=''")
+assert_contains "remote preflight: state=failed"   '"state":"failed"'  "$JSON"
+assert_contains "remote preflight: exitCode=1"     '"exitCode":1'      "$JSON"
+assert_contains "remote preflight: message с причиной" 'проверкаслужбыконвертациинепрошла' "$JSON"
+# Ранний отказ ДО строки, где раньше определялась Write-GUIProgress: функция
+# обязана быть доступна первой же проверке конфига.
+JSON=$(run_worker 0 no "\$playback_speed=':+:0'")
+assert_contains "ранний отказ (playback_speed): state=failed" '"state":"failed"' "$JSON"
+assert_contains "ранний отказ (playback_speed): message"      'playback_speed'   "$JSON"
 
 # ══════════════════════════════════════════════════════════════
 suite "GUI preflight: конфликт режимов и отсутствующий энкодер — ДО запуска"

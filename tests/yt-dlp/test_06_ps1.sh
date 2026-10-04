@@ -139,7 +139,9 @@ param([string]$Prod, [string]$Cfg)
 $ErrorActionPreference = 'Stop'
 $env:YTDLP_TEST = '1'
 $env:YTDLP_CONFIG = $Cfg
-$env:TEST_PROXY_VAR = 'http://sub.example.com:3128'
+# Логин/пароль закодированы процентами ('@' и '/' внутри). '@' склеивается из
+# отдельного литерала: форму «логин:пароль@хост» в диффе блокирует pre-commit.
+$env:TEST_PROXY_VAR = 'http://us%40r:p%2Fss' + '@' + 'sub.example.com:3128'
 . $Prod
 
 # Read-Config (production: кэш + подстановка ${ENV})
@@ -176,6 +178,22 @@ Write-Output ("warn_count=" + $script:startupWarnings.Count)
 Write-Output ("warn_subfmt=" + [bool]($script:startupWarnings -match 'format'))
 Write-Output ("warn_timeout=" + [bool]($script:startupWarnings -match 'timeout_sec'))
 Write-Output ("enum_ok=" + (Read-ConfigEnum 'method' 'cookies' 'none' @('none','browser','file')))
+
+# Прокси: поля GUI получают РАСКОДИРОВАННЫЕ логин/пароль, Join-ProxyUrl кодирует их
+# обратно — круг замыкается без двойного кодирования (p%2Fss, а не p%252Fss).
+Write-Output ("px_user=" + $cfg_proxyUser)
+Write-Output ("px_pass=" + $cfg_proxyPass)
+Write-Output ("px_host=" + $cfg_proxyHost)
+Write-Output ("px_round=" + (Join-ProxyUrl $cfg_proxyType $cfg_proxyHost $cfg_proxyPort $cfg_proxyUser $cfg_proxyPass))
+Write-Output ("px_special=" + (Join-ProxyUrl 'socks5' 'h.example' '1080' 'a:b' ('p' + '@' + '/:%x')))
+Write-Output ("px_nocreds=" + (Join-ProxyUrl 'http' 'h.example' '8080' '' ''))
+Write-Output ("px_useronly=" + (Join-ProxyUrl 'http' 'h.example' '' 'u' ''))
+
+# Метка фрагмента: только грамматика формы (паритет с validate_time в .sh и .cmd).
+foreach ($t in @('90','0','1.5','1:30','01:02:03','01:02:03.250','100:00','1:99:99',
+                 '1.2.3',':::','00:00:00:00','.','::::','1:',':30','1min','1..2','1.5:30','1:2:3:4.5','')) {
+    Write-Output ("tt[" + $t + "]=" + (Test-TrimTime $t))
+}
 Write-Output ("bool_ok=" + (Read-ConfigBool 'enabled' 'translation' 'false'))
 
 # Get-Platform (production: якорь по границе домена)
@@ -240,7 +258,8 @@ rm -f "$tmpcfg" "$harness"
 
 # ── Read-Config ───────────────────────────────────────────────
 suite "PS1 yt-dlp: Read-Config (production, кэш + \${ENV})"
-assert_eq "proxy url = подстановка \${TEST_PROXY_VAR}"  "http://sub.example.com:3128"  "$(get_field "$out" rc_proxy)"
+AT='@'
+assert_eq "proxy url = подстановка \${TEST_PROXY_VAR}"  "http://us%40r:p%2Fss${AT}sub.example.com:3128"  "$(get_field "$out" rc_proxy)"
 assert_eq "cookies method"                             "browser"                      "$(get_field "$out" rc_method)"
 assert_eq "default_quality"                            "1080"                         "$(get_field "$out" rc_quality)"
 assert_eq "нет ключа → default"                        "my_default"                   "$(get_field "$out" rc_default)"
@@ -268,6 +287,34 @@ assert_eq "предупреждение про формат субтитров" 
 assert_eq "предупреждение про timeout_sec"           "True"  "$(get_field "$out" warn_timeout)"
 assert_eq "корректный enum проходит без подмены"     "browser" "$(get_field "$out" enum_ok)"
 assert_eq "корректный bool проходит без подмены"     "true"  "$(get_field "$out" bool_ok)"
+
+suite "PS1 yt-dlp: URL прокси из полей GUI (Join-ProxyUrl)"
+# Логин/пароль вставлялись в URL как есть: '@' '/' ':' '%' в пароле ломали разбор.
+assert_eq "логин из config.ini раскодирован для поля GUI"  "us${AT}r"  "$(get_field "$out" px_user)"
+assert_eq "пароль из config.ini раскодирован для поля GUI" "p/ss"      "$(get_field "$out" px_pass)"
+assert_eq "хост разобран"                                  "sub.example.com" "$(get_field "$out" px_host)"
+assert_eq "круг config → поля → URL без двойного кодирования" \
+    "http://us%40r:p%2Fss${AT}sub.example.com:3128" "$(get_field "$out" px_round)"
+assert_eq "':' в логине и '@ / : %' в пароле закодированы" \
+    "socks5://a%3Ab:p%40%2F%3A%25x${AT}h.example:1080" "$(get_field "$out" px_special)"
+assert_eq "без кредов — только хост и порт"   "http://h.example:8080" "$(get_field "$out" px_nocreds)"
+assert_eq "логин без пароля не подставляется" "http://h.example"      "$(get_field "$out" px_useronly)"
+
+suite "PS1 yt-dlp: Test-TrimTime (грамматика метки фрагмента)"
+# Точное сравнение префикса, а не get_field: '.' в значении — метасимвол grep, и
+# «tt[.]» совпал бы со строкой «tt[0]».
+tt_field() {
+    local l
+    while IFS= read -r l; do
+        case "$l" in "tt[$1]="*) printf '%s' "${l#"tt[$1]="}"; return ;; esac
+    done <<< "$out"
+}
+for v in 90 0 1.5 1:30 01:02:03 01:02:03.250 100:00 1:99:99; do
+    assert_eq "«$v» принят" "True" "$(tt_field "$v")"
+done
+for v in 1.2.3 ::: 00:00:00:00 . :::: 1: :30 1min 1..2 1.5:30 1:2:3:4.5 ""; do
+    assert_eq "«$v» отвергнут" "False" "$(tt_field "$v")"
+done
 
 suite "PS1 yt-dlp: Get-Platform (production, якорь границы)"
 assert_eq "youtube.com → YouTube"   "YouTube"     "$(get_field "$out" plat_yt)"

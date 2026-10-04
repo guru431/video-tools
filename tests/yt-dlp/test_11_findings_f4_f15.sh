@@ -240,4 +240,52 @@ else
     skip "CMD F13 behavioral: cmd.exe недоступен"
 fi
 
+# ══════════════════════════════════════════════════════════════
+suite "Время обрезки: грамматика формы одна на SH и CMD (PS1 — test_06)"
+# ══════════════════════════════════════════════════════════════
+# Прежние валидаторы проверяли только НАБОР символов [0-9:.] и пропускали «1.2.3»,
+# «:::», «00:00:00:00», «.». Теперь — форма: до трёх групп цифр через ':' плюс
+# необязательная дробная часть. Диапазоны не проверяются (строгий разбор отложен),
+# поэтому 1:99:99 проходит намеренно.
+TT_GOOD="90 0 1.5 1:30 01:02:03 01:02:03.250 100:00 1:99:99"
+TT_BAD="1.2.3 ::: 00:00:00:00 . :::: 1: :30 1min 1..2 1.5:30 1:2:3:4.5"
+
+(
+    set +u
+    source "$SH_SCRIPT"
+    for v in $TT_GOOD; do
+        if ( validate_time "--trim-start" "$v" ) >/dev/null 2>&1; then pass "SH: «$v» принят"
+        else fail "SH: «$v» принят" "rc 0" "отвергнут"; fi
+    done
+    for v in $TT_BAD ""; do
+        if ( validate_time "--trim-start" "$v" ) >/dev/null 2>&1; then fail "SH: «$v» отвергнут" "exit 1" "принят"
+        else pass "SH: «$v» отвергнут"; fi
+    done
+) 2>/dev/null
+
+if cmd //c "exit 0" &>/dev/null; then
+    # Блок валидации берётся из НАСТОЯЩЕГО .cmd (от `set "_trimchk=` до его `del`) и
+    # гоняется по всем значениям в одном процессе cmd: подпрограмма задаёт обе метки
+    # и печатает, что от них осталось после проверки.
+    tt_cmd=$(mktemp_suffix /tmp/test_yttrim_ .cmd)
+    {
+        printf '@echo off\r\nsetlocal EnableDelayedExpansion\r\n'
+        for v in $TT_GOOD $TT_BAD; do printf 'call :chk "%s"\r\n' "$v"; done
+        printf 'exit /b 0\r\n:chk\r\nset "trim_start=%%~1"\r\nset "trim_end=%%~1"\r\n'
+        awk '{ sub(/\r$/, "") } /^set "_trimchk=/{f=1} f{ printf "%s\r\n", $0 } f && /^del "!_trimchk!"/{exit}' "$CMD_SCRIPT"
+        printf 'echo T[%%~1]=[!trim_start!][!trim_end!]\r\nexit /b 0\r\n'
+    } > "$tt_cmd"
+    tt_out=$(cmd //c "$(cygpath -w "$tt_cmd" 2>/dev/null || echo "$tt_cmd")" 2>/dev/null | tr -d '\r')
+    rm -f "$tt_cmd"
+    assert_contains "CMD: блок валидации извлечён из скрипта" "findstr /r /x" "$(awk '/^set "_trimchk=/{f=1} f{print} f && /^del "!_trimchk!"/{exit}' "$CMD_SCRIPT")"
+    for v in $TT_GOOD; do
+        assert_contains "CMD: «$v» принят (начало и конец)" "T[$v]=[$v][$v]" "$tt_out"
+    done
+    for v in $TT_BAD; do
+        assert_contains "CMD: «$v» отвергнут (начало и конец)" "T[$v]=[][]" "$tt_out"
+    done
+else
+    skip "CMD: грамматика времени обрезки — cmd.exe недоступен"
+fi
+
 summary

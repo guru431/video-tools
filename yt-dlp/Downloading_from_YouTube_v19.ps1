@@ -162,8 +162,10 @@ $cfg_proxyPass = ""
 # напрямую, то есть мимо задуманного маршрута и с утечкой реального IP.
 if ($cfg_proxy_raw -match '^(https?|socks5h|socks4a|socks[45]?)://(?:([^:]+):([^@]+)@)?(\[[^\]]+\]|[^:/]+)(?::(\d+))?') {
     $cfg_proxyType = $Matches[1]
-    $cfg_proxyUser = if ($Matches[2]) { $Matches[2] } else { "" }
-    $cfg_proxyPass = if ($Matches[3]) { $Matches[3] } else { "" }
+    # Логин/пароль в URL закодированы процентами (p%40ss), а поля GUI держат их как
+    # есть: Join-ProxyUrl кодирует обратно, без раскодирования здесь вышло бы p%2540ss.
+    $cfg_proxyUser = if ($Matches[2]) { [System.Uri]::UnescapeDataString($Matches[2]) } else { "" }
+    $cfg_proxyPass = if ($Matches[3]) { [System.Uri]::UnescapeDataString($Matches[3]) } else { "" }
     $cfg_proxyHost = $Matches[4]
     $cfg_proxyPort = if ($Matches[5]) { $Matches[5] } else { "" }
 } elseif (-not [string]::IsNullOrWhiteSpace($cfg_proxy_raw)) {
@@ -171,6 +173,21 @@ if ($cfg_proxy_raw -match '^(https?|socks5h|socks4a|socks[45]?)://(?:([^:]+):([^
     # напрямую, мимо задуманного маршрута. Собирается в очередь и показывается при
     # старте GUI (Write-Host здесь ушёл бы в MessageBox под -noConsole).
     $script:startupWarnings += "Прокси «$cfg_proxy_raw» не распознан (ожидается [схема]://[user:pass@]host[:port], схема http/https/socks4/socks4a/socks5/socks5h). Прокси ВЫКЛЮЧЕН — загрузка пойдёт напрямую."
+}
+# URL прокси из полей GUI. Логин и пароль кодируются (EscapeDataString): '@', '/',
+# ':' или '%' в пароле иначе ломали разбор адреса — yt-dlp брал хвост пароля за хост.
+# Кредиты подставляются только парой, как и раньше.
+function Join-ProxyUrl {
+    param([string]$Type, [string]$ProxyHost, [string]$Port, [string]$User, [string]$Pass)
+    $url = if (-not [string]::IsNullOrWhiteSpace($User) -and -not [string]::IsNullOrWhiteSpace($Pass)) {
+        $u = [System.Uri]::EscapeDataString($User)
+        $p = [System.Uri]::EscapeDataString($Pass)
+        "${Type}://${u}:${p}@${ProxyHost}"
+    } else {
+        "${Type}://${ProxyHost}"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Port)) { $url += ":${Port}" }
+    return $url
 }
 # ── Сеть: профиль устойчивости + необязательный потолок скорости ──────────
 # Значения раньше были зашиты литералами в строке сборки $command: подстроить их
@@ -233,6 +250,14 @@ function Parse-TrimFlag {
     if ($Raw -match '^-(.*)$')  { return @{ enabled = $false; value = $Matches[1] } }
     $val = if ($Raw) { $Raw } else { $DefaultVal }
     return @{ enabled = $false; value = $val }
+}
+# Метка фрагмента: ЧЧ:ММ:СС, М:СС или секунды, у последней группы — необязательная
+# дробная часть. Только ГРАММАТИКА формы, одна на три платформы (validate_time в .sh,
+# findstr-шаблоны в .cmd): прежний набор символов [0-9:.]+ пропускал «1.2.3», «:::»,
+# «00:00:00:00». Диапазоны (1:99:99) не проверяются — строгий разбор отложен.
+function Test-TrimTime {
+    param([string]$Value)
+    return $Value -cmatch '^[0-9]+(:[0-9]+){0,2}(\.[0-9]+)?\z'
 }
 $cfg_trim_start = Parse-TrimFlag (Read-Config "start" "trim" "-00:00:00") "00:00:00"
 $cfg_trim_end   = Parse-TrimFlag (Read-Config "end"   "trim" "-00:01:00") "00:01:00"
@@ -1495,17 +1520,8 @@ $btnStart.Add_Click({
             # чтобы пароль не попадал в Get-Process | CommandLine.
             $proxyEnvVal = $null
             if (([string]$comboProxyType.SelectedItem -ne "нет") -and -not [string]::IsNullOrWhiteSpace($textProxyHost.Text)) {
-                $pType = $comboProxyType.SelectedItem
-                $pHost = $textProxyHost.Text
-                $pPort = $textProxyPort.Text
-                $pUser = $textProxyUser.Text
-                $pPass = $textProxyPass.Text
-                $proxyEnvVal = if (-not [string]::IsNullOrWhiteSpace($pUser) -and -not [string]::IsNullOrWhiteSpace($pPass)) {
-                    "${pType}://${pUser}:${pPass}@${pHost}"
-                } else {
-                    "${pType}://${pHost}"
-                }
-                if (-not [string]::IsNullOrWhiteSpace($pPort)) { $proxyEnvVal += ":${pPort}" }
+                $proxyEnvVal = Join-ProxyUrl ([string]$comboProxyType.SelectedItem) $textProxyHost.Text `
+                    $textProxyPort.Text $textProxyUser.Text $textProxyPass.Text
             }
 
             # Cookies
@@ -1593,15 +1609,15 @@ $btnStart.Add_Click({
             # Фрагмент: только start = с TIME до конца; только end = с начала до TIME;
             # оба = фрагмент TIME1..TIME2; ни один = весь ролик.
             if ($chkTrimStart.Checked -or $chkTrimEnd.Checked) {
-                # Метки валидируем (паритет с CMD: ^[0-9:.]+$), невалидные — игнорируем.
+                # Метки валидируем (Test-TrimTime, паритет с .sh/.cmd), невалидные — игнорируем.
                 $tFrom = "0"; $tTo = "inf"
                 if ($chkTrimStart.Checked -and -not [string]::IsNullOrWhiteSpace($textTrimStart.Text)) {
                     $v = $textTrimStart.Text.Trim()
-                    if ($v -match '^[0-9:.]+$') { $tFrom = $v } else { Append-Output "Некорректная метка начала фрагмента: '$v' (игнорирую)" ([System.Drawing.Color]::Firebrick) }
+                    if (Test-TrimTime $v) { $tFrom = $v } else { Append-Output "Некорректная метка начала фрагмента: '$v' (игнорирую)" ([System.Drawing.Color]::Firebrick) }
                 }
                 if ($chkTrimEnd.Checked -and -not [string]::IsNullOrWhiteSpace($textTrimEnd.Text)) {
                     $v = $textTrimEnd.Text.Trim()
-                    if ($v -match '^[0-9:.]+$') { $tTo = $v } else { Append-Output "Некорректная метка конца фрагмента: '$v' (игнорирую)" ([System.Drawing.Color]::Firebrick) }
+                    if (Test-TrimTime $v) { $tTo = $v } else { Append-Output "Некорректная метка конца фрагмента: '$v' (игнорирую)" ([System.Drawing.Color]::Firebrick) }
                 }
                 $command += "--download-sections", "*${tFrom}-${tTo}"
                 if ($chkForceKf.Checked) { $command += "--force-keyframes-at-cuts" }

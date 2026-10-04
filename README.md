@@ -303,8 +303,8 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 | `test_07_new_features` | audio_format / sponsorblock / субтитры с видео |
 | `test_08_findings` | Фиксы аудита yt-dlp |
 | `test_09_speed_profile` | `[network]`: профили скорости/устойчивости, паритет SH↔PS1 |
-| `test_10_archive_skip_parity` | Archive-skip: batch (SH) и GUI (PS1) не выдают пропуск за загрузку |
-| `test_11_findings_f4_f15` | Фиксы аудита F4/F6/F8/F9/F11/F13/F14/F15 (rename, dry-run+translate, vot exit code, ffprobe для dual_track, GUID-манифест, host-детект, схема URL, регистронезависимый config) |
+| `test_10_archive_skip_parity` | Archive-skip: batch (SH) и GUI (PS1) не выдают пропуск за загрузку; код 101 (`--break-on-reject`) в режиме каналов — не ошибка |
+| `test_11_findings_f4_f15` | Фиксы аудита F4/F6/F8/F9/F11/F13/F14/F15 (rename, dry-run+translate, vot exit code, ffprobe для dual_track, GUID-манифест, host-детект, схема URL, регистронезависимый config); грамматика времени обрезки SH/CMD |
 | `test_12_findings_cli` | `$qi` до манифеста, preflight AI-перевода, URL-валидация и громкости mix в CMD |
 | `test_13_path_limit` | Лимит длины пути (MAX_PATH): бюджет от базовой папки, одинаковый результат в SH/PS1/CMD |
 | `test_14_stop_and_window` | «Остановить» снимает дерево процессов; свёрнутое окно не трогаем |

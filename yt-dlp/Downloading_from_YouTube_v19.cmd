@@ -159,14 +159,20 @@ rem запуске (даже когда обрезка не нужна) и ст�
 rem дочерний процесс на общем stdin — измеренная в этом проекте ловушка
 rem (см. docs/constraints.md про `for /f` и stdin). Файл транзитный: создан, прочитан
 rem findstr и удалён через несколько строк, поэтому 2^30 имён достаточно.
+rem Грамматика формы — та же, что в .sh/.ps1: до трёх групп цифр через ':' и
+rem необязательная дробная часть (N, N.F, N:N, N:N.F, N:N:N, N:N:N.F). findstr не
+rem знает + ? {} — поэтому шесть шаблонов /c: (любой совпавший = годно), /x — вся
+rem строка. Диапазоны (1:99:99) не проверяются: строгий разбор отложен.
 set "_trimchk=%temp%\ytdlp_trimchk_!random!!random!.txt"
+set "_tn=[0-9][0-9]*"
+set "_tre=/c:"!_tn!" /c:"!_tn!\.!_tn!" /c:"!_tn!:!_tn!" /c:"!_tn!:!_tn!\.!_tn!" /c:"!_tn!:!_tn!:!_tn!" /c:"!_tn!:!_tn!:!_tn!\.!_tn!""
 if not "!trim_start!"=="" (
     >"!_trimchk!" echo(!trim_start!
-    findstr /r /c:"^[0-9:.][0-9:.]*$" "!_trimchk!" >nul || (echo [WARN] Некорректное время начала - игнорируется & set "trim_start=")
+    findstr /r /x !_tre! "!_trimchk!" >nul || (echo [WARN] Некорректное время начала - игнорируется & set "trim_start=")
 )
 if not "!trim_end!"=="" (
     >"!_trimchk!" echo(!trim_end!
-    findstr /r /c:"^[0-9:.][0-9:.]*$" "!_trimchk!" >nul || (echo [WARN] Некорректное время конца - игнорируется & set "trim_end=")
+    findstr /r /x !_tre! "!_trimchk!" >nul || (echo [WARN] Некорректное время конца - игнорируется & set "trim_end=")
 )
 del "!_trimchk!" 2>nul
 set "sections_arg="

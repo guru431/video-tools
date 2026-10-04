@@ -1007,16 +1007,18 @@ function Wait-RemoteJob {
 
 function Receive-RemoteResult {
 	param([string]$JobId, [string]$Destination)
-	# Таймаут здесь — КОРОТКИЙ, как у опроса: HttpWebRequest.Timeout ограничивает только
-	# путь до заголовков ответа (соединение + ожидание ответа). В .NET Framework таймер
-	# снимается в ProcessResponse (CancelTimer) при разборе заголовков, а чтению потока
-	# ответа ставится ReadTimeout = ReadWriteTimeout; в .NET (pwsh) ответ читается с
-	# ResponseHeadersRead, а ReadWriteTimeout становится таймаутом приёма сокета. Тело
-	# в гигабайты этим таймаутом не рвётся — его стережёт ReadWriteTimeout (застой
-	# чтения), а заголовки /result служба отдаёт сразу и шлёт тело потоком. Прежний час
-	# означал, что служба, принявшая соединение и молчащая, вешала клиента на час.
+	# Таймаут здесь — предел ЗАСТОЯ, а не всего скачивания: HttpWebRequest.Timeout
+	# ограничивает только путь до заголовков ответа (соединение + ожидание ответа). В
+	# .NET Framework таймер снимается в ProcessResponse (CancelTimer) при разборе
+	# заголовков, а чтению потока ответа ставится ReadTimeout = ReadWriteTimeout; в .NET
+	# (pwsh) ответ читается с ResponseHeadersRead, а ReadWriteTimeout становится
+	# таймаутом приёма сокета. Тело в гигабайты этим таймаутом не рвётся — его стережёт
+	# ReadWriteTimeout (600 с застоя чтения). 600 с и до заголовков — паритет с .sh:
+	# curl не умеет отдельно ограничить ожидание заголовков и застой тела, там один
+	# --speed-limit 1 --speed-time 600 на оба. Прежний час означал, что служба, принявшая
+	# соединение и молчащая, вешала клиента на час.
 	$script:RemoteResultVerified = 'no'
-	$r = Invoke-RemoteHttpRetry GET "/jobs/$JobId/result" '' @{} $Destination '' $null 60000
+	$r = Invoke-RemoteHttpRetry GET "/jobs/$JobId/result" '' @{} $Destination '' $null 600000
 	if ($r.Code -eq -1) {
 		# Служба результат отдала, не смогли сохранить мы (см. Invoke-RemoteHttp).
 		Write-Host "[ОШИБКА] Результат получен, но $($r.Body)"

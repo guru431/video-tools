@@ -314,6 +314,32 @@ assert_not_contains "base_dir=C:/Downloads не склеен со SCRIPT_DIR" "y
 rm -f "$CFG"
 
 # ══════════════════════════════════════════════════════════════
+suite "mask_proxy (SH): пароль не уходит в заголовок прогона и [DRY-RUN]"
+# ══════════════════════════════════════════════════════════════
+# '@' собирается из переменной: строку вида «логин:пароль@хост» в диффе блокирует
+# барьер приватности (.githooks/pre-commit). Пароль с '/' прежний шаблон `[^/]*@`
+# не накрывал вовсе — URL печатался целиком; маска обязана идти до ПОСЛЕДНЕГО '@'.
+(
+    set +u
+    source "$SH_SCRIPT"
+    AT='@'
+    r=$(mask_proxy "http://user:pa/ss${AT}proxy.example.com:8080")
+    assert_eq           "пароль с '/' замаскирован"      "http://***${AT}proxy.example.com:8080" "$r"
+    assert_not_contains "пароль с '/' не виден"          "pa/ss" "$r"
+    r=$(mask_proxy "http://user:p${AT}ss${AT}proxy.example.com:8080")
+    assert_eq           "пароль с '@' — маска до последнего '@'" "http://***${AT}proxy.example.com:8080" "$r"
+    r=$(mask_proxy "socks5h://user:a/b${AT}c${AT}proxy.example.com:1080")
+    assert_eq           "пароль с '/' и '@', схема socks5h сохранена" "socks5h://***${AT}proxy.example.com:1080" "$r"
+    r=$(mask_proxy "user:secret${AT}proxy.example.com:3128")
+    assert_eq           "без схемы — маскируется"        "***${AT}proxy.example.com:3128" "$r"
+    r=$(mask_proxy "user:pa://ss${AT}proxy.example.com:3128")
+    assert_eq           "'://' внутри пароля не сходит за схему" "***${AT}proxy.example.com:3128" "$r"
+    assert_eq "без кредов — как есть"          "http://proxy.example.com:8080" "$(mask_proxy "http://proxy.example.com:8080")"
+    assert_eq "без кредов и без схемы — как есть" "proxy.example.com:8080"     "$(mask_proxy "proxy.example.com:8080")"
+    assert_eq "пусто → «нет»"                  "нет"                           "$(mask_proxy "")"
+) 2>/dev/null
+
+# ══════════════════════════════════════════════════════════════
 suite "F20 (SH): регистр хоста не меняет platform detection"
 # ══════════════════════════════════════════════════════════════
 (

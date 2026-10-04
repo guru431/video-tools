@@ -123,6 +123,17 @@ assert_contains     "конфиг читается со stdin" "--config -" "$_a
 remote_http GET /health/nope
 assert_eq "мок падает на неизвестном маршруте" "000" "$REMOTE_HTTP_CODE"
 
+# Сбой mktemp для stderr curl'а: раньше пустой путь уходил в `2>""`, и запрос падал
+# строкой «No such file or directory» без слова о причине.
+: > "$MOCK_CURL_LOG"
+_errf="$(mktemp "${TMPDIR:-/tmp}/remote_mkt_XXXXXX")"
+TMPDIR="/nonexistent_ffconv_tmp_$$" remote_http GET /health 2>"$_errf"; rc=$?
+assert_eq "сбой mktemp — отказ" "1" "$rc"
+assert_eq "сбой mktemp — код 000" "000" "$REMOTE_HTTP_CODE"
+assert_contains "сбой mktemp назван" "временный файл" "$(cat "$_errf")"
+assert_empty "curl с пустым путём не запускался" "$(cat "$MOCK_CURL_LOG")"
+rm -f "$_errf"
+
 # ══════════════════════════════════════════════════════════════
 suite "remote: preflight"
 # ══════════════════════════════════════════════════════════════
@@ -505,12 +516,19 @@ assert_contains "нехватка памяти названа" "512" "$out"
 # СЛУЖБА ждёт окна на карте): часовой 4K-файл отменялся при живом прогрессе, а
 # prefer = cpu на длинном файле — через 90 минут серверной работы. Теперь таймер
 # сбрасывается на каждое изменение state/progress.
+# Время ВИРТУАЛЬНОЕ: EPOCHSECONDS снят с особых свойств (bash 5; в 3.2 он обычная
+# переменная), а подменённый sleep двигает его на паузу опроса — реального ожидания нет.
+# Зовётся внутри подоболочки: подмена sleep не должна пережить сценарий.
+_virtual_clock() {
+	unset EPOCHSECONDS; EPOCHSECONDS=1000000
+	sleep() { EPOCHSECONDS=$((EPOCHSECONDS + $1)); }
+}
 : > "$MOCK_CURL_LOG"
 MOCK_CURL_ROUTES="$(routes \
   'GET /v1/jobs/job-9|200|{"state":"running","progress":10}' \
   'DELETE /v1/jobs/job-9|200|{"ok":true}')"
 remote_stall_timeout=1
-out="$( (REMOTE_POLL_SECONDS=1 remote_wait job-9 "файл" 2>&1) )"; rc=$?
+out="$( (_virtual_clock; REMOTE_POLL_SECONDS=1 remote_wait job-9 "файл" 2>&1) )"; rc=$?
 assert_eq "застрявшая задача не ждётся вечно" "1" "$rc"
 assert_contains "названа причина" "не подаёт признаков движения" "$out"
 assert_contains "задача отменена на сервере" "DELETE" "$(cat "$MOCK_CURL_LOG")"
@@ -534,13 +552,11 @@ remote_stall_timeout=900
 # Ожидание карты: процент там не растёт по определению, и здоровая задача, честно
 # ждущая окна, отменялась через stall_timeout, хотя службе разрешено ждать
 # wait_timeout. Порог в waiting_gpu — wait_timeout + stall_timeout (здесь 20 + 10).
-# Время ВИРТУАЛЬНОЕ: EPOCHSECONDS снят с особых свойств (bash 5; в 3.2 он обычная
-# переменная), а подменённый sleep двигает его на паузу опроса — реального ожидания нет.
+# Время виртуальное (_virtual_clock выше).
 # $1 — состояние задачи, $2 — предел опросов (пусто — без предела).
 _virtual_wait() {
 	(
-		unset EPOCHSECONDS; EPOCHSECONDS=1000000
-		sleep() { EPOCHSECONDS=$((EPOCHSECONDS + $1)); }
+		_virtual_clock
 		remote_stall_timeout=10 remote_wait_timeout=20 REMOTE_POLL_SECONDS=11
 		REMOTE_WAIT_MAX_POLLS="$2"
 		MOCK_CURL_ROUTES="$(routes \
@@ -574,7 +590,7 @@ assert_contains "running отменяется по stall_timeout" "движен�
 MOCK_CURL_ROUTES="$(routes \
   'GET /v1/jobs/job-11|502|{"error":"bad gateway"}' \
   'DELETE /v1/jobs/job-11|200|{"ok":true}')"
-out="$( (REMOTE_POLL_MAX_FAILS=2 REMOTE_POLL_SECONDS=1 remote_wait job-11 "файл" 2>&1) )"; rc=$?
+out="$( (_virtual_clock; REMOTE_POLL_MAX_FAILS=2 REMOTE_POLL_SECONDS=1 remote_wait job-11 "файл" 2>&1) )"; rc=$?
 assert_eq "серия сбойных опросов заканчивается отказом" "1" "$rc"
 assert_contains "сбой опроса не молчит" "Опрос задачи не удался" "$out"
 assert_contains "после серии сбоев задача отменена" "DELETE" "$(cat "$MOCK_CURL_LOG")"

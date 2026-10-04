@@ -300,7 +300,12 @@ remote_http() {
 	REMOTE_HTTP_BODY=""
 	# stderr curl'а не выбрасываем, а сохраняем: «HTTP 000» без причины — самая
 	# бесполезная строка, которую может увидеть пользователь.
-	err_file="$(mktemp "${TMPDIR:-/tmp}/ffconv_curl_XXXXXX")"
+	# Без проверки сбой mktemp оставлял пустой путь, и `2>""` ронял запрос строкой
+	# «No such file or directory» без слова о причине.
+	err_file="$(mktemp "${TMPDIR:-/tmp}/ffconv_curl_XXXXXX")" || {
+		echo "[ОШИБКА] Не удалось создать временный файл для вывода curl." >&2
+		REMOTE_HTTP_CODE="000"; return 1
+	}
 	remote_tmp_add "$err_file"
 	out="$(remote_curl_auth | "$curl_bin" --config - "${args[@]}" "${remote_endpoint}${path}" 2>"$err_file")" || {
 		REMOTE_HTTP_CODE="000"
@@ -1391,7 +1396,10 @@ remote_selftest_row() {
 
 remote_selftest() {
 	local rc=0 t0 clip out jid="" tmpd p
-	tmpd="$(mktemp -d "${TMPDIR:-/tmp}/ffconv_selftest_XXXXXX")" || return 1
+	tmpd="$(mktemp -d "${TMPDIR:-/tmp}/ffconv_selftest_XXXXXX")" || {
+		echo "[ОШИБКА] Не удалось создать временный каталог для самопроверки." >&2
+		return 1
+	}
 	clip="$tmpd/selftest.mp4"
 	out="$tmpd/selftest.out"
 

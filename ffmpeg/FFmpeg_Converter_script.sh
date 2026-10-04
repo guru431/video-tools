@@ -900,39 +900,61 @@ manifest_is_complete() {
 	return 0
 }
 
-# D2. overwrite_existing = yes: выходы ПРОШЛОГО прогона этого входа удаляются до
-# кодирования. Иначе прогон с меньшим числом частей оставлял старые «(part.k)» на
-# диске — вне нового manifest, вперемешку с новыми. Список берётся из manifest, а не
-# из маски имени: удаляется только то, что этот вход действительно создал. Фильтры:
-# каталог manifest (manifest из перенесённого дерева назначения указывает в старое
-# место), текущее расширение (выход в прежнем формате новым прогоном не пересоздаётся)
-# и сам входной файл (при destination == source прошлый выход бывает текущим входом).
-# dry_run ничего не удаляет, а называет (D7). Аргументы: manifest, источник, расширение.
-# S11: зовётся и при overwrite_existing = no, когда manifest обесценен (MANIFEST_STALE)
-# и файл перекодируется.
-purge_manifest_outputs() {
-	local mf="$1" src="$2" ext="$3"
-	[ -f "$mf" ] || return 0
-	local line path mf_dir in_key ext_key
-	canon_path "$mf"; collision_key "${CANON_PATH%/*}"; mf_dir="$COLLISION_KEY"
-	canon_path "$src"; collision_key "$CANON_PATH"; in_key="$COLLISION_KEY"
-	collision_key ".$ext"; ext_key="$COLLISION_KEY"
+# MANIFEST_OUTPUTS ← пути выходов manifest, по одному на строку (пусто — нет manifest).
+# Список запоминается ДО кодирования: к моменту очистки (purge_manifest_outputs) на
+# месте старого manifest уже лежит новый.
+manifest_read_outputs() {
+	local line
+	MANIFEST_OUTPUTS=""
+	[ -f "$1" ] || return 0
 	while IFS= read -r line || [ -n "$line" ]; do
 		line="${line%$'\r'}"
 		case "$line" in output=*) ;; *) continue ;; esac
-		path="${line#output=}"; path="${path#*|}"
-		[ -f "$path" ] || continue
+		line="${line#output=}"
+		MANIFEST_OUTPUTS="$MANIFEST_OUTPUTS${line#*|}"$'\n'
+	done < "$1"
+}
+
+# D2. overwrite_existing = yes: выходы ПРОШЛОГО прогона этого входа, которых нет среди
+# выходов нового, удаляются ПОСЛЕ успеха всех частей. Иначе прогон с меньшим числом
+# частей оставлял старые «(part.k)» на диске — вне нового manifest, вперемешку с новыми.
+# Не раньше: удаление до кодирования при провале (ffmpeg, диск, служба, Ctrl+C)
+# оставляло пользователя без единого выхода — ни старого, ни нового. Список берётся из
+# manifest (manifest_read_outputs), а не из маски имени: удаляется только то, что этот
+# вход действительно создал. Фильтры: каталог manifest (manifest из перенесённого
+# дерева назначения указывает в старое место), текущее расширение (выход в прежнем
+# формате новым прогоном не пересоздаётся), сам входной файл (при destination == source
+# прошлый выход бывает текущим входом) и выходы нового прогона (их только что
+# опубликовали). dry_run ничего не удаляет, а называет (D7): ожидаемые имена частей
+# известны и холостому прогону. S11: и при overwrite_existing = no, когда manifest
+# обесценен (MANIFEST_STALE) и файл перекодируется.
+# Аргументы: старые выходы (построчно), manifest, источник, расширение, новые выходы
+# (построчно).
+purge_manifest_outputs() {
+	local old="$1" mf="$2" src="$3" ext="$4" new="$5"
+	[ -n "$old" ] || return 0
+	local path mf_dir in_key ext_key nl=$'\n' new_keys=$'\n'
+	canon_path "$mf"; collision_key "${CANON_PATH%/*}"; mf_dir="$COLLISION_KEY"
+	canon_path "$src"; collision_key "$CANON_PATH"; in_key="$COLLISION_KEY"
+	collision_key ".$ext"; ext_key="$COLLISION_KEY"
+	while IFS= read -r path; do
+		[ -n "$path" ] || continue
+		canon_path "$path"; collision_key "$CANON_PATH"; new_keys="$new_keys$COLLISION_KEY$nl"
+	done <<< "$new"
+	while IFS= read -r path; do
+		[ -n "$path" ] && [ -f "$path" ] || continue
 		canon_path "$path"; collision_key "$CANON_PATH"
 		[ "${COLLISION_KEY%/*}" = "$mf_dir" ] || continue
 		[ "$COLLISION_KEY" = "$in_key" ] && continue
 		case "$COLLISION_KEY" in *"$ext_key") ;; *) continue ;; esac
+		case "$new_keys" in *"$nl$COLLISION_KEY$nl"*) continue ;; esac
 		if [ "$dry_run" = "yes" ]; then
-			log_msg "INFO" "[DRY-RUN] выход прошлого прогона был бы удалён: $path"
+			log_msg "INFO" "[DRY-RUN] после успешного кодирования был бы удалён выход прошлого прогона: $path"
 		else
 			log_msg "INFO" "Удаление выхода прошлого прогона: $path"
 			rm -f -- "$path"
 		fi
-	done < "$mf"
+	done <<< "$old"
 	return 0
 }
 
@@ -1285,10 +1307,12 @@ encode_file() {
 		return
 	fi
 
-	# D2. Выходы прошлого прогона — до кодирования и до развилки локальный/удалённый:
-	# оба пути публикуют результат под теми же именами частей.
+	# D2. Выходы прошлого прогона запоминаются здесь, а удаляются после успеха всех
+	# частей (purge_manifest_outputs после цикла) — общего для локального и удалённого
+	# путей: оба публикуют результат под теми же именами частей.
+	local old_outputs=""
 	if [ "$overwrite_existing" = "yes" ]; then
-		purge_manifest_outputs "$manifest" "$full_path" "$current_format_out"
+		manifest_read_outputs "$manifest"; old_outputs="$MANIFEST_OUTPUTS"
 	fi
 
 	# F7. overwrite_existing=yes → готовый файл не считаем финальным и перекодируем с
@@ -1315,12 +1339,12 @@ encode_file() {
 		fi
 		# S11. overwrite_existing = no, но manifest этого входа обесценен (источник или
 		# настройки сменились) и файл всё-таки перекодируется: хвост прошлого прогона
-		# убирается так же, как при overwrite = yes, — иначе новый [split] length с
-		# меньшим числом частей оставлял старые (part.k) рядом с новыми. Стоит ПОСЛЕ
-		# проверки готового выхода: валидный выход при overwrite = no пропускается, и
-		# его соседей это правило не трогает.
+		# убирается так же, как при overwrite = yes (после успеха), — иначе новый
+		# [split] length с меньшим числом частей оставлял старые (part.k) рядом с
+		# новыми. Стоит ПОСЛЕ проверки готового выхода: валидный выход при
+		# overwrite = no пропускается, и его соседей это правило не трогает.
 		if [ "${MANIFEST_STALE:-no}" = "yes" ]; then
-			purge_manifest_outputs "$manifest" "$full_path" "$current_format_out"
+			manifest_read_outputs "$manifest"; old_outputs="$MANIFEST_OUTPUTS"
 		fi
 	fi
 
@@ -1527,6 +1551,9 @@ encode_file() {
 	# транзакцией после цикла; размер источника — с первой удавшейся части.
 	local -a produced=()
 	local produced_src_sz=""
+	# Имена выходов всех частей (построчно) — и при dry_run: по ним очистка D2 после
+	# цикла отличает выход прошлого прогона от только что пересозданного.
+	local planned_outputs=""
 	local any_fail="no"
 	# F29. Размер входа засчитываем ОДИН раз на исходный файл. Раньше запись "ok"
 	# писалась на каждую часть и несла полный размер источника, поэтому при разбиении
@@ -1625,6 +1652,7 @@ encode_file() {
 		if [ "$copy_codecs" = "yes" ]; then vf_args=(); af_args=(); fi
 
 		local out_file="${folder_destination}${file_path}${file_name}${pref}.${current_format_out}"
+		planned_outputs="$planned_outputs$out_file"$'\n'
 
 		# -ss обычно ДО -i: fast seek по контейнеру (мгновенно), не декодируя от 0.
 		# F5-исключение: при прожиге субтитров (sub_burned) с ненулевым стартом input-side
@@ -1919,8 +1947,15 @@ encode_file() {
 	# Manifest пишем только когда удались ВСЕ части. Именно его отсутствие заставит
 	# следующий запуск доделать файл, вместо того чтобы принять уцелевшую (part.1) за
 	# готовый результат. Частичный успех manifest'а не получает намеренно.
-	if [ "$dry_run" != "yes" ] && [ "$any_fail" = "no" ] && [ ${#produced[@]} -gt 0 ]; then
+	if [ "$dry_run" = "yes" ]; then
+		if [ "$any_fail" = "no" ]; then
+			purge_manifest_outputs "$old_outputs" "$manifest" "$full_path" "$current_format_out" "$planned_outputs"
+		fi
+	elif [ "$any_fail" = "no" ] && [ ${#produced[@]} -gt 0 ]; then
 		manifest_write "$manifest" "$full_path" "$produced_src_sz" "$file_sig" "${produced[@]}"
+		# D2/S11. Хвост прошлого прогона — только теперь, когда все части нового на
+		# месте: при провале любой части старые выходы не трогаются вовсе.
+		purge_manifest_outputs "$old_outputs" "$manifest" "$full_path" "$current_format_out" "$planned_outputs"
 		# Файл доделан — возобновлять нечего, и sidecar (upload_id, подпись, задачи
 		# частей) не имеет права переживать успешный прогон: иначе следующий заход
 		# по тому же файлу нашёл бы в нём идентификаторы задач, которые уже

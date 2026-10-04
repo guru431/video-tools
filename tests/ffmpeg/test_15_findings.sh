@@ -10,7 +10,8 @@
 #   F6 — извлечение кадров пишет маркер завершения, провал удаляет каталог (повтор возможен);
 #   F7 — overwrite_existing=yes перекодирует готовый файл, иначе пропускает;
 #   F8 — предпусковая проверка совместимости webm + кодек субтитров meta по контейнеру;
-#   D2 — overwrite_existing=yes убирает выходы прошлого прогона по manifest (SH/PS1/CMD).
+#   D2 — overwrite_existing=yes убирает выходы прошлого прогона по manifest после успеха
+#        всех частей, при провале не трогает (SH/PS1/CMD).
 # Использует mock ffmpeg (touch выходов); фейковые входы — реальный ffmpeg не нужен.
 # ============================================================
 
@@ -917,6 +918,36 @@ d2_incomplete_setup() {   # $1 = posix|win
     body=$(grep -v '^state=complete' "$DST/.ov.ffconv")
     printf '%s\n' "$body" "output=0|$dd${sep}ov (part.9).mp4$eol" "state=complete$eol" > "$DST/.ov.ffconv"
 }
+# Сценарий C: новый прогон ([split] start) даёт ОДНУ часть «ov (part.1).mp4» — её имя
+# есть и в старом manifest сценария A. Очистка идёт ПОСЛЕ успеха всех частей: удаление до
+# кодирования при провале (ffmpeg, диск, служба, Ctrl+C) оставляло пользователя без
+# единого выхода. Успех — (part.1) заменена новой, (part.2)/(part.3) удалены; провал
+# кодирования — все старые выходы и manifest на месте; dry_run — ничего не удалено,
+# названы только (part.2)/(part.3): (part.1) новый прогон пересоздаёт. Строки dry_run
+# сверяются по «: <путь>» — ASCII-части, отличной от команды ffmpeg («"<путь>"»).
+d2_part_check() {   # $1 = платформа, $2 = ok|fail|dry, $3 = вывод прогона, $4 = posix|win
+    local p="$1" k left="" dd="$DST" sep="/"
+    if [ "$4" = "win" ]; then dd="$W_DST"; sep='\'; fi
+    for k in 1 2 3; do [ -f "$DST/ov (part.$k).mp4" ] && left="$left part.$k"; done
+    case "$2" in
+        ok)
+            assert_eq "$p, одна новая часть: (part.2)/(part.3) удалены, (part.1) на месте" " part.1" "$left"
+            if [ -s "$DST/ov (part.1).mp4" ]; then pass "$p, одна новая часть: (part.1) заменена новой"; else fail "$p, одна новая часть: (part.1) заменена новой" "непустая (part.1)" "пустая — старая; вывод: $(printf '%s' "$3" | tr '\n' '|')"; fi
+            assert_eq "$p, одна новая часть: manifest перечисляет её одну" "1" "$(grep -c '^output=' "$DST/.ov.ffconv" 2>/dev/null)"
+            ;;
+        fail)
+            assert_eq "$p, провал кодирования: выходы прошлого прогона на месте" " part.1 part.2 part.3" "$left"
+            if [ ! -s "$DST/ov (part.1).mp4" ]; then pass "$p, провал кодирования: (part.1) прошлого прогона не подменена"; else fail "$p, провал кодирования: (part.1) прошлого прогона не подменена" "пустая (part.1)" "перезаписана"; fi
+            assert_eq "$p, провал кодирования: manifest прошлого прогона не тронут" "5" "$(grep -c '^output=' "$DST/.ov.ffconv" 2>/dev/null)"
+            ;;
+        dry)
+            assert_eq "$p dry_run, одна новая часть: ничего не удалено" " part.1 part.2 part.3" "$left"
+            assert_contains "$p dry_run, одна новая часть: названа (part.2)" ": $dd${sep}ov (part.2).mp4" "$3"
+            assert_contains "$p dry_run, одна новая часть: названа (part.3)" ": $dd${sep}ov (part.3).mp4" "$3"
+            assert_not_contains "$p dry_run, одна новая часть: пересоздаваемая (part.1) не названа" ": $dd${sep}ov (part.1).mp4" "$3"
+            ;;
+    esac
+}
 d2_incomplete_check() {   # $1 = платформа, $2 = вывод прогона
     if [ -f "$DST/ov (part.9).mp4" ]; then pass "$1 overwrite=no, прежние настройки: прочие выходы manifest не удалены"; else fail "$1 overwrite=no, прежние настройки: прочие выходы manifest не удалены" "есть ov (part.9).mp4" "удалён"; fi
     if [ -f "$DST/ov.mp4" ]; then pass "$1 overwrite=no, прежние настройки: пропавший выход перекодирован"; else fail "$1 overwrite=no, прежние настройки: пропавший выход перекодирован" "есть ov.mp4" "нет; вывод: $(printf '%s' "$2" | tr '\n' '|')"; fi
@@ -943,6 +974,14 @@ d2_incomplete_check "SH" "$OUT_TEXT"
 d2_skip_setup posix
 run_capture
 d2_skip_check "SH"
+d2_setup posix
+run_capture 'overwrite_existing="yes"' 'start_coding=":+:00-00-10"' 'dry_run="yes"'
+d2_part_check "SH" dry "$OUT_TEXT" posix
+assert_contains "SH dry_run: строка говорит, что удаление — после успеха" "после успешного кодирования был бы удалён выход прошлого прогона: $DST/ov (part.2).mp4" "$OUT_TEXT"
+run_capture 'overwrite_existing="yes"' 'start_coding=":+:00-00-10"' 'export MOCK_FFMPEG_FAIL=1'
+d2_part_check "SH" fail "$OUT_TEXT" posix
+run_capture 'overwrite_existing="yes"' 'start_coding=":+:00-00-10"'
+d2_part_check "SH" ok "$OUT_TEXT" posix
 # Manifest с CRLF-концами (так его пишут .ps1 и .cmd): `state=complete\r` .sh не
 # узнавал, и законченный manifest для него не был законченным никогда. Обесцененный
 # (settings=old) — хвост убирается, то есть пути выходов прочитаны без `\r`.
@@ -1016,6 +1055,13 @@ else
     d2_skip_setup win
     d2_ps1 "$W_IN" "$W_DST" "\$overwrite_existing='no'"
     d2_skip_check "PS1"
+    d2_setup win
+    d2_ps1 "$W_IN" "$W_DST" "\$start_coding=':+:00-00-10'; \$dry_run='yes'"
+    d2_part_check "PS1" dry "$D2_OUT" win
+    d2_ps1 "$W_IN" "$W_DST" "\$start_coding=':+:00-00-10'; \$env:MOCK_FFMPEG_FAIL='1'"
+    d2_part_check "PS1" fail "$D2_OUT" win
+    d2_ps1 "$W_IN" "$W_DST" "\$start_coding=':+:00-00-10'"
+    d2_part_check "PS1" ok "$D2_OUT" win
 fi
 
 # --- CMD (настоящий script.cmd, мок ffmpeg.exe) ---
@@ -1033,6 +1079,7 @@ public class M {
         string log = System.Environment.GetEnvironmentVariable("MOCK_FFMPEG_LOG");
         if (log != null) System.IO.File.AppendAllText(log, string.Join(" ", a) + System.Environment.NewLine);
         if (System.Environment.GetEnvironmentVariable("MOCK_FFMPEG_BROKEN") != null && System.Array.IndexOf(a, "null") >= 0) return 1;
+        if (System.Environment.GetEnvironmentVariable("MOCK_FFMPEG_FAIL") != null && a.Length > 1 && a[a.Length - 1] == "-y") return 1;
         if (a.Length > 1 && a[a.Length - 1] == "-y") System.IO.File.WriteAllText(a[a.Length - 2], "MOCK");
         return 0;
     }
@@ -1085,6 +1132,13 @@ CSEOF
         d2_skip_setup win
         d2_cmd "$W_IN" "$W_DST" 'set "overwrite_existing=no"'
         d2_skip_check "CMD"
+        d2_setup win
+        d2_cmd "$W_IN" "$W_DST" $'set "start_coding=:+:00-00-10"\nset "dry_run=yes"'
+        d2_part_check "CMD" dry "$D2_OUT" win
+        d2_cmd "$W_IN" "$W_DST" $'set "start_coding=:+:00-00-10"\nset "MOCK_FFMPEG_FAIL=1"'
+        d2_part_check "CMD" fail "$D2_OUT" win
+        d2_cmd "$W_IN" "$W_DST" 'set "start_coding=:+:00-00-10"'
+        d2_part_check "CMD" ok "$D2_OUT" win
         # S15. Manifest с LF-концами (так его пишет .sh): findstr /x строку state=complete
         # с одним LF не находил, и законченный manifest для CMD не был законченным никогда.
         # Обесцененный (settings=old) — хвост прошлого прогона убирается.

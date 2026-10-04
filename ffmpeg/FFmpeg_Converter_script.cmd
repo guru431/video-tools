@@ -753,9 +753,9 @@ rem а goto из тела for обрывал бы перечисление фа�
 		)
 
 		rem F12. Выход не имеет права совпасть со входом. Проверка стоит ДО всего остального:
-		rem ниже готовый выход удаляется (overwrite_existing=yes — безусловно, ещё и при
-		rem dry_run; либо как «битый» после провала валидации), а при in==out этим файлом
-		rem оказался бы сам оригинал. %%~fI канонизирует путь; на Windows сверяем без регистра.
+		rem ниже готовый выход удаляется как «битый» после провала валидации или заменяется
+		rem новым (overwrite_existing=yes), а при in==out этим файлом оказался бы сам
+		rem оригинал. %%~fI канонизирует путь; на Windows сверяем без регистра.
 		rem Суффикс " (part.N)" коллизию снимает, поэтому заранее известный суффикс
 		rem (part_suffix_known — режим [split] start) в сравнение включён. При [split] length
 		rem число частей зависит от длительности и здесь ещё неизвестно, поэтому сверяем
@@ -785,32 +785,28 @@ rem а goto из тела for обрывал бы перечисление фа�
 			)
 		)
 
-		rem D2. Выходы прошлого прогона — по manifest этого входа (:purge_manifest_outputs).
-		rem Без manifest остаётся прежнее правило ниже: имя без суффикса и (part.1).
-		if "%overwrite_existing%"=="yes" call :purge_manifest_outputs "%folder_destination%!file_path!.!file_name!.ffconv" "!full_path!" "!current_format_out!"
+		rem D2. Выходы прошлого прогона по manifest этого входа удаляются ПОСЛЕ успеха всех
+		rem частей (:purge_manifest_outputs после цикла), здесь только решается, нужно ли.
+		rem Удаление до кодирования при провале оставляло пользователя без единого выхода.
+		rem Старый manifest до конца цикла не перезаписывается - части дописываются в
+		rem !_mf!.tmp, - поэтому список выходов читается из него же.
+		set "_pg_do="
+		if "%overwrite_existing%"=="yes" set "_pg_do=1"
 
-		rem F7. overwrite_existing=yes → удаляем готовое, чтобы перекодировать заново
-		rem (ffmpeg -y перезапишет; иначе валидный файл считается готовым и пропускается).
-		rem D7. Удаление — мутация; при dry_run её делать нельзя, иначе режим, обещающий лишь
-		rem показать команду, реально уничтожает существующий выход.
-		if "%overwrite_existing%"=="yes" if not "%dry_run%"=="yes" (
-			rem D2. При destination == source и [split] start имя без суффикса бывает самим
-			rem входом: F12 сверяет только имя с известным суффиксом части. Вход не удаляем.
-			for %%I in ("%folder_destination%!file_path!!file_name!.!current_format_out!") do if exist "%%~fI" for %%S in ("!full_path!") do if /i not "%%~sfI"=="%%~sfS" del "%%~fI"
-			if exist "%folder_destination%!file_path!!file_name! (part.1).!current_format_out!" del "%folder_destination%!file_path!!file_name! (part.1).!current_format_out!"
-		)
-
+		rem F7. overwrite_existing=yes → перекодируем и готовый выход. Заранее его не
+		rem удаляем: ffmpeg пишет во временное имя, а move /y заменяет цель только после
+		rem успеха, и при провале прежний выход остаётся на месте (паритет с SH/PS1).
 		rem E3. Валидность существующего выхода (паритет с SH/PS1): битый файл удаляем,
 		rem чтобы перекодировать заново, а не пропустить как готовый.
 		rem D7. Удаление — мутация; при dry_run её быть не должно (SH/PS1 файл сохраняют,
 		rem CMD удалял его при ЛЮБОМ значении overwrite_existing — расхождение паритета).
-		rem S18. dry_run оставляет на месте выход, который настоящий прогон убрал бы (битый
-		rem или при overwrite_existing=yes), и ворота «выхода нет» ниже его пропускали, а
-		rem SH/PS1 показывают команду кодирования. Ворота - _do_encode: выхода нет или
-		rem dry_run кодировал бы поверх. Проверка валидности, как в SH/PS1, - только при
+		rem S18. dry_run оставляет на месте битый выход, который настоящий прогон убрал бы,
+		rem и ворота «выхода нет» ниже его пропускали, а SH/PS1 показывают команду
+		rem кодирования. Ворота - _do_encode: выхода нет, overwrite_existing=yes или dry_run
+		rem кодировал бы поверх битого. Проверка валидности, как в SH/PS1, - только при
 		rem overwrite_existing=no.
 		set "_do_encode="
-		if "%dry_run%"=="yes" if "%overwrite_existing%"=="yes" set "_do_encode=1"
+		if "%overwrite_existing%"=="yes" set "_do_encode=1"
 		set "_existing_out=%folder_destination%!file_path!!file_name!!part_suffix_known!.!current_format_out!"
 		if not "%overwrite_existing%"=="yes" if exist "!_existing_out!" (
 			"!ffmpeg!" -nostdin -v error -i "!_existing_out!" -f null - >nul 2>&1
@@ -843,11 +839,11 @@ rem а goto из тела for обрывал бы перечисление фа�
 		if defined _do_encode (
 				rem S11. overwrite_existing=no, но manifest этого входа обесценен - источник или
 				rem настройки сменились - и файл всё-таки перекодируется: хвост прошлого прогона
-				rem убирается так же, как при overwrite=yes, - иначе новый [split] length с
-				rem меньшим числом частей оставлял старые (part.k) рядом с новыми. Стоит внутри
-				rem ветки кодирования: валидный выход при overwrite=no пропускается, и его
-				rem соседей это правило не трогает. Паритет с .sh/.ps1.
-				if defined _mf_stale call :purge_manifest_outputs "!_mf!" "!full_path!" "!current_format_out!"
+				rem убирается так же, как при overwrite=yes (после успеха), - иначе новый
+				rem [split] length с меньшим числом частей оставлял старые (part.k) рядом с
+				rem новыми. Стоит внутри ветки кодирования: валидный выход при overwrite=no
+				rem пропускается, и его соседей это правило не трогает. Паритет с .sh/.ps1.
+				if defined _mf_stale set "_pg_do=1"
 				rem P3. Один вызов ffmpeg -i на файл — раньше было 2: bitrate + Duration.
 				rem ffmpeg печатает metadata в stderr → перенаправляем в файл, stdout → nul.
 				set "_ff_info_tmp=%temp%\ffinfo_!random!!random!.txt"
@@ -968,6 +964,13 @@ rem а goto из тела for обрывал бы перечисление фа�
 				rem готовности частей, а state=complete — только после цикла. Так CMD обходится
 				rem без массивов, а инвариант «state пишется последней» соблюдён.
 				set "_mf_any_fail="
+				rem D2. Имена выходов всех частей - и при dry_run: по ним очистка после цикла
+				rem отличает выход прошлого прогона от только что пересозданного.
+				set "_pg_new="
+				if defined _pg_do (
+					set "_pg_new=%temp%\ffpurge_!random!!random!.txt"
+					type nul >"!_pg_new!"
+				)
 				if not "%dry_run%"=="yes" (
 					for %%A in ("!full_path!") do set "_mf_srcsz=%%~zA"
 					>"!_mf!.tmp" echo # ffconv-manifest v1
@@ -1048,6 +1051,7 @@ rem а goto из тела for обрывал бы перечисление фа�
 					if "%copy_codecs%"=="yes" (set "vf_args=" & set "af_args=")
 
 					set "out_file=%folder_destination%!file_path!!file_name!!pref!.!current_format_out!"
+					if defined _pg_new >>"!_pg_new!" echo !out_file!
 					rem Пишем в соседний temp и переименовываем в цель только после успеха.
 					rem Прямая запись в out_file означала, что прерванный прогон оставлял
 					rem обрезанный файл под финальным именем — следующий запуск принимал его
@@ -1096,16 +1100,23 @@ rem а goto из тела for обрывал бы перечисление фа�
 				rem уцелевшую (part.1) за готовый результат. Строка state=complete
 				rem дописывается последней и лишь теперь — оборванная запись не пройдёт
 				rem проверку. Частичный успех manifest'а не получает намеренно.
+				rem D2/S11. Хвост прошлого прогона - только когда все части нового на месте:
+				rem при провале любой части старые выходы не трогаются вовсе. Зовётся ДО
+				rem подмены manifest: список старых выходов читается из прежнего !_mf!.
 				if not "%dry_run%"=="yes" (
 					if defined _mf_any_fail (
 						del "!_mf!.tmp" 2>nul
 					) else (
 						if exist "!_mf!.tmp" (
 							>>"!_mf!.tmp" echo state=complete
+							if defined _pg_new call :purge_manifest_outputs "!_mf!" "!full_path!" "!current_format_out!" "!_pg_new!"
 							move /y "!_mf!.tmp" "!_mf!" >nul 2>&1
 						)
 					)
+				) else (
+					if defined _pg_new call :purge_manifest_outputs "!_mf!" "!full_path!" "!current_format_out!" "!_pg_new!"
 				)
+				if defined _pg_new del "!_pg_new!" 2>nul
 		) else (
 			set /a "total_skip+=1"
 		)
@@ -1377,19 +1388,24 @@ exit /b
 rem --- D2. Выходы прошлого прогона при overwrite_existing=yes ---
 rem S11: и при overwrite_existing=no, когда manifest обесценен (_mf_stale) и файл
 rem перекодируется.
-rem Иначе прогон с меньшим числом частей оставлял старые "(part.k)" на диске - вне
-rem нового manifest, вперемешку с новыми. Список берётся из manifest, а не из маски
-rem имени: удаляется только то, что этот вход действительно создал. Фильтры: каталог
-rem manifest (manifest из перенесённого дерева назначения указывает в старое место),
-rem текущее расширение (выход в прежнем формате новым прогоном не пересоздаётся) и сам
-rem входной файл (при destination == source прошлый выход бывает текущим входом).
-rem Сравнение - по короткой форме %%~s: она одна у длинного и 8.3-написания пути.
+rem Зовётся ПОСЛЕ успеха всех частей: удаление до кодирования при провале оставляло
+rem пользователя без единого выхода. Иначе прогон с меньшим числом частей оставлял
+rem старые "(part.k)" на диске - вне нового manifest, вперемешку с новыми. Список
+rem берётся из manifest, а не из маски имени: удаляется только то, что этот вход
+rem действительно создал. Фильтры: каталог manifest (manifest из перенесённого дерева
+rem назначения указывает в старое место), текущее расширение (выход в прежнем формате
+rem новым прогоном не пересоздаётся), сам входной файл (при destination == source
+rem прошлый выход бывает текущим входом) и выходы нового прогона (список в %4).
+rem Сравнение - по короткой форме %%~s: она одна у длинного и 8.3-написания пути; у
+rem выходов нового прогона - короткий каталог плюс имя (при dry_run файла может не быть).
 rem dry_run ничего не удаляет, а называет (D7). Паритет с .sh/.ps1.
-rem Аргументы: %1 = путь manifest, %2 = путь источника, %3 = расширение выхода.
+rem Аргументы: %1 = путь старого manifest, %2 = путь источника, %3 = расширение выхода,
+rem %4 = файл со списком выходов нового прогона (по одному на строку).
 :purge_manifest_outputs
 set "_pg_mf=%~1"
 set "_pg_src=%~2"
 set "_pg_ext=.%~3"
+set "_pg_newf=%~4"
 if not exist "!_pg_mf!" exit /b
 for %%M in ("!_pg_mf!") do set "_pg_dir=%%~sdpM"
 for %%S in ("!_pg_src!") do set "_pg_in=%%~sfS"
@@ -1399,9 +1415,11 @@ for /f "usebackq tokens=1,* delims==" %%a in ("!_pg_mf!") do (
 		for /f "tokens=1,* delims=|" %%x in ("!_pg_line!") do (
 			if exist "%%y" for %%O in ("%%y") do (
 				set "_pg_attr=%%~aO"
-				if not "!_pg_attr:~0,1!"=="d" if /i "%%~sdpO"=="!_pg_dir!" if /i not "%%~sfO"=="!_pg_in!" if /i "%%~xO"=="!_pg_ext!" (
+				set "_pg_keep="
+				for /f "usebackq delims=" %%N in ("!_pg_newf!") do for %%P in ("%%N") do if /i "%%~sdpP%%~nxP"=="%%~sdpO%%~nxO" set "_pg_keep=1"
+				if not defined _pg_keep if not "!_pg_attr:~0,1!"=="d" if /i "%%~sdpO"=="!_pg_dir!" if /i not "%%~sfO"=="!_pg_in!" if /i "%%~xO"=="!_pg_ext!" (
 					if "%dry_run%"=="yes" (
-						echo [DRY-RUN] выход прошлого прогона был бы удалён: %%~fO& call :log_msg "INFO" "[DRY-RUN] выход прошлого прогона был бы удалён: %%~fO"
+						echo [DRY-RUN] после успешного кодирования был бы удалён выход прошлого прогона: %%~fO& call :log_msg "INFO" "[DRY-RUN] после успешного кодирования был бы удалён выход прошлого прогона: %%~fO"
 					) else (
 						echo [INFO] Удаление выхода прошлого прогона: %%~fO& call :log_msg "INFO" "Удаление выхода прошлого прогона: %%~fO"
 						del "%%~fO"

@@ -924,34 +924,52 @@ function Test-ManifestComplete {
 	return $true
 }
 
-# D2. overwrite_existing = yes: выходы ПРОШЛОГО прогона этого входа удаляются до
-# кодирования. Иначе прогон с меньшим числом частей оставлял старые «(part.k)» на
-# диске — вне нового manifest, вперемешку с новыми. Список берётся из manifest, а не
-# из маски имени: удаляется только то, что этот вход действительно создал. Фильтры:
-# каталог manifest (manifest из перенесённого дерева назначения указывает в старое
-# место), текущее расширение (выход в прежнем формате новым прогоном не пересоздаётся)
-# и сам входной файл (при destination == source прошлый выход бывает текущим входом).
-# dry_run ничего не удаляет, а называет (D7). Паритет с purge_manifest_outputs (.sh).
-# S11: зовётся и при overwrite_existing = no, когда manifest обесценен
-# ($script:ManifestStale) и файл перекодируется.
-function Remove-ManifestOutputs {
-	param([string]$ManifestPath, [string]$Source, [string]$Ext)
-	if (!(Test-Path -LiteralPath $ManifestPath)) { return }
-	try { $lines = [System.IO.File]::ReadAllLines($ManifestPath) } catch { return }
-	$mfDir = [System.IO.Path]::GetDirectoryName((Get-CanonPath $ManifestPath))
-	$canonIn = Get-CanonPath $Source
+# Пути выходов manifest (пустой массив — нет manifest). Список запоминается ДО
+# кодирования: к моменту очистки (Remove-ManifestOutputs) на месте старого manifest
+# уже лежит новый. Паритет с manifest_read_outputs (.sh).
+function Get-ManifestOutputs {
+	param([string]$ManifestPath)
+	$outs = @()
+	if (!(Test-Path -LiteralPath $ManifestPath)) { return ,$outs }
+	try { $lines = [System.IO.File]::ReadAllLines($ManifestPath) } catch { return ,$outs }
 	foreach ($l in ($lines | Where-Object { $_ -like "output=*" })) {
 		$rest = $l.Substring(7)
 		$sep = $rest.IndexOf('|')
-		if ($sep -lt 0) { continue }
-		$p = $rest.Substring($sep + 1)
-		if (!(Test-Path -LiteralPath $p -PathType Leaf)) { continue }
+		if ($sep -ge 0) { $outs += $rest.Substring($sep + 1) }
+	}
+	return ,$outs
+}
+
+# D2. overwrite_existing = yes: выходы ПРОШЛОГО прогона этого входа, которых нет среди
+# выходов нового, удаляются ПОСЛЕ успеха всех частей. Иначе прогон с меньшим числом
+# частей оставлял старые «(part.k)» на диске — вне нового manifest, вперемешку с новыми.
+# Не раньше: удаление до кодирования при провале (ffmpeg, диск, служба, Ctrl+C)
+# оставляло пользователя без единого выхода — ни старого, ни нового. Список берётся из
+# manifest (Get-ManifestOutputs), а не из маски имени: удаляется только то, что этот
+# вход действительно создал. Фильтры: каталог manifest (manifest из перенесённого
+# дерева назначения указывает в старое место), текущее расширение (выход в прежнем
+# формате новым прогоном не пересоздаётся), сам входной файл (при destination == source
+# прошлый выход бывает текущим входом) и выходы нового прогона (их только что
+# опубликовали). dry_run ничего не удаляет, а называет (D7): ожидаемые имена частей
+# известны и холостому прогону. Паритет с purge_manifest_outputs (.sh).
+# S11: и при overwrite_existing = no, когда manifest обесценен ($script:ManifestStale)
+# и файл перекодируется.
+function Remove-ManifestOutputs {
+	param([string[]]$OldOutputs, [string]$ManifestPath, [string]$Source, [string]$Ext, [string[]]$NewOutputs)
+	if (-not $OldOutputs -or $OldOutputs.Count -eq 0) { return }
+	$mfDir = [System.IO.Path]::GetDirectoryName((Get-CanonPath $ManifestPath))
+	$canonIn = Get-CanonPath $Source
+	$newKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+	foreach ($n in $NewOutputs) { if ($n) { [void]$newKeys.Add((Get-CanonPath $n)) } }
+	foreach ($p in $OldOutputs) {
+		if (-not $p -or !(Test-Path -LiteralPath $p -PathType Leaf)) { continue }
 		$canonP = Get-CanonPath $p
 		if ([System.IO.Path]::GetDirectoryName($canonP) -ine $mfDir) { continue }
 		if ($canonP -ieq $canonIn) { continue }
 		if ([System.IO.Path]::GetExtension($canonP) -ine ".$Ext") { continue }
+		if ($newKeys.Contains($canonP)) { continue }
 		if ($dry_run -eq "yes") {
-			Log-Msg "INFO" "[DRY-RUN] выход прошлого прогона был бы удалён: $p"
+			Log-Msg "INFO" "[DRY-RUN] после успешного кодирования был бы удалён выход прошлого прогона: $p"
 		} else {
 			Log-Msg "INFO" "Удаление выхода прошлого прогона: $p"
 			Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
@@ -1199,9 +1217,11 @@ function Encode-File {
 		return
 	}
 
-	# D2. Выходы прошлого прогона — до кодирования и до развилки локальный/удалённый:
-	# оба пути публикуют результат под теми же именами частей.
-	if ($overwrite_existing -eq "yes") { Remove-ManifestOutputs $manifest $full_path $current_format_out }
+	# D2. Выходы прошлого прогона запоминаются здесь, а удаляются после успеха всех
+	# частей (Remove-ManifestOutputs после цикла) — общего для локального и удалённого
+	# путей: оба публикуют результат под теми же именами частей.
+	$oldOutputs = @()
+	if ($overwrite_existing -eq "yes") { $oldOutputs = Get-ManifestOutputs $manifest }
 
 	# E3. Проверка валидности существующего файла
 	# Судим по exit code (как SH/CMD), а не по тексту stderr: ffmpeg с -v error может
@@ -1235,11 +1255,11 @@ function Encode-File {
 		}
 		# S11. overwrite_existing = no, но manifest этого входа обесценен (источник или
 		# настройки сменились) и файл всё-таки перекодируется: хвост прошлого прогона
-		# убирается так же, как при overwrite = yes, — иначе новый [split] length с
-		# меньшим числом частей оставлял старые (part.k) рядом с новыми. Стоит ПОСЛЕ
-		# проверки готового выхода: валидный выход при overwrite = no пропускается, и
-		# его соседей это правило не трогает. Паритет с .sh.
-		if ($script:ManifestStale) { Remove-ManifestOutputs $manifest $full_path $current_format_out }
+		# убирается так же, как при overwrite = yes (после успеха), — иначе новый
+		# [split] length с меньшим числом частей оставлял старые (part.k) рядом с
+		# новыми. Стоит ПОСЛЕ проверки готового выхода: валидный выход при
+		# overwrite = no пропускается, и его соседей это правило не трогает. Паритет с .sh.
+		if ($script:ManifestStale) { $oldOutputs = Get-ManifestOutputs $manifest }
 	}
 
 	# E4 + J1. Один вызов ffmpeg -i для битрейта и длительности (раньше запускались
@@ -1434,6 +1454,9 @@ function Encode-File {
 	# и счётчики молча терялись бы.
 	$script:produced = @()
 	$script:anyFail = $false
+	# Имена выходов всех частей — и при dry_run: по ним очистка D2 после цикла
+	# отличает выход прошлого прогона от только что пересозданного.
+	$plannedOutputs = @()
 
 	# F29. Размер входа засчитываем ОДИН раз на исходный файл. Раньше он прибавлялся
 	# на КАЖДУЮ часть, поэтому при разбиении на N частей вход суммировался N раз —
@@ -1517,6 +1540,7 @@ function Encode-File {
 		if ($copy_codecs -eq "yes") { $vf_args = @(); $af_args = @() }
 
 		$out_file = "$out_base$pref.$current_format_out"
+		$plannedOutputs += $out_file
 		# F11. Прогресс — против эффективной длины сегмента (-t L или dur-b), не полной длительности.
 		$progressDur = if ($current_set_length -match '^-t (\d+)') { [int]$Matches[1] } elseif ($b -gt 0) { $fileDuration - $b } else { $fileDuration }
 		if ($progressDur -le 0) { $progressDur = $fileDuration }
@@ -1819,8 +1843,13 @@ function Encode-File {
 	# Manifest пишем только когда удались ВСЕ части. Именно его отсутствие заставит
 	# следующий запуск доделать файл, вместо того чтобы принять уцелевшую (part.1) за
 	# готовый результат. Частичный успех manifest'а не получает намеренно.
-	if ($dry_run -ne "yes" -and -not $script:anyFail -and $script:produced.Count -gt 0) {
+	if ($dry_run -eq "yes") {
+		if (-not $script:anyFail) { Remove-ManifestOutputs $oldOutputs $manifest $full_path $current_format_out $plannedOutputs }
+	} elseif (-not $script:anyFail -and $script:produced.Count -gt 0) {
 		Write-Manifest $manifest $full_path $file_sig $script:produced
+		# D2/S11. Хвост прошлого прогона — только теперь, когда все части нового на
+		# месте: при провале любой части старые выходы не трогаются вовсе.
+		Remove-ManifestOutputs $oldOutputs $manifest $full_path $current_format_out $plannedOutputs
 		# Файл доделан — возобновлять нечего, и sidecar (upload_id, подпись, задачи
 		# частей) не имеет права переживать успешный прогон: иначе следующий заход по
 		# тому же файлу нашёл бы в нём идентификаторы уже опубликованных задач.

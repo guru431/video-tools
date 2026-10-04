@@ -91,7 +91,11 @@ rm -f "$IN/a.mp4" "$DST/a.m4a"
 # Паритет PS1/CMD (source-scan): удаление под guard'ом dry_run.
 assert_contains "PS1 extract: удаление под guard'ом dry_run" 'if ($dry_run -ne "yes") { Remove-Item -LiteralPath $outAudio' "$PS1_SRC"
 assert_contains "CMD extract: удаление под guard'ом dry_run" 'if "%overwrite_existing%"=="yes" if not "%dry_run%"=="yes" del "!out_audio!"' "$CMD_SRC"
-assert_contains "CMD обычный путь: pre-delete под guard'ом dry_run" 'if "%overwrite_existing%"=="yes" if not "%dry_run%"=="yes" (' "$CMD_SRC"
+# Обычный путь CMD выход перед кодированием не удаляет вовсе (ни при dry_run, ни без):
+# ffmpeg пишет во временное имя, move /y заменяет цель после успеха, а при провале
+# прежний выход остаётся. overwrite=yes лишь открывает ворота кодирования.
+assert_not_contains "CMD обычный путь: выход не удаляется до кодирования" 'del "%folder_destination%!file_path!!file_name! (part.1).!current_format_out!"' "$CMD_SRC"
+assert_contains "CMD обычный путь: overwrite=yes открывает ворота кодирования" 'if "%overwrite_existing%"=="yes" set "_do_encode=1"' "$CMD_SRC"
 
 # ══════════════════════════════════════════════════════════════
 suite "F2: in-place merge отклоняется (результат == вход → потеря источника)"

@@ -934,11 +934,11 @@ else
     d2_ps1 "$W_IN" "$W_DST"
     d2_check "PS1" real "$D2_OUT"
     d2_inplace win
-    # Мок ffmpeg.cmd пишет в последний аргумент и на информационном `-i вход`, так что
-    # содержимое входа здесь не улика: смотрим, что удаление входа не начиналось (лог UTF-8).
+    # Мок ffmpeg.cmd на информационном `-i вход` вход не трогает, поэтому содержимое —
+    # улика; лог (UTF-8) дополнительно показывает, что удаление входа не начиналось.
     rm -f "$WORK/d2_ps1.log"
     d2_ps1 "$W_IP" "$W_IP" "\$start_coding=':+:00-00-10'" "; \$enable_log='yes'; \$log_file='$(cygpath -w "$WORK/d2_ps1.log")'"
-    if [ -f "$D2_IP/ip.mp4" ]; then pass "PS1 in-place: входной файл на месте"; else fail "PS1 in-place: входной файл на месте" "есть ip.mp4" "удалён"; fi
+    assert_eq "PS1 in-place: входной файл, перечисленный в manifest, не удалён и не изменён" "ORIGINAL" "$(cat "$D2_IP/ip.mp4" 2>/dev/null)"
     assert_not_contains "PS1 in-place: вход, перечисленный в manifest, не удалялся" "Удаление выхода прошлого прогона" "$(cat "$WORK/d2_ps1.log" 2>/dev/null)"
     assert_contains "PS1 in-place: лог записан (проверка выше не пустая)" "Кодирование" "$(cat "$WORK/d2_ps1.log" 2>/dev/null)"
     if [ -f "$D2_IP/ip (part.1).mp4" ]; then pass "PS1 in-place: вход перекодирован"; else fail "PS1 in-place: вход перекодирован" "есть ip (part.1).mp4" "нет; вывод: $(printf '%s' "$D2_OUT" | tr '\n' '|')"; fi

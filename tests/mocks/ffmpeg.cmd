@@ -123,6 +123,11 @@ rem Воркер дописывает `-progress <файл>` ПОСЛЕ выхо
 rem после -progress — не выход: пропускаем оба токена, иначе мок писал бы в progress-файл,
 rem а настоящий выход (out_tmp) не создавался бы (тогда rename в воркере не находил цель).
 if /i "%~1"=="-progress" (shift & shift & goto :find_out)
+rem Выход ffmpeg стоит ПОСЛЕ последнего входа, а значение -i — вход, не выход. Без
+rem этого информационный вызов `ffmpeg -i <вход>` (без выходного файла) затирал сам
+rem вход строкой MOCK-FFMPEG-OUTPUT. Сброс OUT на каждом -i — паритет с bash-моком
+rem (там -i в SKIP_OPTS): `-v error -i файл` тоже не делает выходом "error".
+if /i "%~1"=="-i" (set "OUT=" & shift & shift & goto :find_out)
 if /i not "%~1"=="-y" set "OUT=%~1"
 shift
 goto :find_out

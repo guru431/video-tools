@@ -2,7 +2,7 @@
 # Dot-source из ffmpeg/build_exe.ps1 и yt-dlp/build_exe.ps1 — SHA-пин ps2exe и версия
 # определены здесь один раз (иначе при обновлении ps2exe/бампе версии легко забыть один файл).
 
-$script:Ps2ExeSha    = '6AD15CBF4382B7F2F17A19F8723B2263D7202C4982BA9DA8DEF8E221E25F8B5F'  # PS2EXE @ MScholtes/PS2EXE d32d5ce + локальные патчи: экранирование метаданных для C#-литералов (\ " CR LF TAB); экранирование целевого пути -embedFiles в verbatim-литерале @"…" (там кавычка удваивается, а не гасится бэкслешем) и имени ресурса в обычном; STDERR в -conHost на OpenStandardError вместо OpenStandardOutput; удвоение апострофа при сериализации параметров в команду powershell.exe на PowerShell Core
+$script:Ps2ExeSha    = 'D9EBC34E7AE83FDE75DE935175A333745B3D8DDD04900F47DD267036B5527F53'  # PS2EXE @ MScholtes/PS2EXE d32d5ce + локальные патчи: экранирование метаданных для C#-литералов (\ " CR LF TAB); экранирование целевого пути -embedFiles в verbatim-литерале @"…" (там кавычка удваивается, а не гасится бэкслешем) и имени ресурса в обычном; STDERR в -conHost на OpenStandardError вместо OpenStandardOutput; сериализация параметров в команду powershell.exe на PowerShell Core — каждая строка и ключ/значение -embedFiles в одинарных кавычках с удвоением апострофа, двойная кавычка вынесена из литерала конкатенацией [char]34 (в строке команды нет ни одной "), апостроф экранируется и в $PSScriptRoot/имени команды
 $script:Ps2ExeCommit = 'd32d5ce21c458696e860a7533943b1466d925be9'  # закреплённый commit ps2exe (провенанс)
 $script:BuildVersion = '19.0.0.0'
 

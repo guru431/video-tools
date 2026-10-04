@@ -191,6 +191,19 @@ function Invoke-ps2exe
 	if (!$nested -and ($PSVersionTable.PSEdition -eq "Core"))
 	{ # starting Windows Powershell
 		$CallParam = ""
+		# Строка ниже уходит в powershell.exe -Command "...": на PS 7.0-7.2 (Legacy-
+		# передача аргументов) двойная кавычка внутри закрывала внешний литерал, а
+		# 7.3+ экранирует её сам, поэтому ручное \" дало бы лишний обратный слэш.
+		# Не зависит от режима одно: в строке команды вообще нет ". Значение идёт в
+		# одинарных кавычках (апостроф удваивается), а " — вне литерала, конкатенацией
+		# '+[char]34+' в скобках. Кавычим ВСЕГДА: без кавычек $, обратная кавычка и ;
+		# в значении раскрывались бы и исполнялись при повторном разборе.
+		# -EncodedCommand не используем: base64-команда — классический триггер антивируса.
+		$_psq = {
+			param($s)
+			$q = "'" + (([string]$s) -replace "'", "''") + "'"
+			if ($q.Contains([string][char]34)) { '(' + $q.Replace([string][char]34, "'+[char]34+'") + ')' } else { $q }
+		}
 		foreach ($Param in $PSBoundparameters.GetEnumerator())
 		{
 			if ($Param.Value -is [System.Management.Automation.SwitchParameter])
@@ -202,27 +215,20 @@ function Invoke-ps2exe
 			else
 			{	if ($Param.Value -is [STRING])
 				{
-					# Значения уезжают внутрь ОДИНАРНЫХ кавычек в строку, которую
-					# powershell.exe ниже разбирает ЗАНОВО: апостроф (путь вида
-					# C:\Users\O'Brien\…) закрывал литерал и ломал команду — сборка на
-					# Core падала с синтаксической ошибкой либо теряла параметры. В
-					# PowerShell апостроф внутри одинарных кавычек удваивается.
-					# Кавычим ВСЕГДА, когда экранирование понадобилось: без кавычек
-					# удвоение смысла не имеет.
-					$_pv = ([string]$Param.Value) -replace "'", "''"
-					if (($Param.Value -match "[ ']") -or ([STRING]::IsNullOrEmpty($Param.Value)))
-					{	$CallParam += " -$($Param.Key) '$_pv'" }
-					else
-					{	$CallParam += " -$($Param.Key) $($Param.Value)" }
+					# Значения уезжают в строку, которую powershell.exe ниже разбирает
+					# ЗАНОВО: апостроф (путь вида C:\Users\O'Brien\…) закрывал литерал и
+					# ломал команду — сборка на Core падала с синтаксической ошибкой либо
+					# теряла параметры. Литерал строит $_psq (см. выше).
+					$CallParam += " -$($Param.Key) $(& $_psq $Param.Value)"
 				}
 				else
 				{ if ($Param.Value -is [System.Collections.Hashtable])
 					{
+						# Ключ — выражение в скобках: литерал с [char]34 ключом
+						# хэш-таблицы иначе не разбирается.
 						$CallParam += " -$($Param.Key) @{"
 						$Param.Value.Keys | % {
-							$_ek = ([string]$_) -replace "'", "''"
-							$_ev = ([string]$Param.Value[$_]) -replace "'", "''"
-							$CallParam += "'$_ek'='$_ev';"
+							$CallParam += "($(& $_psq $_))=$(& $_psq $Param.Value[$_]);"
 						}
 						$CallParam += "}"
 					} else {
@@ -234,7 +240,10 @@ function Invoke-ps2exe
 
 		$CallParam += " -nested"
 
-		powershell.exe -Command "if ((Get-Command -Name 'Invoke-ps2exe' -ErrorAction 'SilentlyContinue').Length -eq 0) { Import-Module '$PSScriptRoot\ps2exe.psm1' }; &'$($MyInvocation.MyCommand.Name)' $CallParam"
+		# Каталог и имя команды тоже стоят в одинарных кавычках — апостроф удваивается.
+		$_root = $PSScriptRoot -replace "'", "''"
+		$_name = $MyInvocation.MyCommand.Name -replace "'", "''"
+		powershell.exe -Command "if ((Get-Command -Name 'Invoke-ps2exe' -ErrorAction 'SilentlyContinue').Length -eq 0) { Import-Module '$_root\ps2exe.psm1' }; &'$_name' $CallParam"
 		return
 	}
 

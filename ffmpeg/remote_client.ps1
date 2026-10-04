@@ -225,7 +225,9 @@ function Get-RemoteOpForConfig {
 	# и bitrate/channels/rate при copy противоречивы (служба отвечает 400).
 	if ($audio_codec_status -eq '+') {
 		$a = "`"codec`":`"$audio_codec_value`""
-		if ($audio_bitrate_status -eq '+')         { $a += ",`"bitrate`":$audio_bitrate_value" }
+		# audio.bitrate служба принимает в КБИТ/С (целое 8–640, подставляет `-b:a Nk`),
+		# а video.bitrate выше — в бит/с. Асимметрия намеренная: ×1000 здесь не нужен.
+		if ($audio_bitrate_status -eq '+')        { $a += ",`"bitrate`":$audio_bitrate_value" }
 		if ($audio_number_channels_status -eq '+') { $a += ",`"channels`":$audio_number_channels_value" }
 		if ($audio_sampling_rate_status -eq '+')   { $a += ",`"rate`":$audio_sampling_rate_value" }
 		if ($audio_normalize_status -eq '+')       { $a += ",`"normalize`":`"$audio_normalize_value`"" }
@@ -883,10 +885,23 @@ function Invoke-RemoteDryRun {
 # ($remote_wait_timeout = «сколько служба ждёт окна на карте»): часовой 4K-файл
 # отменялся при живом прогрессе, а prefer = cpu на длинном файле — через 90 минут
 # серверной работы. Таймер сбрасывается на каждое изменение state/progress.
+#
+# Исключение — waiting_gpu ($State): прогресс там не растёт по определению, и
+# здоровая задача, честно ждущая карту, отменялась через stall_timeout (900 с), хотя
+# службе разрешено ждать окна wait_timeout (1800 с). Пока задача ждёт карту, порог —
+# wait_timeout (то, что ушло службе) + stall_timeout. waiting_seconds признаком
+# живости НЕ служит: служба пересчитывает его на каждом чтении, и ожидание на
+# клиенте стало бы неограниченным.
 # Паритет с remote_stall_seconds в .sh.
 function Get-RemoteStallSeconds {
+	param([string]$State = '')
 	$s = if ($remote_stall_timeout) { [int]$remote_stall_timeout } else { 900 }
 	if ($s -le 0) { $s = 900 }
+	if ($State -eq 'waiting_gpu') {
+		$w = 1800
+		if ("$remote_wait_timeout" -match '^\d+$') { $w = [int]$remote_wait_timeout }
+		$s += $w
+	}
 	return $s
 }
 
@@ -895,15 +910,20 @@ function Wait-RemoteJob {
 	$script:RemoteCurrentJob = $JobId
 	$lastChange = Get-Date
 	$lastSig = ''
+	$lastState = ''
 	$fails = 0
 	$maxFails = if ($env:REMOTE_POLL_MAX_FAILS) { [int]$env:REMOTE_POLL_MAX_FAILS } else { 5 }
-	$limit = Get-RemoteStallSeconds
+	$limitRun = Get-RemoteStallSeconds
+	$limitGpu = Get-RemoteStallSeconds 'waiting_gpu'
 	while ($true) {
 		if ($OnCancel -and (& $OnCancel)) {
 			Stop-RemoteJob $JobId
 			$script:RemoteCurrentJob = ''
 			return $false
 		}
+		# Порог — по последнему прочитанному состоянию: ожидание карты получает
+		# окно службы сверху (см. Get-RemoteStallSeconds).
+		$limit = if ($lastState -eq 'waiting_gpu') { $limitGpu } else { $limitRun }
 		if (((Get-Date) - $lastChange).TotalSeconds -ge $limit) {
 			Write-Host "[ОШИБКА] Задача $JobId не подаёт признаков движения $limit с — отменяем и считаем файл неудачным."
 			Stop-RemoteJob $JobId
@@ -941,6 +961,7 @@ function Wait-RemoteJob {
 		# обязана жить дальше; зависшая на одном и том же — быть отменённой.
 		$sig = "$($j.state)|$($j.progress)"
 		if ($sig -ne $lastSig) { $lastSig = $sig; $lastChange = Get-Date }
+		$lastState = "$($j.state)"
 		switch ($j.state) {
 			'done'      {
 				# Состояние задачи не содержит ни sha256, ни размера результата —

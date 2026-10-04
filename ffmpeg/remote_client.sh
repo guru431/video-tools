@@ -167,6 +167,8 @@ remote_op_for_config() {
 	local a
 	if [ "$audio_codec_status" = "+" ]; then
 		a="\"codec\":\"${audio_codec_value}\""
+		# audio.bitrate служба принимает в КБИТ/С (целое 8–640, подставляет `-b:a Nk`),
+		# а video.bitrate выше — в бит/с. Асимметрия намеренная: ×1000 здесь не нужен.
 		[ "$audio_bitrate_status" = "+" ]         && a="$a,\"bitrate\":$audio_bitrate_value"
 		[ "$audio_number_channels_status" = "+" ] && a="$a,\"channels\":$audio_number_channels_value"
 		[ "$audio_sampling_rate_status" = "+" ]   && a="$a,\"rate\":$audio_sampling_rate_value"
@@ -254,6 +256,29 @@ remote_curl_auth() {
 	printf 'header = "Authorization: Bearer %s"\n' "$k"
 }
 
+# Временные файлы клиента (curl-конфиг с Bearer-ключом, stderr curl'а) учитываются в
+# реестре _tmp_files из script.sh: без этого Ctrl+C между mktemp и rm оставлял в /tmp
+# файл с ключом. Модуль подключается и сам по себе (test_21 — без script.sh), и тогда
+# реестра нет — учёт молча пропускается.
+# Удаление снимает файл с учёта: опрос задачи создаёт файл stderr на КАЖДЫЙ запрос, и
+# за многочасовую задачу массив вырос бы в тысячи записей, а trap зовёт `rm` на каждую
+# — процесс на запись (в Git Bash 30–250 мс), то есть минуты на выход по Ctrl+C.
+remote_tmp_add() {
+	declare -F _register_tmp >/dev/null && _register_tmp "$1"
+	return 0
+}
+remote_tmp_rm() {
+	local f i
+	rm -f "$@"
+	declare -F _register_tmp >/dev/null || return 0
+	for f in "$@"; do
+		for i in "${!_tmp_files[@]}"; do
+			[ "${_tmp_files[$i]}" = "$f" ] && unset "_tmp_files[$i]"
+		done
+	done
+	return 0
+}
+
 REMOTE_HTTP_CODE=""
 REMOTE_HTTP_BODY=""
 remote_http() {
@@ -276,14 +301,15 @@ remote_http() {
 	# stderr curl'а не выбрасываем, а сохраняем: «HTTP 000» без причины — самая
 	# бесполезная строка, которую может увидеть пользователь.
 	err_file="$(mktemp "${TMPDIR:-/tmp}/ffconv_curl_XXXXXX")"
+	remote_tmp_add "$err_file"
 	out="$(remote_curl_auth | "$curl_bin" --config - "${args[@]}" "${remote_endpoint}${path}" 2>"$err_file")" || {
 		REMOTE_HTTP_CODE="000"
 		local why; why="$(head -3 "$err_file" | tr '\n' ' ')"
 		[ -n "$why" ] && echo "[ПРЕДУПРЕЖДЕНИЕ] curl: $why" >&2
-		rm -f "$err_file"
+		remote_tmp_rm "$err_file"
 		return 1
 	}
-	rm -f "$err_file"
+	remote_tmp_rm "$err_file"
 	REMOTE_HTTP_CODE="${out##*$'\n'}"
 	REMOTE_HTTP_BODY="${out%$'\n'*}"
 	return 0
@@ -1005,6 +1031,7 @@ remote_upload_chunk() {
 		echo "[ОШИБКА] Не удалось создать временный файл для ключа службы." >&2
 		REMOTE_HTTP_CODE="000"; return 1
 	}
+	remote_tmp_add "$cfg"
 	# Права снимаем ДО записи ключа: между mktemp и chmod файл пуст.
 	chmod 600 "$cfg" 2>/dev/null
 	remote_curl_auth > "$cfg"
@@ -1013,10 +1040,11 @@ remote_upload_chunk() {
 	# лишний АРГУМЕНТ `2>/tmp/…`, и curl честно отвечает «URL rejected: Bad
 	# hostname» — на второй URL в команде.
 	err="$(mktemp "${TMPDIR:-/tmp}/ffconv_curlerr_XXXXXX")" || {
-		rm -f "$cfg"
+		remote_tmp_rm "$cfg"
 		echo "[ОШИБКА] Не удалось создать временный файл для вывода curl." >&2
 		REMOTE_HTTP_CODE="000"; return 1
 	}
+	remote_tmp_add "$err"
 	out="$( { tail -c "+$((from + 1))" "$file" 2>/dev/null | head -c "$this"; } | \
 		"$curl_bin" --config "$cfg" -sS -X PATCH \
 		--connect-timeout "${REMOTE_CONNECT_TIMEOUT:-10}" \
@@ -1027,18 +1055,18 @@ remote_upload_chunk() {
 		-w '\n%{http_code} %{size_upload}' \
 		"${remote_endpoint}/uploads/${uid}" 2>"$err")"
 	rc=$?
-	rm -f "$cfg"
+	remote_tmp_rm "$cfg"
 	if [ "$rc" -ne 0 ]; then
 		# Причину печатаем словами curl: «обрыв связи» на неудобочитаемом конфиге
 		# или отказе в правах — диагноз не тот, и искать будут не там.
 		local why=""
 		why="$(tr '\n' ' ' < "$err" 2>/dev/null)"
-		rm -f "$err"
+		remote_tmp_rm "$err"
 		echo "[ОШИБКА] Не удалось отправить кусок ${from}-${to}: ${why:-curl завершился с кодом $rc}" >&2
 		REMOTE_HTTP_CODE="000"
 		return 1
 	fi
-	rm -f "$err"
+	remote_tmp_rm "$err"
 	local last="${out##*$'\n'}"
 	REMOTE_HTTP_CODE="${last%% *}"
 	local sent_bytes="${last##* }"
@@ -1170,9 +1198,20 @@ remote_dry_run() {
 # прогрессе; при prefer = cpu и умолчании 1800 отмена приходила через 90 минут,
 # убивая часы серверной работы. Теперь таймер сбрасывается на каждое изменение
 # state/progress: отменяем то, что действительно стоит, а не то, что долго идёт.
+#
+# Исключение — waiting_gpu (аргумент $1): там прогресс не растёт по определению, и
+# здоровая задача, честно ждущая карту, отменялась через stall_timeout (900 с), хотя
+# службе разрешено ждать окна wait_timeout (1800 с). Пока задача ждёт карту, порог —
+# wait_timeout (то, что ушло службе) + stall_timeout. Признаком живости в ожидании
+# НЕ служит waiting_seconds: служба пересчитывает его на каждом чтении, и подпись с
+# ним менялась бы всегда — ожидание на клиенте стало бы неограниченным.
 remote_stall_seconds() {
-	local s="${remote_stall_timeout:-900}"
+	local s="${remote_stall_timeout:-900}" w="${remote_wait_timeout:-1800}"
 	[ "$s" -gt 0 ] 2>/dev/null || s=900
+	if [ "${1:-}" = "waiting_gpu" ]; then
+		case "$w" in ''|*[!0-9]*) w=1800 ;; esac
+		s=$((s + w))
+	fi
 	printf '%s' "$s"
 }
 
@@ -1184,10 +1223,12 @@ REMOTE_RESULT_SIZE=""
 REMOTE_RESULT_VERIFIED="no"
 remote_wait() {
 	local jid="$1" label="$2" polls=0 answer state
-	local last_change limit sig last_sig="" fails=0 maxfails="${REMOTE_POLL_MAX_FAILS:-5}" now
+	local last_change limit limit_gpu lim sig last_sig="" fails=0 maxfails="${REMOTE_POLL_MAX_FAILS:-5}" now
 	# Время — EPOCHSECONDS (bash 5+, без процесса на каждом опросе); bash 3.2 — date.
 	last_change="${EPOCHSECONDS:-$(date +%s)}"
+	# Оба порога — один раз до цикла: подстановка на каждом опросе стоила бы процесса.
 	limit="$(remote_stall_seconds)"
+	limit_gpu="$(remote_stall_seconds waiting_gpu)"
 	REMOTE_CURRENT_JOB="$jid"
 	while :; do
 		remote_http GET "/jobs/$jid"
@@ -1260,9 +1301,11 @@ remote_wait() {
 			printf "\n"; REMOTE_CURRENT_JOB=""; return 1
 		fi
 		now="${EPOCHSECONDS:-$(date +%s)}"
-		if [ "$(( now - last_change ))" -ge "$limit" ]; then
+		lim="$limit"
+		[ "$state" = "waiting_gpu" ] && lim="$limit_gpu"
+		if [ "$(( now - last_change ))" -ge "$lim" ]; then
 			printf "\n"
-			echo "[ОШИБКА] Задача $jid не подаёт признаков движения $limit с — отменяем и считаем файл неудачным." >&2
+			echo "[ОШИБКА] Задача $jid не подаёт признаков движения $lim с — отменяем и считаем файл неудачным." >&2
 			remote_cancel "$jid"
 			REMOTE_CURRENT_JOB=""; return 1
 		fi
@@ -1281,7 +1324,11 @@ remote_wait() {
 remote_fetch() {
 	local jid="$1" dst="$2" label="${3:-$2}" curl_bin="${CURL_BIN:-curl}" code
 	show_progress_bar 0 "$label" "скачивание"
+	# --connect-timeout — как у остальных запросов: зависший connect держал клиента
+	# до таймаута ОС и мешал отмене из trap'а. --max-time здесь нет намеренно: тело
+	# может быть гигабайтами, и любой общий потолок обрывал бы честное скачивание.
 	code="$(remote_curl_auth | "$curl_bin" --config - -sS -X GET \
+		--connect-timeout "${REMOTE_CONNECT_TIMEOUT:-10}" \
 		-o "$dst" -w '%{http_code}' \
 		"${remote_endpoint}/jobs/${jid}/result" 2>/dev/null)" || {
 		printf "\n"

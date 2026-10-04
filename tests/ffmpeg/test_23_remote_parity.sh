@@ -134,6 +134,12 @@ for entry in "${profiles[@]}"; do
     ps_params="$(printf '%s' "$ps_res" | tail -1)"
     assert_eq "$name ($1/$2): операция" "$sh_op" "$ps_op"
     assert_eq "$name ($1/$2): параметры" "$sh_params" "$ps_params"
+    # Совпадать мало — нужны и верные единицы: video.bitrate в бит/с, а
+    # audio.bitrate в кбит/с (служба принимает 8–640). Асимметрия намеренная.
+    if [ "$key" = "bitrate" ]; then
+      assert_contains "$name ($1/$2): video.bitrate в бит/с"  '"bitrate":3000000,' "$ps_params"
+      assert_contains "$name ($1/$2): audio.bitrate в кбит/с" '"audio":{"codec":"aac","bitrate":128,' "$ps_params"
+    fi
   done
 done
 

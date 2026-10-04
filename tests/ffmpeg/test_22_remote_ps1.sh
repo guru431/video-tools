@@ -62,6 +62,8 @@ assert_contains "кодек"      '"codec":"h264"'          "$params"
 assert_contains "качество"   '"quality":23'            "$params"
 assert_contains "контейнер"  '"container":"mp4"'       "$params"
 assert_contains "звук"       '"audio":{"codec":"aac"'  "$params"
+# audio.bitrate — кбит/с (служба: 8–640), в отличие от video.bitrate в бит/с.
+assert_contains "аудиобитрейт в кбит/с" '"audio":{"codec":"aac","bitrate":128,' "$params"
 
 out="$(run_ps "$_setup; (Get-RemoteOpForConfig 60 300).Op")"
 assert_eq "с отрезком → cut" "cut" "$out"
@@ -289,6 +291,54 @@ assert_eq "предел берётся из stall_timeout" "900" \
   "$(run_ps '$remote_stall_timeout = 900; Get-RemoteStallSeconds')"
 assert_eq "пустой stall_timeout → умолчание 900" "900" \
   "$(run_ps '$remote_stall_timeout = ""; Get-RemoteStallSeconds')"
+rm -f "$_harness"
+
+# Ожидание карты: процент там не растёт по определению, и здоровая задача, честно
+# ждущая окна, отменялась через stall_timeout, хотя службе разрешено ждать
+# wait_timeout. Порог в waiting_gpu — wait_timeout + stall_timeout (здесь 20 + 10).
+# Время ВИРТУАЛЬНОЕ: Get-Date и Start-Sleep подменены функциями (функция побеждает
+# командлет), пауза опроса двигает часы — реального ожидания нет. Три сценария —
+# в одном процессе PowerShell: его запуск дороже самих проверок.
+assert_eq "порог ожидания карты = wait_timeout + stall_timeout" "2700" \
+  "$(run_ps '$remote_stall_timeout = 900; $remote_wait_timeout = 1800; Get-RemoteStallSeconds waiting_gpu')"
+_harness="$(mktemp_suffix "${TMPDIR:-/tmp}/remote_gpu_" .ps1)"
+cat > "$_harness" <<'PSEOF'
+param([string]$Module)
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+. $Module
+function Get-Date { return $script:now }
+function Start-Sleep { param([int]$Seconds) $script:now = $script:now.AddSeconds($Seconds) }
+function Invoke-RemoteHttp {
+	param([string]$Method, [string]$Path, [string]$Body = '', [hashtable]$Headers = @{},
+	      [string]$OutFile = '', [string]$InFile = '', [byte[]]$InBytes = $null, [int]$TimeoutMs = 60000)
+	if ($Method -eq 'DELETE') { $script:deleted = $true; return [pscustomobject]@{ Code = 200; Body = '{}' } }
+	$script:polls++
+	# После $script:maxPolls опросов карта «освобождается» — задача готова.
+	if ($script:maxPolls -gt 0 -and $script:polls -gt $script:maxPolls) {
+		return [pscustomobject]@{ Code = 200; Body = '{"state":"done","progress":100}' }
+	}
+	return [pscustomobject]@{ Code = 200; Body = ('{"state":"' + $script:state + '","progress":0,"waiting_seconds":5,"missing_mib":1}') }
+}
+$remote_stall_timeout = 10; $remote_wait_timeout = 20
+$env:REMOTE_POLL_SECONDS = '11'
+# Опрос раз в 11 с. GPUOK: две проверки после старта — на 11-й и 22-й секунде, дольше
+# stall_timeout, но меньше суммы, затем карта дана. Без «дана» отмена — на 33-й.
+foreach ($case in @(@('GPUOK','waiting_gpu',2), @('GPUSTALL','waiting_gpu',0), @('RUN','running',0))) {
+	$script:now = [datetime]'2026-01-01T00:00:00'
+	$script:polls = 0; $script:deleted = $false
+	$script:state = $case[1]; $script:maxPolls = $case[2]
+	# Write-Host — поток 6; сливаем его с выводом, чтобы прочитать сообщение об отмене
+	# («Задача job-8 не подаёт признаков движения N с»). Шаблон — без кириллицы:
+	# harness без BOM, и PowerShell 5.1 прочёл бы её в ANSI-кодировке.
+	$msg = (Wait-RemoteJob 'job-8' 'f' 6>&1 | Out-String)
+	$m = [regex]::Match($msg, 'job-8\D+(\d+)')
+	Write-Output ("{0}=stalled:{1} deleted:{2} limit:{3}" -f $case[0], $m.Success, $script:deleted, $m.Groups[1].Value)
+}
+PSEOF
+_out="$("$PS_BIN" -NoProfile -NonInteractive -File "$_harness" -Module "$MODULE" 2>&1 | tr -d '\r')"
+assert_contains "ожидание карты дольше stall_timeout не отменяется" "GPUOK=stalled:False deleted:False" "$_out"
+assert_contains "ожидание карты дольше суммы отменяется" "GPUSTALL=stalled:True deleted:True limit:30" "$_out"
+assert_contains "running отменяется по stall_timeout" "RUN=stalled:True deleted:True limit:10" "$_out"
 rm -f "$_harness"
 
 # Серия сбойных опросов: 502 при рестарте службы не должен стоить файла с первой

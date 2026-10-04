@@ -247,6 +247,20 @@ if remote_preflight >/dev/null 2>&1; then pass "плоский список enco
 else fail "плоский список encoders по-прежнему принят" "код 0" "код 1"; fi
 assert_eq "chunk_size с верхнего уровня тоже читается" "2097152" "$REMOTE_CHUNK_SIZE"
 
+# Значение encoders режется по ПЕРВОЙ закрывающей скобке своей формы (`${v%%]*}` —
+# длиннейший хвост от первой `]`), поэтому строки в кавычках из следующих полей
+# (source_formats, witness_fields) в перечень не попадают. Ревью принимало это
+# усечение за мёртвое — закрепляем на форме реального ответа, плотной и с пробелами.
+_caps_tail='"source_formats":["mov,mp4,m4a,3gp,3g2,mj2","matroska,webm"],"witness_fields":["duration_in","audio_out"],"ops":{"transcode":{"sample":{}}}}'
+assert_eq "объект {gpu,cpu}: следующие поля не утекают" '"h264_nvenc" "hevc_nvenc" "libx264" "libx265" ' \
+	"$(remote_caps_encoders '{"args_version":2,"encoders":{"gpu":["h264_nvenc","hevc_nvenc"],"cpu":["libx264","libx265"]},"gpu_path":{"available":true},'"$_caps_tail")"
+assert_eq "объект {gpu,cpu} с пробелами: следующие поля не утекают" '"h264_nvenc" "libx264" ' \
+	"$(remote_caps_encoders '{"args_version": 2, "encoders": {"gpu": ["h264_nvenc"], "cpu": ["libx264"]}, "source_formats": ["mov,mp4", "matroska,webm"], "witness_fields": ["duration_in"]}')"
+assert_eq "плоский список: следующие поля не утекают" '"h264_nvenc" "libx264" ' \
+	"$(remote_caps_encoders '{"args_version":1,"encoders":["h264_nvenc","libx264"],'"$_caps_tail")"
+assert_eq "плоский список с пробелами: следующие поля не утекают" '"h264_nvenc" "libx264" ' \
+	"$(remote_caps_encoders '{"args_version": 1, "encoders": ["h264_nvenc", "libx264"], "source_formats": ["mov,mp4", "matroska,webm"]}')"
+
 MOCK_CURL_ROUTES="$(routes 'GET /v1/capabilities|200|{"args_version":"3"}')"
 remote_endpoint=""
 out="$(remote_preflight 2>&1)"; rc=$?
@@ -517,6 +531,42 @@ out="$( (REMOTE_WAIT_MAX_POLLS=1 REMOTE_POLL_SECONDS=1 remote_wait job-10 "фа�
 assert_not_contains "первый опрос не объявляет застревание" "не подаёт признаков движения" "$out"
 remote_stall_timeout=900
 
+# Ожидание карты: процент там не растёт по определению, и здоровая задача, честно
+# ждущая окна, отменялась через stall_timeout, хотя службе разрешено ждать
+# wait_timeout. Порог в waiting_gpu — wait_timeout + stall_timeout (здесь 20 + 10).
+# Время ВИРТУАЛЬНОЕ: EPOCHSECONDS снят с особых свойств (bash 5; в 3.2 он обычная
+# переменная), а подменённый sleep двигает его на паузу опроса — реального ожидания нет.
+# $1 — состояние задачи, $2 — предел опросов (пусто — без предела).
+_virtual_wait() {
+	(
+		unset EPOCHSECONDS; EPOCHSECONDS=1000000
+		sleep() { EPOCHSECONDS=$((EPOCHSECONDS + $1)); }
+		remote_stall_timeout=10 remote_wait_timeout=20 REMOTE_POLL_SECONDS=11
+		REMOTE_WAIT_MAX_POLLS="$2"
+		MOCK_CURL_ROUTES="$(routes \
+			"GET /v1/jobs/job-13|200|{\"state\":\"$1\",\"progress\":0,\"waiting_seconds\":5}" \
+			'DELETE /v1/jobs/job-13|200|{"ok":true}')"
+		remote_wait job-13 "файл" 2>&1
+	)
+}
+assert_eq "порог ожидания карты = wait_timeout + stall_timeout" "2700" \
+	"$(remote_wait_timeout=1800 remote_stall_seconds waiting_gpu)"
+: > "$MOCK_CURL_LOG"
+# Пауза опроса 11 с (опросов меньше — каждый стоит процесса мока). Три опроса:
+# последняя проверка застревания — на 11-й секунде, то есть дольше stall_timeout,
+# но меньше суммы; без предела отмена приходит на 33-й (первая проверка ≥ 30).
+out="$(_virtual_wait waiting_gpu 3)"
+assert_not_contains "ожидание карты дольше stall_timeout не отменяется" "не подаёт признаков движения" "$out"
+assert_not_contains "задача, ждущая карту, не отменена на сервере" "DELETE" "$(cat "$MOCK_CURL_LOG")"
+: > "$MOCK_CURL_LOG"
+out="$(_virtual_wait waiting_gpu "")"
+assert_contains "ожидание карты дольше суммы отменяется" "движения 30 с" "$out"
+assert_contains "застрявшее ожидание отменено на сервере" "DELETE" "$(cat "$MOCK_CURL_LOG")"
+# Вне ожидания карты порог прежний — stall_timeout.
+: > "$MOCK_CURL_LOG"
+out="$(_virtual_wait running "")"
+assert_contains "running отменяется по stall_timeout" "движения 10 с" "$out"
+
 # Один сбойный опрос не стоит файла: 502 при рестарте службы (или 429, или обрыв)
 # считался фатальным — файл падал, а служба продолжала считать результат, который
 # никто не заберёт. Повторяем, и только после N подряд отменяем задачу.
@@ -541,10 +591,15 @@ assert_not_contains "400 не повторяется" "Опрос задачи �
 suite "remote: скачивание результата"
 _dst="$(mktemp "${TMPDIR:-/tmp}/remote_dl_XXXXXX")"; rm -f "$_dst"
 MOCK_CURL_ROUTES="$(routes 'GET /v1/jobs/job-7/result|200|RESULT-BYTES')"
+: > "$MOCK_CURL_LOG"
 if remote_fetch job-7 "$_dst" >/dev/null; then pass "скачивание успешно"
 else fail "скачивание успешно" "код 0" "код 1"; fi
 assert_file_exists "файл создан" "$_dst"
 assert_eq "содержимое" "RESULT-BYTES" "$(cat "$_dst")"
+# Зависший connect не должен вешать клиента, а общий потолок — рвать гигабайтное тело.
+_argv="$(head -1 "$MOCK_CURL_LOG")"
+assert_contains     "у скачивания есть таймаут соединения" "--connect-timeout" "$_argv"
+assert_not_contains "у скачивания нет общего потолка"      "--max-time"        "$_argv"
 _out="$(remote_fetch job-7 "$_dst" "клип")"
 assert_contains "фаза названа" "скачивание" "$_out"
 rm -f "$_dst"
@@ -696,6 +751,55 @@ _verr="$(remote_validate_config 2>&1 >/dev/null)"
 assert_contains "нечисловые threads отклонены" "threads" "$_verr"
 threads=4
 video_quality_status="$_saved_q"
+
+# ══════════════════════════════════════════════════════════════
+suite "remote: временные файлы с ключом учтены для Ctrl+C"
+# ══════════════════════════════════════════════════════════════
+# curl-конфиг с Bearer-ключом и stderr curl'а не попадали в _tmp_files script.sh:
+# Ctrl+C во время отправки куска оставлял в /tmp файл с ключом. Реестр — НАСТОЯЩИЙ,
+# из production (до этого места модуль жил без него — так его подключает этот
+# тест); curl подменён функцией, которая в момент вызова записывает, что учтено.
+eval "$(sed -n '/^_tmp_files=()/p; /^_register_tmp() {/p' "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.sh")"
+_probe="$(mktemp "${TMPDIR:-/tmp}/remote_probe_XXXXXX")"
+_probe_tail=""
+_curl_probe() {
+	cat > /dev/null
+	local f
+	: > "$_probe"
+	for f in "${_tmp_files[@]}"; do
+		echo "FILE $f" >> "$_probe"
+		case "$f" in
+			*ffconv_auth_*) grep -qF 'Bearer test-key' "$f" && echo "AUTH_WITH_KEY" >> "$_probe" ;;
+			*ffconv_curl*)  echo "ERR" >> "$_probe" ;;
+		esac
+	done
+	printf '{}\n%s' "$_probe_tail"
+}
+_saved_curl="$CURL_BIN"; CURL_BIN=_curl_probe
+_tmp_files=()
+_probe_tail="200"
+remote_http GET /health
+assert_eq "короткий запрос прошёл" "200" "$REMOTE_HTTP_CODE"
+assert_contains "stderr curl учтён на время запроса" "ERR" "$(cat "$_probe")"
+# Опрос задачи идёт тысячи раз: записи обязаны сниматься, иначе trap звал бы rm на каждую.
+assert_eq "после запроса реестр пуст" "0" "${#_tmp_files[@]}"
+
+_up="$(mktemp "${TMPDIR:-/tmp}/remote_tmpup_XXXXXX")"
+printf 'abcdef' > "$_up"
+_probe_tail="200 -"
+remote_upload_chunk up-1 "$_up" 0 5 6; rc=$?
+assert_eq "кусок отправлен" "0" "$rc"
+_p="$(cat "$_probe")"
+assert_contains "конфиг с ключом учтён на время отправки" "AUTH_WITH_KEY" "$_p"
+assert_contains "stderr отправки учтён" "ERR" "$_p"
+assert_eq "после отправки реестр пуст" "0" "${#_tmp_files[@]}"
+_left=""
+while IFS= read -r _l; do
+	case "$_l" in "FILE "*) [ -e "${_l#FILE }" ] && _left="$_left ${_l#FILE }" ;; esac
+done < "$_probe"
+assert_empty "временные файлы удалены" "$_left"
+CURL_BIN="$_saved_curl"
+rm -f "$_probe" "$_up"
 
 rm -f "$MOCK_CURL_LOG" "$_capture"
 summary

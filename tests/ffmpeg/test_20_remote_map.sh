@@ -101,6 +101,10 @@ video_quality_status="-"
 params="$(remote_op_for_config 0 0 | tail -1)"
 assert_contains "битрейт в бит/с"    '"bitrate":3000000'          "$params"
 assert_contains "потолок исходного"  '"bitrate_cap_source":true'  "$params"
+# Единицы разные НАМЕРЕННО: audio.bitrate служба принимает в кбит/с (8–640) и сама
+# подставляет `-b:a Nk`, video.bitrate — в бит/с. Ревью уже принимало асимметрию за дефект.
+assert_contains "аудиобитрейт в кбит/с" '"audio":{"codec":"aac","bitrate":128,' "$params"
+assert_not_contains "аудиобитрейт не умножен на 1000" '"bitrate":128000' "$params"
 # Число, а не строка: у службы допустимые значения — ("off", 1, 2), и "2" в
 # кавычках в этот список не входит. Отказ приходил 400-м после полной загрузки.
 assert_contains "поворот"            '"rotate":2'                 "$params"

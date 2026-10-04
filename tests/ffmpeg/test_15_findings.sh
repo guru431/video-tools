@@ -9,7 +9,8 @@
 #   F5 — dry_run НЕ исполняет спецрежимы (extract/frame/merge), только печатает команды;
 #   F6 — извлечение кадров пишет маркер завершения, провал удаляет каталог (повтор возможен);
 #   F7 — overwrite_existing=yes перекодирует готовый файл, иначе пропускает;
-#   F8 — предпусковая проверка совместимости webm + кодек субтитров meta по контейнеру.
+#   F8 — предпусковая проверка совместимости webm + кодек субтитров meta по контейнеру;
+#   D2 — overwrite_existing=yes убирает выходы прошлого прогона по manifest (SH/PS1/CMD).
 # Использует mock ffmpeg (touch выходов); фейковые входы — реальный ffmpeg не нужен.
 # ============================================================
 
@@ -830,6 +831,176 @@ run_capture 'start_coding=":+:00-00-10"'
 assert_not_contains "корректная метка не отвергается" "ожидается чч-мм-сс" "$OUT_TEXT"
 if log_has "-ss 10"; then pass "корректная метка доезжает до ffmpeg (-ss 10)"; else fail "корректная метка доезжает до ffmpeg" "-ss 10 в логе" "нет"; fi
 rm -f "$IN/hms.mp4" "$DST"/hms*.mp4 "$DST"/.hms*.ffconv
+
+# ══════════════════════════════════════════════════════════════
+suite "D2: overwrite_existing=yes убирает выходы прошлого прогона по manifest"
+# ══════════════════════════════════════════════════════════════
+# Прошлый прогон дал 3 части, новый — один выход. Без очистки старые (part.2)/(part.3)
+# оставались рядом с новым результатом вне нового manifest — смесь двух прогонов.
+# Удаляется только перечисленное в manifest ЭТОГО входа, в каталоге manifest и в
+# текущем формате; сам вход не удаляется никогда; dry_run лишь называет файлы.
+# Три платформы — одни и те же сценарии; manifest пишется в форме путей платформы.
+D2_OTHER="$WORK/d2other"; D2_IP="$WORK/d2inplace"
+mkdir -p "$D2_OTHER"
+W_DST=""; W_OTHER=""; W_IP=""; W_IN=""
+if command -v cygpath >/dev/null 2>&1; then
+    W_DST=$(cygpath -w "$DST"); W_OTHER=$(cygpath -w "$D2_OTHER"); W_IP=$(cygpath -w "$D2_IP"); W_IN=$(cygpath -w "$IN")
+fi
+
+# Сценарий A: вход ov.mp4, в manifest — 3 части mp4 (удаляются), часть в прежнем
+# формате mkv и часть в чужом каталоге (обе остаются). $1 = posix|win.
+d2_setup() {
+    local dd="$DST" od="$D2_OTHER" sep="/" k
+    if [ "$1" = "win" ]; then dd="$W_DST"; od="$W_OTHER"; sep='\'; fi
+    rm -f "$DST"/ov* "$DST/.ov.ffconv" "$D2_OTHER"/ov*
+    : > "$IN/ov.mp4"
+    {
+        echo "# ffconv-manifest v1"; echo "source=x"; echo "source_size=0"; echo "settings=old"
+        for k in 1 2 3; do : > "$DST/ov (part.$k).mp4"; echo "output=0|$dd${sep}ov (part.$k).mp4"; done
+        : > "$DST/ov (part.2).mkv"; echo "output=0|$dd${sep}ov (part.2).mkv"
+        : > "$D2_OTHER/ov (part.3).mp4"; echo "output=0|$od${sep}ov (part.3).mp4"
+        echo "state=complete"
+    } > "$DST/.ov.ffconv"
+}
+# Проверки сценария A. $1 = платформа, $2 = dry|real, $3 = вывод прогона.
+d2_check() {
+    local p="$1" k left=""
+    for k in 1 2 3; do [ -f "$DST/ov (part.$k).mp4" ] && left="$left part.$k"; done
+    if [ "$2" = "dry" ]; then
+        assert_eq "$p dry_run: части прошлого прогона на месте" " part.1 part.2 part.3" "$left"
+        # Сверка по ASCII-части строки: консоль PowerShell 5.1 печатает кириллицу в OEM-кодировке.
+        assert_contains "$p dry_run: названа (part.2)" "ov (part.2).mp4" "$3"
+        assert_contains "$p dry_run: названа (part.3)" "ov (part.3).mp4" "$3"
+        assert_not_contains "$p dry_run: выход в прежнем формате не назван" "ov (part.2).mkv" "$3"
+    else
+        assert_eq "$p: части прошлого прогона удалены" "" "$left"
+        if [ -f "$DST/ov.mp4" ]; then pass "$p: новый выход создан"; else fail "$p: новый выход создан" "есть ov.mp4" "нет; вывод: $(printf '%s' "$3" | tr '\n' '|')"; fi
+        assert_eq "$p: новый manifest перечисляет один выход" "1" "$(grep -c '^output=' "$DST/.ov.ffconv" 2>/dev/null)"
+    fi
+    if [ -f "$DST/ov (part.2).mkv" ]; then pass "$p $2: выход в прежнем формате не тронут"; else fail "$p $2: выход в прежнем формате не тронут" "есть ov (part.2).mkv" "удалён"; fi
+    if [ -f "$D2_OTHER/ov (part.3).mp4" ]; then pass "$p $2: файл вне каталога manifest не тронут"; else fail "$p $2: файл вне каталога manifest не тронут" "есть" "удалён"; fi
+}
+# Сценарий B: destination == source, [split] start → выход «ip (part.1).mp4» проходит
+# F12, а manifest (от прошлого ip.avi → ip.mp4) перечисляет ip.mp4 — текущий ВХОД.
+d2_inplace() {
+    local d="$D2_IP/ip.mp4"
+    [ "$1" = "win" ] && d="$W_IP\\ip.mp4"
+    rm -rf "$D2_IP"; mkdir -p "$D2_IP"; printf 'ORIGINAL' > "$D2_IP/ip.mp4"
+    printf '%s\n' "# ffconv-manifest v1" "source=x" "source_size=0" "settings=old" "output=8|$d" "state=complete" > "$D2_IP/.ip.ffconv"
+}
+
+# --- SH ---
+d2_setup posix
+run_capture 'overwrite_existing="yes"' 'dry_run="yes"'
+d2_check "SH" dry "$OUT_TEXT"
+run_capture 'overwrite_existing="yes"'
+d2_check "SH" real "$OUT_TEXT"
+d2_inplace posix
+run_capture 'folder_sources="$D2_IP"' 'folder_destination="$D2_IP"' 'start_coding=":+:00-00-10"' 'overwrite_existing="yes"' 'format_files_in="mp4"'
+assert_eq "SH in-place: входной файл, перечисленный в manifest, не удалён" "ORIGINAL" "$(cat "$D2_IP/ip.mp4" 2>/dev/null)"
+if log_has "-c:v libx264"; then pass "SH in-place: вход перекодирован"; else fail "SH in-place: вход перекодирован" "ffmpeg вызван" "нет"; fi
+
+# --- PS1 (настоящий воркер, мок ffmpeg.cmd) ---
+d2_ps1() {   # $1 = source, $2 = destination (Windows-пути), дальше — PS-присваивания
+    local src="$1" dst="$2"; shift 2
+    D2_OUT=$(MOCK_FFMPEG_ENCODERS="" MOCK_FFMPEG_LOG="$(cygpath -w "$WORK/mock_d2.log")" \
+    "$_ps_bin" -NoProfile -NonInteractive -Command "
+\$ErrorActionPreference='Continue'
+\$folder_sources='$src'; \$folder_destination='$dst'
+\$ffmpeg='$(cygpath -w "$MOCKS_DIR/ffmpeg.cmd")'; \$ffprobe=\$ffmpeg
+\$audio_codec=':+:aac'; \$audio_number_channels=':-:2'; \$audio_bitrate=':-:128'
+\$audio_sampling_rate=':-:44100'; \$audio_normalize=':-:loudnorm'
+\$video_codec=':+:libx264'; \$video_resolution=':-:1280x720'; \$video_bitrate=':-:2000'
+\$video_number_frames=':-:25'; \$video_rotation=':-:2'; \$video_subtitles=':-:burn'
+\$video_quality=':+:23'; \$keep_aspect_ratio=':+:yes'; \$output_container=':+:mp4'
+\$multithreads=':-:4'; \$parallel_files=':-:2'
+\$hw_accel=':-:nvidia'; \$gpu_preset=':-:p5'; \$gpu_tune=':-:hq'; \$gpu_rc=':-:vbr'
+\$playback_speed=':-:1.0'; \$start_coding=':-:01-00-00'; \$length_coding=':-:00-05-00'
+\$split_by_silence='no'; \$silence_duration='2.0'; \$silence_threshold='-30dB'
+\$save_old_extension='no'; \$format_files_in='mp4'
+\$subtitles_style=''; \$dry_run='no'; \$enable_log='no'; \$log_file=''
+\$audio_only='no'; \$merge_files='no'; \$create_frame='no'
+\$copy_codecs='no'; \$extract_audio_copy='no'; \$overwrite_existing='yes'
+$*
+. '$(cygpath -w "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1")'
+" 2>&1 < /dev/null)
+}
+if [ -z "$_ps_ok" ] || [ -z "$_ps_bin" ]; then
+    skip "PS1: D2 — очистка по manifest" "нужен Windows PowerShell (мок ffmpeg — .cmd)"
+else
+    d2_setup win
+    d2_ps1 "$W_IN" "$W_DST" "\$dry_run='yes'"
+    d2_check "PS1" dry "$D2_OUT"
+    d2_ps1 "$W_IN" "$W_DST"
+    d2_check "PS1" real "$D2_OUT"
+    d2_inplace win
+    # Мок ffmpeg.cmd пишет в последний аргумент и на информационном `-i вход`, так что
+    # содержимое входа здесь не улика: смотрим, что удаление входа не начиналось (лог UTF-8).
+    rm -f "$WORK/d2_ps1.log"
+    d2_ps1 "$W_IP" "$W_IP" "\$start_coding=':+:00-00-10'" "; \$enable_log='yes'; \$log_file='$(cygpath -w "$WORK/d2_ps1.log")'"
+    if [ -f "$D2_IP/ip.mp4" ]; then pass "PS1 in-place: входной файл на месте"; else fail "PS1 in-place: входной файл на месте" "есть ip.mp4" "удалён"; fi
+    assert_not_contains "PS1 in-place: вход, перечисленный в manifest, не удалялся" "Удаление выхода прошлого прогона" "$(cat "$WORK/d2_ps1.log" 2>/dev/null)"
+    assert_contains "PS1 in-place: лог записан (проверка выше не пустая)" "Кодирование" "$(cat "$WORK/d2_ps1.log" 2>/dev/null)"
+    if [ -f "$D2_IP/ip (part.1).mp4" ]; then pass "PS1 in-place: вход перекодирован"; else fail "PS1 in-place: вход перекодирован" "есть ip (part.1).mp4" "нет; вывод: $(printf '%s' "$D2_OUT" | tr '\n' '|')"; fi
+fi
+
+# --- CMD (настоящий script.cmd, мок ffmpeg.exe) ---
+# Мок обязан быть exe: script.cmd зовёт "%ffmpeg%" без call, а батник без call
+# обрывает вызывающий скрипт. Выход создаётся, когда последний аргумент — -y.
+if ! cmd //c "exit 0" >/dev/null 2>&1 || [ -z "$_ps_bin" ]; then
+    skip "CMD: D2 — очистка по manifest" "нужны cmd.exe и PowerShell (сборка мока)"
+else
+    D2_BIN="$WORK/d2bin"; mkdir -p "$D2_BIN"
+    cat > "$D2_BIN/mock.cs" << 'CSEOF'
+public class M {
+    public static int Main(string[] a) {
+        System.Console.Error.WriteLine("  Duration: 00:00:10.00, start: 0.000000, bitrate: 1000 kb/s");
+        string log = System.Environment.GetEnvironmentVariable("MOCK_FFMPEG_LOG");
+        if (log != null) System.IO.File.AppendAllText(log, string.Join(" ", a) + System.Environment.NewLine);
+        if (a.Length > 1 && a[a.Length - 1] == "-y") System.IO.File.WriteAllText(a[a.Length - 2], "MOCK");
+        return 0;
+    }
+}
+CSEOF
+    "$_ps_bin" -NoProfile -Command "Add-Type -TypeDefinition (Get-Content -Raw -LiteralPath '$(cygpath -w "$D2_BIN/mock.cs")') -OutputAssembly '$(cygpath -w "$D2_BIN/ffmpeg.exe")' -OutputType ConsoleApplication" >/dev/null 2>&1
+    if [ ! -f "$D2_BIN/ffmpeg.exe" ]; then
+        skip "CMD: D2 — очистка по manifest" "не удалось собрать мок ffmpeg.exe (Add-Type)"
+    else
+        d2_cmd() {   # $1 = source, $2 = destination (Windows-пути), $3 = доп. set-строки
+            local w="$WORK/d2_run.cmd" v
+            {
+                echo "@echo off"; echo "chcp 65001 >nul 2>&1"
+                echo "set \"ffmpeg=$(cygpath -w "$D2_BIN/ffmpeg.exe")\""
+                echo "set \"folder_sources=$1\""; echo "set \"folder_destination=$2\""
+                for v in audio_only=no merge_files=no create_frame=no copy_codecs=no extract_audio_copy=no \
+                    overwrite_existing=yes audio_codec=:+:aac audio_number_channels=:-:2 audio_bitrate=:-:128 \
+                    audio_sampling_rate=:-:48000 audio_normalize=:-:loudnorm video_codec=:+:libx264 \
+                    video_resolution=:-:1280x720 video_bitrate=:-:3000 video_number_frames=:-:30 \
+                    video_rotation=:-:2 video_subtitles=:-:burn video_quality=:+:23 keep_aspect_ratio=:+:yes \
+                    output_container=:+:mp4 multithreads=:-:4 parallel_files=:-:2 hw_accel=:-:intel \
+                    gpu_preset=:-:p5 gpu_tune=:-:hq gpu_rc=:-:vbr playback_speed=:-:1.0 \
+                    start_coding=:-:01-00-00 length_coding=:-:00-05-00 split_by_silence=no \
+                    silence_duration=2.0 silence_threshold=-30dB save_old_extension=no format_files_in=mp4 \
+                    subtitles_style= dry_run=no enable_log=no log_file=; do
+                    echo "set \"$v\""
+                done
+                printf '%s\n' "$3"
+                echo "call \"$(cygpath -w "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.cmd")\""
+            } | sed 's/$/\r/' > "$w"
+            D2_OUT=$(cmd //c "$(cygpath -w "$w")" < /dev/null 2>&1)
+        }
+        d2_setup win
+        d2_cmd "$W_IN" "$W_DST" 'set "dry_run=yes"'
+        d2_check "CMD" dry "$D2_OUT"
+        d2_cmd "$W_IN" "$W_DST" ''
+        d2_check "CMD" real "$D2_OUT"
+        d2_inplace win
+        d2_cmd "$W_IP" "$W_IP" 'set "start_coding=:+:00-00-10"'
+        assert_eq "CMD in-place: входной файл, перечисленный в manifest, не удалён" "ORIGINAL" "$(cat "$D2_IP/ip.mp4" 2>/dev/null)"
+        if [ -f "$D2_IP/ip (part.1).mp4" ]; then pass "CMD in-place: вход перекодирован"; else fail "CMD in-place: вход перекодирован" "есть ip (part.1).mp4" "нет; вывод: $(printf '%s' "$D2_OUT" | tr '\n' '|')"; fi
+    fi
+fi
+rm -rf "$D2_IP" "$D2_OTHER" "$IN/ov.mp4" "$DST"/ov* "$DST/.ov.ffconv"
 
 # ── Cleanup ───────────────────────────────────────────────────
 rm -rf "$WORK"

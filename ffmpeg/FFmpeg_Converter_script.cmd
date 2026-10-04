@@ -748,12 +748,18 @@ rem а goto из тела for обрывал бы перечисление фа�
 			)
 		)
 
+		rem D2. Выходы прошлого прогона — по manifest этого входа (:purge_manifest_outputs).
+		rem Без manifest остаётся прежнее правило ниже: имя без суффикса и (part.1).
+		if "%overwrite_existing%"=="yes" call :purge_manifest_outputs "%folder_destination%!file_path!.!file_name!.ffconv" "!full_path!" "!current_format_out!"
+
 		rem F7. overwrite_existing=yes → удаляем готовое, чтобы перекодировать заново
 		rem (ffmpeg -y перезапишет; иначе валидный файл считается готовым и пропускается).
 		rem D7. Удаление — мутация; при dry_run её делать нельзя, иначе режим, обещающий лишь
 		rem показать команду, реально уничтожает существующий выход.
 		if "%overwrite_existing%"=="yes" if not "%dry_run%"=="yes" (
-			if exist "%folder_destination%!file_path!!file_name!.!current_format_out!" del "%folder_destination%!file_path!!file_name!.!current_format_out!"
+			rem D2. При destination == source и [split] start имя без суффикса бывает самим
+			rem входом: F12 сверяет только имя с известным суффиксом части. Вход не удаляем.
+			for %%I in ("%folder_destination%!file_path!!file_name!.!current_format_out!") do if exist "%%~fI" for %%S in ("!full_path!") do if /i not "%%~sfI"=="%%~sfS" del "%%~fI"
 			if exist "%folder_destination%!file_path!!file_name! (part.1).!current_format_out!" del "%folder_destination%!file_path!!file_name! (part.1).!current_format_out!"
 		)
 
@@ -1296,6 +1302,43 @@ for /f "usebackq tokens=1,* delims==" %%a in ("!_mfp!") do (
 	)
 )
 set "_mf_complete=1"
+exit /b
+
+rem --- D2. Выходы прошлого прогона при overwrite_existing=yes ---
+rem Иначе прогон с меньшим числом частей оставлял старые "(part.k)" на диске - вне
+rem нового manifest, вперемешку с новыми. Список берётся из manifest, а не из маски
+rem имени: удаляется только то, что этот вход действительно создал. Фильтры: каталог
+rem manifest (manifest из перенесённого дерева назначения указывает в старое место),
+rem текущее расширение (выход в прежнем формате новым прогоном не пересоздаётся) и сам
+rem входной файл (при destination == source прошлый выход бывает текущим входом).
+rem Сравнение - по короткой форме %%~s: она одна у длинного и 8.3-написания пути.
+rem dry_run ничего не удаляет, а называет (D7). Паритет с .sh/.ps1.
+rem Аргументы: %1 = путь manifest, %2 = путь источника, %3 = расширение выхода.
+:purge_manifest_outputs
+set "_pg_mf=%~1"
+set "_pg_src=%~2"
+set "_pg_ext=.%~3"
+if not exist "!_pg_mf!" exit /b
+for %%M in ("!_pg_mf!") do set "_pg_dir=%%~sdpM"
+for %%S in ("!_pg_src!") do set "_pg_in=%%~sfS"
+for /f "usebackq tokens=1,* delims==" %%a in ("!_pg_mf!") do (
+	if "%%a"=="output" (
+		set "_pg_line=%%b"
+		for /f "tokens=1,* delims=|" %%x in ("!_pg_line!") do (
+			if exist "%%y" for %%O in ("%%y") do (
+				set "_pg_attr=%%~aO"
+				if not "!_pg_attr:~0,1!"=="d" if /i "%%~sdpO"=="!_pg_dir!" if /i not "%%~sfO"=="!_pg_in!" if /i "%%~xO"=="!_pg_ext!" (
+					if "%dry_run%"=="yes" (
+						echo [DRY-RUN] выход прошлого прогона был бы удалён: %%~fO& call :log_msg "INFO" "[DRY-RUN] выход прошлого прогона был бы удалён: %%~fO"
+					) else (
+						echo [INFO] Удаление выхода прошлого прогона: %%~fO& call :log_msg "INFO" "Удаление выхода прошлого прогона: %%~fO"
+						del "%%~fO"
+					)
+				)
+			)
+		)
+	)
+)
 exit /b
 
 rem --- Предупреждение об именах с '!' (см. вызов выше). Весь блок под ---

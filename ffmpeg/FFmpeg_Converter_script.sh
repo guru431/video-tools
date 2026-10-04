@@ -877,6 +877,39 @@ manifest_is_complete() {
 	return 0
 }
 
+# D2. overwrite_existing = yes: выходы ПРОШЛОГО прогона этого входа удаляются до
+# кодирования. Иначе прогон с меньшим числом частей оставлял старые «(part.k)» на
+# диске — вне нового manifest, вперемешку с новыми. Список берётся из manifest, а не
+# из маски имени: удаляется только то, что этот вход действительно создал. Фильтры:
+# каталог manifest (manifest из перенесённого дерева назначения указывает в старое
+# место), текущее расширение (выход в прежнем формате новым прогоном не пересоздаётся)
+# и сам входной файл (при destination == source прошлый выход бывает текущим входом).
+# dry_run ничего не удаляет, а называет (D7). Аргументы: manifest, источник, расширение.
+purge_manifest_outputs() {
+	local mf="$1" src="$2" ext="$3"
+	[ -f "$mf" ] || return 0
+	local line path mf_dir in_key ext_key
+	canon_path "$mf"; collision_key "${CANON_PATH%/*}"; mf_dir="$COLLISION_KEY"
+	canon_path "$src"; collision_key "$CANON_PATH"; in_key="$COLLISION_KEY"
+	collision_key ".$ext"; ext_key="$COLLISION_KEY"
+	while IFS= read -r line || [ -n "$line" ]; do
+		case "$line" in output=*) ;; *) continue ;; esac
+		path="${line#output=}"; path="${path#*|}"
+		[ -f "$path" ] || continue
+		canon_path "$path"; collision_key "$CANON_PATH"
+		[ "${COLLISION_KEY%/*}" = "$mf_dir" ] || continue
+		[ "$COLLISION_KEY" = "$in_key" ] && continue
+		case "$COLLISION_KEY" in *"$ext_key") ;; *) continue ;; esac
+		if [ "$dry_run" = "yes" ]; then
+			log_msg "INFO" "[DRY-RUN] выход прошлого прогона был бы удалён: $path"
+		else
+			log_msg "INFO" "Удаление выхода прошлого прогона: $path"
+			rm -f -- "$path"
+		fi
+	done < "$mf"
+	return 0
+}
+
 human_size() {
 	local bytes=$1
 	if [ "$bytes" -ge $((1024*1024*1024)) ] 2>/dev/null; then
@@ -1224,6 +1257,12 @@ encode_file() {
 		log_msg "FAIL" "${full_path##*/}: конфликт выходов — файл пропущен"
 		put_result "fail"
 		return
+	fi
+
+	# D2. Выходы прошлого прогона — до кодирования и до развилки локальный/удалённый:
+	# оба пути публикуют результат под теми же именами частей.
+	if [ "$overwrite_existing" = "yes" ]; then
+		purge_manifest_outputs "$manifest" "$full_path" "$current_format_out"
 	fi
 
 	# F7. overwrite_existing=yes → готовый файл не считаем финальным и перекодируем с

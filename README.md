@@ -274,7 +274,7 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 | `test_12_cmd_run_parser` | CMD: парсер run-конфига |
 | `test_13_parser_parity` | Кросс-парсерный паритет SH/PS1 read_config |
 | `test_14_audio_only_codec` | audio_only: контейнер/кодек из `[audio] codec` |
-| `test_15_findings` | Фиксы аудита: dry-run спецрежимов, маркер кадров, overwrite, коллизии |
+| `test_15_findings` | Фиксы аудита: dry-run спецрежимов, маркер кадров, overwrite (и очистка прошлых частей по manifest), коллизии |
 | `test_16_gui_state` | GUI: воркер сообщает честный исход батча (success/failed/cancelled) |
 | `test_17_literal_paths` | PS1: пути с `[ ]` в именах (литеральные, без wildcard-глоббинга) |
 | `test_18_findings_audit` | Фиксы аудита: dry-run+overwrite не удаляет выход, merge in-place отклоняется, проверка финального rename, silence-настройки в signature |

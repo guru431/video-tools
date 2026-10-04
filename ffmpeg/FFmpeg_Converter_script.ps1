@@ -856,6 +856,39 @@ function Test-ManifestComplete {
 	return $true
 }
 
+# D2. overwrite_existing = yes: выходы ПРОШЛОГО прогона этого входа удаляются до
+# кодирования. Иначе прогон с меньшим числом частей оставлял старые «(part.k)» на
+# диске — вне нового manifest, вперемешку с новыми. Список берётся из manifest, а не
+# из маски имени: удаляется только то, что этот вход действительно создал. Фильтры:
+# каталог manifest (manifest из перенесённого дерева назначения указывает в старое
+# место), текущее расширение (выход в прежнем формате новым прогоном не пересоздаётся)
+# и сам входной файл (при destination == source прошлый выход бывает текущим входом).
+# dry_run ничего не удаляет, а называет (D7). Паритет с purge_manifest_outputs (.sh).
+function Remove-ManifestOutputs {
+	param([string]$ManifestPath, [string]$Source, [string]$Ext)
+	if (!(Test-Path -LiteralPath $ManifestPath)) { return }
+	try { $lines = [System.IO.File]::ReadAllLines($ManifestPath) } catch { return }
+	$mfDir = [System.IO.Path]::GetDirectoryName((Get-CanonPath $ManifestPath))
+	$canonIn = Get-CanonPath $Source
+	foreach ($l in ($lines | Where-Object { $_ -like "output=*" })) {
+		$rest = $l.Substring(7)
+		$sep = $rest.IndexOf('|')
+		if ($sep -lt 0) { continue }
+		$p = $rest.Substring($sep + 1)
+		if (!(Test-Path -LiteralPath $p -PathType Leaf)) { continue }
+		$canonP = Get-CanonPath $p
+		if ([System.IO.Path]::GetDirectoryName($canonP) -ine $mfDir) { continue }
+		if ($canonP -ieq $canonIn) { continue }
+		if ([System.IO.Path]::GetExtension($canonP) -ine ".$Ext") { continue }
+		if ($dry_run -eq "yes") {
+			Log-Msg "INFO" "[DRY-RUN] выход прошлого прогона был бы удалён: $p"
+		} else {
+			Log-Msg "INFO" "Удаление выхода прошлого прогона: $p"
+			Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
+		}
+	}
+}
+
 # --- D8. Логирование ---
 function Log-Msg {
 	param([string]$Level, [string]$Msg)
@@ -1095,6 +1128,10 @@ function Encode-File {
 		Write-GUIProgress -CurrentFile $file.Name
 		return
 	}
+
+	# D2. Выходы прошлого прогона — до кодирования и до развилки локальный/удалённый:
+	# оба пути публикуют результат под теми же именами частей.
+	if ($overwrite_existing -eq "yes") { Remove-ManifestOutputs $manifest $full_path $current_format_out }
 
 	# E3. Проверка валидности существующего файла
 	# Судим по exit code (как SH/CMD), а не по тексту stderr: ffmpeg с -v error может

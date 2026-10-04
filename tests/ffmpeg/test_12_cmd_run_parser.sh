@@ -224,6 +224,23 @@ bang_run=$(cmd //c "$WIN_BANG\\FFmpeg_Converter_run_v19.cmd" < /dev/null 2>&1 | 
 assert_contains "ffmpeg.exe рядом со скриптом найден" "STUB ffmpeg=$WIN_BANG\\ffmpeg.exe" "$bang_run"
 assert_contains "script.cmd рядом со скриптом вызван" "STUB dst=$WIN_BANG\\outdir" "$bang_run"
 
+# ══════════════════════════════════════════════════════════════
+suite "CMD: script.cmd не найден — причина, пауза, код 1"
+# ══════════════════════════════════════════════════════════════
+# Как у ранних отказов script.cmd: голый pause (при stdin из nul он возвращается
+# сразу — здесь это и проверяется: прогон не зависает).
+LONE_DIR="$TMP_DIR/lone"
+mkdir -p "$LONE_DIR"
+cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v19.cmd" "$LONE_DIR/"
+cmd //c "$(cygpath -w "$LONE_DIR")\\FFmpeg_Converter_run_v19.cmd" < /dev/null > "$TMP_DIR/lone.out" 2>&1
+lone_rc=$?
+lone_out=$(tr -d '\r' < "$TMP_DIR/lone.out")
+assert_eq       "script.cmd не найден — код 1"   "1"                                   "$lone_rc"
+assert_contains "script.cmd не найден — причина" "не найден FFmpeg_Converter_script.cmd" "$lone_out"
+# Текст приглашения pause зависит от языка Windows — паузу ищем в исходнике.
+lone_src=$(grep -A4 'не найден FFmpeg_Converter_script.cmd' "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v19.cmd" | tr -d '\r')
+assert_contains "script.cmd не найден — пауза перед выходом" $'\tpause\n\texit /b 1' "$lone_src"
+
 rm -rf "$TMP_DIR"
 
 summary

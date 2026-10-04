@@ -181,6 +181,21 @@ assert_contains "nocasematch для регистра ключей"  "shopt -s no
 assert_contains "backslash → slash в путях"  '${folder_sources//\\//}'  "$src_run"
 assert_contains "Windows-диск как абсолютный путь"  '/*|[A-Za-z]:*)'  "$src_run"
 
+# ══════════════════════════════════════════════════════════════
+suite "run_v19.sh: воркер не найден — причина, код 1, пауза только при tty"
+# ══════════════════════════════════════════════════════════════
+# Как у ранних отказов воркера: окно, запущенное из файлового менеджера, иначе
+# закрывалось, не показав причину. Неинтерактивный stdin не ждёт (здесь </dev/null).
+_lone=$(mktemp -d "${TMPDIR:-/tmp}/ffconv_lone_XXXXXX")
+cp "$RUN_SH" "$_lone/"
+_lone_out=$(bash "$_lone/FFmpeg_Converter_run_v19.sh" 2>&1 < /dev/null); _lone_rc=$?
+rm -rf "$_lone"
+assert_eq       "воркер не найден — код 1"          "1"                                   "$_lone_rc"
+assert_contains "воркер не найден — причина"        "не найден FFmpeg_Converter_script.sh" "$_lone_out"
+assert_not_contains "без tty — приглашения к Enter нет" "Нажмите [Enter]"                  "$_lone_out"
+assert_contains "пауза — только при интерактивном stdin" \
+    'if [ -t 0 ]; then read -r -p "Нажмите [Enter], чтобы выйти..." _; fi' "$src_run"
+
 # ── Cleanup ───────────────────────────────────────────────────
 rm -f "$MY_DIR/config.ini"
 

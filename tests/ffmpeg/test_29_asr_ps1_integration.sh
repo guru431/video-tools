@@ -253,6 +253,19 @@ _rc=$?
 assert_eq "источник не найден — код 1" "1" "$_rc"
 assert_contains "причина напечатана" "Папка источника не найдена" "$(tr -d '\r' < "$WORK/cli.raw")"
 
+# Воркера рядом нет: причина, код 1 и пауза только при интерактивном stdin (как у
+# ранних отказов воркера; Pause-Prompt живёт в ненайденном файле). Без -NonInteractive:
+# Read-Host не бросает, и без проверки IsInputRedirected он ждал бы stdin.
+mkdir -p "$WORK/lone"
+cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v19.ps1" "$WORK/lone/"
+"$PS_BIN" -NoProfile -ExecutionPolicy Bypass -File "$(_w "$WORK/lone/FFmpeg_Converter_run_v19.ps1")" > "$WORK/lone.raw" 2>&1 < /dev/null
+_rc=$?
+assert_eq "воркер не найден — код 1" "1" "$_rc"
+assert_contains "воркер не найден — причина" "FFmpeg_Converter_script.ps1" "$(tr -d '\r' < "$WORK/lone.raw")"
+assert_contains "пауза — только при интерактивном stdin" \
+    'try { if (-not [Console]::IsInputRedirected) { Read-Host "Нажмите [Enter], чтобы выйти..." | Out-Null } } catch {}' \
+    "$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v19.ps1")"
+
 rm -f "$HARNESS"
 rm -rf "$WORK"
 summary

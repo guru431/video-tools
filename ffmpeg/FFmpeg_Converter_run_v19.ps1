@@ -209,6 +209,10 @@ if ($env:FFCONV_TEST -ne '1') {
 	# иначе трактуется как wildcard — «не найден» при существующем файле.
 	if (-not (Test-Path -LiteralPath $scriptPath)) {
 		Write-Error "Ошибка: не найден FFmpeg_Converter_script.ps1 рядом с этим файлом."
+		# Пауза — как у ранних отказов воркера (Pause-Prompt): запущенное двойным
+		# щелчком окно иначе закрывалось, не показав причину. Только при интерактивном
+		# stdin: cron/планировщик ждали бы Enter. Pause-Prompt живёт в ненайденном воркере.
+		try { if (-not [Console]::IsInputRedirected) { Read-Host "Нажмите [Enter], чтобы выйти..." | Out-Null } } catch {}
 		exit 1
 	}
 	# `exit N` дот-сорснутого воркера завершает только его: управление возвращается

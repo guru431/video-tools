@@ -326,6 +326,9 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 	done
 	if [ ! -f "${SCRIPT_DIR}/FFmpeg_Converter_script.sh" ]; then
 		echo "Ошибка: не найден FFmpeg_Converter_script.sh рядом с этим файлом." >&2
+		# Пауза — как у ранних отказов воркера (pause_prompt живёт в ненайденном
+		# воркере): только при интерактивном stdin, cron ждал бы Enter до EOF.
+		if [ -t 0 ]; then read -r -p "Нажмите [Enter], чтобы выйти..." _; fi
 		exit 1
 	fi
 	source "${SCRIPT_DIR}/FFmpeg_Converter_script.sh"

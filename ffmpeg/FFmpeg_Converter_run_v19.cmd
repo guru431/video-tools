@@ -389,6 +389,9 @@ if /i "%asr_enabled%"=="yes" (
 :: start coding
 if not exist "!SCRIPT_DIR!FFmpeg_Converter_script.cmd" (
 	echo Ошибка: не найден FFmpeg_Converter_script.cmd рядом с этим файлом.
+	rem Пауза - как у ранних отказов script.cmd (голый pause, конвенция CMD: при
+	rem stdin из nul или закрытом он возвращается сразу).
+	pause
 	exit /b 1
 )
 call "!SCRIPT_DIR!FFmpeg_Converter_script.cmd"

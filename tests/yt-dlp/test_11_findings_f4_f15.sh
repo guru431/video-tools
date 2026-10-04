@@ -208,34 +208,50 @@ assert_not_contains "F14: убран нестрогий ^https*://" '/c:"^https*
 suite "F13 (CMD behavioral): host-детект платформы в рантайме"
 # ══════════════════════════════════════════════════════════════
 if cmd //c "exit 0" &>/dev/null; then
-    run_cmd_file() {
-        local body="$1" tmp_cmd win_path result
-        tmp_cmd=$(mktemp_suffix /tmp/test_ytf13cmd_ .cmd)
-        printf '@echo off\r\nchcp 65001 >nul 2>&1\r\nsetlocal enabledelayedexpansion\r\n%s\r\n' "$body" > "$tmp_cmd"
-        win_path=$(cygpath -w "$tmp_cmd" 2>/dev/null || echo "$tmp_cmd")
-        result=$(cmd //c "$win_path" 2>/dev/null)
-        rm -f "$tmp_cmd"
-        echo "$result"
+    # Блок host-детекта берётся из НАСТОЯЩЕГО .cmd (от `set "platform=other"` до
+    # последней проверки суффикса .youtu.be) и гоняется по всем URL в одном процессе
+    # cmd. Ручная копия блока здесь уже однажды разошлась с кодом: разбор кредов до
+    # последнего «@» в production появился, а в копии остался прежний «:?@».
+    # Собака собирается из переменной: барьер приватности видит в литерале форму e-mail.
+    AT='@'
+    # По одному на строку и читаются через read: в URL есть «?», а без кавычек bash
+    # попробовал бы раскрыть его как шаблон имени файла.
+    F13_URLS="https://www.youtube.com/watch?v=abc
+https://youtu.be/abc
+https://youtube.com/watch?v=abc
+https://example.invalid/path/youtube.com/video
+https://youtube.com.evil.tld/x
+https://notyoutube.com/watch
+https://u:p${AT}www.youtube.com:8080/watch?v=abc
+https://youtube.com:pw${AT}example.invalid/x
+https://a${AT}b${AT}youtu.be/abc
+https://WWW.YOUTUBE.COM/watch
+https://www.youtube.com#frag"
+    f13_block() {
+        awk '{ sub(/\r$/, "") } /^set "platform=other"/{f=1} f{ printf "%s\r\n", $0 } f && /^if \/I "!_host:~-9!"/{exit}' "$CMD_SCRIPT"
     }
-    # Ровно тот же блок host-детекта, что в продакшне (см. Downloading_from_YouTube_v19.cmd).
-    detect_platform_cmd() {
-        run_cmd_file "set \"url=$1\"
-set \"platform=other\"
-set \"_host=\"
-for /f \"tokens=2 delims=/\" %%h in (\"!url!\") do set \"_host=%%h\"
-for /f \"tokens=1 delims=:?@ \" %%h in (\"!_host!\") do set \"_host=%%h\"
-if /I \"!_host!\"==\"youtube.com\"       set \"platform=youtube\"
-if /I \"!_host!\"==\"youtu.be\"          set \"platform=youtube\"
-if /I \"!_host:~-12!\"==\".youtube.com\" set \"platform=youtube\"
-if /I \"!_host:~-9!\"==\".youtu.be\"     set \"platform=youtube\"
-echo PLATFORM=!platform!" | tr -d '\r'
-    }
-    assert_contains "CMD F13: www.youtube.com → youtube"  "PLATFORM=youtube" "$(detect_platform_cmd 'https://www.youtube.com/watch?v=abc')"
-    assert_contains "CMD F13: youtu.be → youtube"         "PLATFORM=youtube" "$(detect_platform_cmd 'https://youtu.be/abc')"
-    assert_contains "CMD F13: youtube.com (apex) → youtube" "PLATFORM=youtube" "$(detect_platform_cmd 'https://youtube.com/watch?v=abc')"
-    assert_contains "CMD F13: youtube.com в ПУТИ → other"  "PLATFORM=other"   "$(detect_platform_cmd 'https://example.invalid/path/youtube.com/video')"
-    assert_contains "CMD F13: youtube.com.evil.tld → other" "PLATFORM=other"  "$(detect_platform_cmd 'https://youtube.com.evil.tld/x')"
-    assert_contains "CMD F13: notyoutube.com → other"     "PLATFORM=other"   "$(detect_platform_cmd 'https://notyoutube.com/watch')"
+    f13_cmd=$(mktemp_suffix /tmp/test_ytf13cmd_ .cmd)
+    {
+        printf '@echo off\r\nsetlocal EnableDelayedExpansion\r\n'
+        while IFS= read -r u; do printf 'call :chk "%s"\r\n' "$u"; done <<< "$F13_URLS"
+        printf 'exit /b 0\r\n:chk\r\nset "url=%%~1"\r\n'
+        f13_block
+        printf 'echo P[%%~1]=!platform!\r\nexit /b 0\r\n'
+    } > "$f13_cmd"
+    f13_out=$(cmd //c "$(cygpath -w "$f13_cmd" 2>/dev/null || echo "$f13_cmd")" 2>/dev/null | tr -d '\r')
+    rm -f "$f13_cmd"
+    assert_contains "CMD F13: блок host-детекта извлечён из скрипта" ':_host_creds' "$(f13_block)"
+    assert_contains "CMD F13: www.youtube.com → youtube"     "P[https://www.youtube.com/watch?v=abc]=youtube" "$f13_out"
+    assert_contains "CMD F13: youtu.be → youtube"            "P[https://youtu.be/abc]=youtube" "$f13_out"
+    assert_contains "CMD F13: youtube.com (apex) → youtube"  "P[https://youtube.com/watch?v=abc]=youtube" "$f13_out"
+    assert_contains "CMD F13: youtube.com в ПУТИ → other"    "P[https://example.invalid/path/youtube.com/video]=other" "$f13_out"
+    assert_contains "CMD F13: youtube.com.evil.tld → other"  "P[https://youtube.com.evil.tld/x]=other" "$f13_out"
+    assert_contains "CMD F13: notyoutube.com → other"        "P[https://notyoutube.com/watch]=other" "$f13_out"
+    assert_contains "CMD F13: креды и порт перед хостом YouTube → youtube" "P[https://u:p${AT}www.youtube.com:8080/watch?v=abc]=youtube" "$f13_out"
+    assert_contains "CMD F13: youtube.com в КРЕДАХ, хост чужой → other"    "P[https://youtube.com:pw${AT}example.invalid/x]=other" "$f13_out"
+    assert_contains "CMD F13: несколько «@» — хост после последнего"       "P[https://a${AT}b${AT}youtu.be/abc]=youtube" "$f13_out"
+    assert_contains "CMD F13: регистр хоста не важен"        "P[https://WWW.YOUTUBE.COM/watch]=youtube" "$f13_out"
+    assert_contains "CMD F13: fragment отрезается"           "P[https://www.youtube.com#frag]=youtube" "$f13_out"
 else
     skip "CMD F13 behavioral: cmd.exe недоступен"
 fi

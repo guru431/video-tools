@@ -1332,8 +1332,12 @@ remote_fetch() {
 	# --connect-timeout — как у остальных запросов: зависший connect держал клиента
 	# до таймаута ОС и мешал отмене из trap'а. --max-time здесь нет намеренно: тело
 	# может быть гигабайтами, и любой общий потолок обрывал бы честное скачивание.
+	# Вместо потолка — предел ЗАСТОЯ: меньше 1 байта/с дольше 600 с (и до заголовков,
+	# и посреди тела) — обрыв. Без него служба, принявшая соединение и замолчавшая,
+	# вешала клиента навсегда; .ps1 стережёт то же самое ReadWriteTimeout = 600 с.
 	code="$(remote_curl_auth | "$curl_bin" --config - -sS -X GET \
 		--connect-timeout "${REMOTE_CONNECT_TIMEOUT:-10}" \
+		--speed-limit 1 --speed-time 600 \
 		-o "$dst" -w '%{http_code}' \
 		"${remote_endpoint}/jobs/${jid}/result" 2>/dev/null)" || {
 		printf "\n"

@@ -616,6 +616,8 @@ assert_eq "содержимое" "RESULT-BYTES" "$(cat "$_dst")"
 _argv="$(head -1 "$MOCK_CURL_LOG")"
 assert_contains     "у скачивания есть таймаут соединения" "--connect-timeout" "$_argv"
 assert_not_contains "у скачивания нет общего потолка"      "--max-time"        "$_argv"
+# Вместо потолка — предел застоя: замолчавшая служба не вешает клиента навсегда.
+assert_contains     "у скачивания есть предел застоя"      "--speed-limit 1 --speed-time 600" "$_argv"
 _out="$(remote_fetch job-7 "$_dst" "клип")"
 assert_contains "фаза названа" "скачивание" "$_out"
 rm -f "$_dst"

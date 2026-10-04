@@ -3,7 +3,8 @@
 # test_09_ps1_filters_gpu.sh — Тест PS1: фильтры и GPU
 # Тестирует: vf (поворот, масштаб, скорость), af (atempo каскад,
 # loudnorm), GPU encoder check (nvidia/intel/off).
-# Использует inline PowerShell без запуска полного скрипта.
+# Цепочки vf/af — настоящие функции воркера (разбор AST), без запуска
+# полного скрипта; GPU encoder check — пока инлайн-пересказ (см. хелпер).
 # ============================================================
 
 TESTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -22,96 +23,83 @@ fi
 PS_CMD="powershell"
 command -v pwsh &>/dev/null && PS_CMD="pwsh"
 
-# ── Хелпер: построить vf-цепочку (видео-фильтры) ──────────────────────────
-run_ps1_vf() {
-    local video_rotation="${1:-:-:2}"
-    local video_resolution="${2:-:-:1280x720}"
-    local keep_aspect_ratio="${3:-:+:yes}"
-    local playback_speed="${4:-:-:1.0}"
-    local hw_accel_type="${5:-}"   # empty = no GPU
+PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
+SCRIPT_PS1="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1"
 
-    $PS_CMD -NoProfile -NonInteractive -Command "
-\$video_rotation       = '$video_rotation'
-\$video_resolution     = '$video_resolution'
-\$keep_aspect_ratio    = '$keep_aspect_ratio'
-\$playback_speed       = '$playback_speed'
-\$hw_accel_type        = '$hw_accel_type'
-\$use_hw_accel         = (\$hw_accel_type -ne '')
+# ── Цепочки -vf/-af: НАСТОЯЩИЕ функции воркера ───────────────────────────
+# Раньше здесь жили инлайн-копии сборки цепочек, и копия уже разошлась с кодом
+# (atempo без InvariantCulture, без проверки скорости). Воркер исполняется сверху
+# вниз и тест-гарда не имеет, поэтому Get-VideoFilterChain/Get-AudioFilterChain
+# берутся из исходника разбором AST — как Select-ConfigComboValue в test_16.
+# Все случаи считаются одним процессом PowerShell: строка «ТЕГ=цепочка».
+# Аргументы V: тег, поворот (статус, значение), разрешение ('' — выкл.),
+# keep_aspect (статус, значение), скорость (статус, значение), GPU ('' — нет).
+# Аргументы A: тег, скорость (статус, значение), нормализация (статус, значение).
+_chain_ps=$(mktemp_suffix "${TMPDIR:-/tmp}/ps1_chains_" .ps1)
+cat > "$_chain_ps" <<'PSEOF'
+param([string]$Script)
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($Script, [ref]$null, [ref]$null)
+foreach ($name in 'Get-VideoFilterChain', 'Get-AudioFilterChain') {
+    $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true)
+    if (-not $fn) { Write-Output "NOFUNC=$name"; exit 1 }
+    . ([scriptblock]::Create($fn.Extent.Text))
+}
+function V([string]$Tag, [string]$RotS, [string]$RotV, [string]$Res, [string]$KarS, [string]$KarV, [string]$SpS, [string]$SpV, [string]$Hw) {
+    $p = @(Get-VideoFilterChain -RotationStatus $RotS -RotationValue $RotV -Resolution $Res `
+        -KeepAspectStatus $KarS -KeepAspectValue $KarV -SpeedStatus $SpS -SpeedValue $SpV `
+        -UseHwAccel ($Hw -ne '') -HwAccelType $Hw)
+    Write-Output ("{0}={1}" -f $Tag, ($p -join ','))
+}
+function A([string]$Tag, [string]$SpS, [string]$SpV, [string]$NS, [string]$NV) {
+    $p = @(Get-AudioFilterChain -SpeedStatus $SpS -SpeedValue $SpV -NormalizeStatus $NS -NormalizeValue $NV)
+    Write-Output ("{0}={1}" -f $Tag, ($p -join ','))
+}
+V rot1      '+' '1' ''         '+' 'yes' '-' '1.0' ''
+V rot2      '+' '2' ''         '+' 'yes' '-' '1.0' ''
+V rotoff    '-' '2' ''         '+' 'yes' '-' '1.0' ''
+V rotnv     '+' '2' ''         '+' 'yes' '-' '1.0' 'nvidia'
+V rotnvsc   '+' '2' '1280x720' '+' 'yes' '-' '1.0' 'nvidia'
+V karnv     '-' '2' '1280x720' '+' 'yes' '-' '1.0' 'nvidia'
+V scnv      '-' '2' '1280x720' '+' 'no'  '-' '1.0' 'nvidia'
+V scqsv     '-' '2' '1280x720' '+' 'no'  '+' '2.0' 'intel'
+V karsc     '-' '1' '1280x720' '+' 'yes' '-' '1.0' ''
+V sc        '-' '1' '1280x720' '+' 'no'  '-' '1.0' ''
+V resoff    '-' '1' ''         '+' 'yes' '-' '1.0' ''
+V sp2       '-' '1' ''         '+' 'yes' '+' '2.0' ''
+V sp1       '-' '1' ''         '+' 'yes' '+' '1.0' ''
+V spoff     '-' '1' ''         '+' 'yes' '-' '1.5' ''
+A a15       '+' '1.5'  '-' 'loudnorm'
+A a20       '+' '2.0'  '-' 'loudnorm'
+A a05       '+' '0.5'  '-' 'loudnorm'
+A a10       '+' '1.0'  '-' 'loudnorm'
+A aoff      '-' '1.5'  '-' 'loudnorm'
+A a30       '+' '3.0'  '-' 'loudnorm'
+A a40       '+' '4.0'  '-' 'loudnorm'
+A a025      '+' '0.25' '-' 'loudnorm'
+A loud      '-' '1.0'  '+' 'loudnorm'
+A dyn       '-' '1.0'  '+' 'dynaudnorm'
+A normoff   '-' '1.0'  '-' 'loudnorm'
+A spnorm    '+' '1.5'  '+' 'loudnorm'
+PSEOF
+_chains_out=$("$PS_CMD" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$_chain_ps")" \
+    -Script "$(cygpath -w "$SCRIPT_PS1")" 2>&1)
+rm -f "$_chain_ps"
 
-\$_, \$video_rotation_status,      \$video_rotation_value      = \$video_rotation -split ':'
-\$_, \$video_resolution_status,    \$video_resolution_value    = \$video_resolution -split ':'
-\$_, \$keep_aspect_ratio_status,   \$keep_aspect_ratio_value   = \$keep_aspect_ratio -split ':'
-\$_, \$playback_speed_status,      \$playback_speed_value      = \$playback_speed -split ':'
-\$set_video_resolution = if (\$video_resolution_status -eq '+') { \$video_resolution_value } else { '' }
-
-# Копия логики FFmpeg_Converter_script.ps1 (E5/D4) — держать в синхроне с production.
-# force_cpu: поворот (transpose_cuda нет) ИЛИ keep_aspect+разрешение -> CPU scale+pad
-\$force_cpu_filters = (\$use_hw_accel -and ((\$video_rotation_status -eq '+') -or (\$keep_aspect_ratio_status -eq '+' -and \$keep_aspect_ratio_value -eq 'yes' -and \$set_video_resolution)))
-\$scale_backend = if (\$force_cpu_filters) { 'cpu' } else { \$hw_accel_type }
-
-\$vf_parts = @()
-if (\$video_rotation_status -eq '+') {
-    \$vf_parts += \"transpose=\$video_rotation_value\"
-}
-if (\$set_video_resolution) {
-    \$res_w, \$res_h = \$set_video_resolution -split 'x'
-    if (\$keep_aspect_ratio_status -eq '+' -and \$keep_aspect_ratio_value -eq 'yes') {
-        \$vf_parts += \"scale=\${res_w}:\${res_h}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=\${res_w}:\${res_h}:(ow-iw)/2:(oh-ih)/2\"
-    } else {
-        switch (\$scale_backend) {
-            'nvidia' { \$vf_parts += \"scale_cuda=\${res_w}:\${res_h}\" }
-            'intel'  { \$vf_parts += \"scale_qsv=\${res_w}:\${res_h}\" }
-            default  { \$vf_parts += \"scale=\${res_w}:\${res_h}\" }
-        }
-    }
-}
-if (\$playback_speed_status -eq '+' -and \$playback_speed_value -ne '1.0') {
-    \$vf_parts += \"setpts=PTS/\$playback_speed_value\"
-}
-if (\$use_hw_accel -and \$vf_parts.Count -gt 0) {
-    \$needs_download = \$vf_parts | Where-Object { \$_ -notmatch '^(scale_cuda|scale_qsv|setpts)' }
-    if (\$needs_download) { \$vf_parts = @('hwdownload', 'format=nv12') + \$vf_parts }
-}
-Write-Output (\$vf_parts -join ',')
-" 2>/dev/null
+# chain ТЕГ → $result: цепочка из строки «ТЕГ=…» (без процесса и без $( )).
+chain() {
+    local _l
+    result="НЕТ_СТРОКИ_$1"
+    while IFS= read -r _l; do
+        _l="${_l%$'\r'}"
+        if [ "${_l%%=*}" = "$1" ]; then result="${_l#*=}"; return; fi
+    done <<< "$_chains_out"
 }
 
-# ── Хелпер: построить af-цепочку (аудио-фильтры) ──────────────────────────
-run_ps1_af() {
-    local playback_speed="${1:-:-:1.0}"
-    local audio_normalize="${2:-:-:loudnorm}"
-
-    $PS_CMD -NoProfile -NonInteractive -Command "
-\$playback_speed    = '$playback_speed'
-\$audio_normalize   = '$audio_normalize'
-
-\$_, \$playback_speed_status,  \$playback_speed_value  = \$playback_speed -split ':'
-\$_, \$audio_normalize_status, \$audio_normalize_value = \$audio_normalize -split ':'
-
-\$af_parts = @()
-if (\$playback_speed_status -eq '+' -and \$playback_speed_value -ne '1.0') {
-    \$speed = [double]\$playback_speed_value
-    if (\$speed -gt 2.0) {
-        \$remaining = \$speed
-        while (\$remaining -gt 2.0) { \$af_parts += 'atempo=2.0'; \$remaining = \$remaining / 2.0 }
-        \$af_parts += \"atempo=\$remaining\"
-    } elseif (\$speed -lt 0.5) {
-        \$remaining = \$speed
-        while (\$remaining -lt 0.5) { \$af_parts += 'atempo=0.5'; \$remaining = \$remaining / 0.5 }
-        \$af_parts += \"atempo=\$remaining\"
-    } else {
-        \$af_parts += \"atempo=\$speed\"
-    }
-}
-if (\$audio_normalize_status -eq '+') {
-    switch (\$audio_normalize_value) {
-        'loudnorm'   { \$af_parts += 'loudnorm=I=-16:TP=-1.5:LRA=11' }
-        'dynaudnorm' { \$af_parts += 'dynaudnorm' }
-    }
-}
-Write-Output (\$af_parts -join ',')
-" 2>/dev/null
-}
+assert_not_contains "функции цепочек найдены в настоящем воркере" "NOFUNC" "$_chains_out"
+src_ps1="$(cat "$SCRIPT_PS1")"
+# Функции обязаны быть именно тем, чем воркер строит -vf/-af, а не мёртвым кодом.
+assert_contains "воркер строит -vf через Get-VideoFilterChain"  '$vf_parts = @(Get-VideoFilterChain' "$src_ps1"
+assert_contains "воркер строит -af через Get-AudioFilterChain"  '$af_parts = @(Get-AudioFilterChain' "$src_ps1"
 
 # ── Хелпер: GPU encoder check ─────────────────────────────────────────────
 run_ps1_gpu() {
@@ -172,107 +160,74 @@ get_field() {
 # ══════════════════════════════════════════════════════════════
 suite "PS1: видео-фильтры (поворот)"
 # ══════════════════════════════════════════════════════════════
+KAR_PAD="scale=1280:720:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=1280:720:(ow-iw)/2:(oh-ih)/2"
 
-result=$(run_ps1_vf ":+:1" ":-:1280x720" ":+:yes" ":-:1.0")
-assert_contains "rotation +1 → transpose=1"  "transpose=1"  "$result"
-
-result=$(run_ps1_vf ":+:2" ":-:1280x720" ":+:yes" ":-:1.0")
-assert_contains "rotation +2 → transpose=2"  "transpose=2"  "$result"
-
-result=$(run_ps1_vf ":-:2" ":-:1280x720" ":+:yes" ":-:1.0")
-assert_eq "rotation off → no transpose"  ""  "$result"
+chain rot1;   assert_eq "rotation +1 → transpose=1"     "transpose=1"  "$result"
+chain rot2;   assert_eq "rotation +2 → transpose=2"     "transpose=2"  "$result"
+chain rotoff; assert_eq "rotation off → no transpose"   ""             "$result"
 
 # rotation + nvidia: transpose_cuda не существует → обычный transpose + CPU-цепочка
-result=$(run_ps1_vf ":+:2" ":-:1280x720" ":+:yes" ":-:1.0" "nvidia")
-assert_contains "rotation +2 + nvidia → transpose=2"  "transpose=2"  "$result"
+chain rotnv
+assert_eq "rotation +2 + nvidia → hwdownload + transpose=2"  "hwdownload,format=nv12,transpose=2"  "$result"
 assert_not_contains "rotation + nvidia → нет transpose_cuda"  "transpose_cuda"  "$result"
 
-result=$(run_ps1_vf ":+:2" ":+:1280x720" ":+:yes" ":-:1.0" "nvidia")
-assert_contains "rotation+nvidia+scale → CPU scale (не scale_cuda)" \
-    "scale=1280:720:force_original_aspect_ratio" "$result"
-assert_not_contains "rotation+nvidia → нет scale_cuda"  "scale_cuda"  "$result"
+chain rotnvsc
+assert_eq "rotation+nvidia+scale → CPU scale+pad (не scale_cuda)" \
+    "hwdownload,format=nv12,transpose=2,$KAR_PAD" "$result"
 
 # keep_aspect + nvidia без поворота: тоже CPU scale+pad (force_cpu), не scale_cuda
-result=$(run_ps1_vf ":-:2" ":+:1280x720" ":+:yes" ":-:1.0" "nvidia")
-assert_contains "keep_ar+nvidia → CPU scale+pad с force_divisible_by" \
-    "scale=1280:720:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=" "$result"
-assert_not_contains "keep_ar+nvidia → нет scale_cuda"  "scale_cuda"  "$result"
-assert_contains "rotation+nvidia → hwdownload в цепочке"  "hwdownload"  "$result"
+chain karnv
+assert_eq "keep_ar+nvidia → hwdownload + CPU scale+pad с force_divisible_by" \
+    "hwdownload,format=nv12,$KAR_PAD" "$result"
+
+# Без keep_aspect и поворота GPU-масштаб остаётся на карте, hwdownload не нужен
+chain scnv;  assert_eq "nvidia без keep_ar → scale_cuda"              "scale_cuda=1280:720"              "$result"
+chain scqsv; assert_eq "intel без keep_ar + скорость → scale_qsv,setpts" "scale_qsv=1280:720,setpts=PTS/2.0" "$result"
 
 # ══════════════════════════════════════════════════════════════
 suite "PS1: видео-фильтры (масштаб с сохранением пропорций)"
 # ══════════════════════════════════════════════════════════════
 
-result=$(run_ps1_vf ":-:1" ":+:1280x720" ":+:yes" ":-:1.0")
-assert_contains "scale 1280x720 keep_ar → scale=1280:720:force_original_aspect_ratio" \
-    "scale=1280:720:force_original_aspect_ratio=decrease" "$result"
-assert_contains "scale 1280x720 keep_ar → pad"  "pad=1280:720" "$result"
-
-result=$(run_ps1_vf ":-:1" ":+:1280x720" ":+:no" ":-:1.0")
-assert_eq "scale без keep_ar → scale=1280:720"  "scale=1280:720"  "$result"
-
-result=$(run_ps1_vf ":-:1" ":-:1280x720" ":+:yes" ":-:1.0")
-assert_eq "resolution off → нет scale"  ""  "$result"
+chain karsc;  assert_eq "scale 1280x720 keep_ar → scale+pad"   "$KAR_PAD"        "$result"
+chain sc;     assert_eq "scale без keep_ar → scale=1280:720"   "scale=1280:720"  "$result"
+chain resoff; assert_eq "resolution off → нет scale"           ""                "$result"
 
 # ══════════════════════════════════════════════════════════════
 suite "PS1: видео-фильтры (скорость видео)"
 # ══════════════════════════════════════════════════════════════
 
-result=$(run_ps1_vf ":-:1" ":-:1280x720" ":+:yes" ":+:2.0")
-assert_contains "playback_speed 2.0 → setpts"  "setpts=PTS/2.0"  "$result"
-
-result=$(run_ps1_vf ":-:1" ":-:1280x720" ":+:yes" ":+:1.0")
-assert_eq "playback_speed 1.0 → нет setpts"  ""  "$result"
-
-result=$(run_ps1_vf ":-:1" ":-:1280x720" ":+:yes" ":-:1.5")
-assert_eq "playback_speed выключена → нет setpts"  ""  "$result"
+chain sp2;   assert_eq "playback_speed 2.0 → setpts"            "setpts=PTS/2.0"  "$result"
+chain sp1;   assert_eq "playback_speed 1.0 → нет setpts"        ""                "$result"
+chain spoff; assert_eq "playback_speed выключена → нет setpts"  ""                "$result"
 
 # ══════════════════════════════════════════════════════════════
 suite "PS1: аудио-фильтры (atempo)"
 # ══════════════════════════════════════════════════════════════
 
-result=$(run_ps1_af ":+:1.5" ":-:loudnorm")
-assert_eq "atempo 1.5 → одиночный atempo"  "atempo=1.5"  "$result"
-
-result=$(run_ps1_af ":+:2.0" ":-:loudnorm")
-assert_eq "atempo 2.0 → одиночный atempo"  "atempo=2"  "$result"
-
-result=$(run_ps1_af ":+:0.5" ":-:loudnorm")
-assert_eq "atempo 0.5 → одиночный atempo"  "atempo=0.5"  "$result"
-
-result=$(run_ps1_af ":+:1.0" ":-:loudnorm")
-assert_eq "atempo 1.0 → нет фильтра"  ""  "$result"
-
-result=$(run_ps1_af ":-:1.5" ":-:loudnorm")
-assert_eq "playback_speed выключена → нет atempo"  ""  "$result"
+chain a15;  assert_eq "atempo 1.5 → одиночный atempo"          "atempo=1.5"  "$result"
+# PS1 печатает double 2.0 как «2» — эквивалентно для ffmpeg
+chain a20;  assert_eq "atempo 2.0 → одиночный atempo"          "atempo=2"    "$result"
+chain a05;  assert_eq "atempo 0.5 → одиночный atempo"          "atempo=0.5"  "$result"
+chain a10;  assert_eq "atempo 1.0 → нет фильтра"               ""            "$result"
+chain aoff; assert_eq "playback_speed выключена → нет atempo"  ""            "$result"
 
 # ══════════════════════════════════════════════════════════════
 suite "PS1: atempo каскад (скорость > 2.0 и < 0.5)"
 # ══════════════════════════════════════════════════════════════
 
-result=$(run_ps1_af ":+:3.0" ":-:loudnorm")
-assert_contains "speed 3.0 → atempo=2.0 каскад"  "atempo=2.0"  "$result"
-assert_contains "speed 3.0 → atempo=1.5 остаток"  "atempo=1.5"  "$result"
-
-result=$(run_ps1_af ":+:4.0" ":-:loudnorm")
+chain a30;  assert_eq "speed 3.0 → atempo=2.0 каскад + остаток 1.5"  "atempo=2.0,atempo=1.5"  "$result"
 # PS1 выводит atempo=2 (не 2.0) когда double 4.0/2.0=2 — эквивалентно для ffmpeg
-assert_contains "speed 4.0 → два atempo= каскад"  "atempo=2.0,atempo=2"  "$result"
-
-result=$(run_ps1_af ":+:0.25" ":-:loudnorm")
-assert_contains "speed 0.25 → atempo=0.5 каскад"  "atempo=0.5"  "$result"
+chain a40;  assert_eq "speed 4.0 → два atempo= каскад"               "atempo=2.0,atempo=2"    "$result"
+chain a025; assert_eq "speed 0.25 → atempo=0.5 каскад"               "atempo=0.5,atempo=0.5"  "$result"
 
 # ══════════════════════════════════════════════════════════════
 suite "PS1: аудио-фильтры (нормализация)"
 # ══════════════════════════════════════════════════════════════
 
-result=$(run_ps1_af ":-:1.0" ":+:loudnorm")
-assert_contains "loudnorm → loudnorm=I=-16"  "loudnorm=I=-16:TP=-1.5:LRA=11"  "$result"
-
-result=$(run_ps1_af ":-:1.0" ":+:dynaudnorm")
-assert_eq "dynaudnorm → dynaudnorm"  "dynaudnorm"  "$result"
-
-result=$(run_ps1_af ":-:1.0" ":-:loudnorm")
-assert_eq "normalize выключена → нет фильтра"  ""  "$result"
+chain loud;    assert_eq "loudnorm → loudnorm=I=-16"           "loudnorm=I=-16:TP=-1.5:LRA=11"  "$result"
+chain dyn;     assert_eq "dynaudnorm → dynaudnorm"             "dynaudnorm"                     "$result"
+chain normoff; assert_eq "normalize выключена → нет фильтра"   ""                               "$result"
+chain spnorm;  assert_eq "скорость + loudnorm → atempo первым" "atempo=1.5,loudnorm=I=-16:TP=-1.5:LRA=11" "$result"
 
 # ══════════════════════════════════════════════════════════════
 suite "PS1: GPU encoder check (NVIDIA)"
@@ -311,9 +266,6 @@ assert_eq "hw_accel off → codec unchanged"     "libx264"  "$(get_field "$out" 
 # ══════════════════════════════════════════════════════════════
 suite "PS1 script.ps1: фиксы Task 3 (анализ исходника)"
 # ══════════════════════════════════════════════════════════════
-PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
-SCRIPT_PS1="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1"
-src_ps1="$(cat "$SCRIPT_PS1")"
 
 # (а) $vf_parts инициализируется ДО ветки audio_only — иначе осиротевший -vf (PS1 5.1: @()+$null = Count 1)
 init_ln=$(grep -nF '$vf_parts = @()' "$SCRIPT_PS1" | head -1 | cut -d: -f1)

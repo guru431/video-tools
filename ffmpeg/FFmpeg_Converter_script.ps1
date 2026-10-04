@@ -341,6 +341,105 @@ if ($length_coding_status -eq "+") {
 $part_suffix_known = ""
 if ($start_coding_status -eq "+" -and $start_coding_value -ne 0) { $part_suffix_known = " (part.1)" }
 
+# --- Цепочки фильтров -vf/-af ---
+# Вынесены в функции, чтобы тест (test_09) проверял НАСТОЯЩУЮ сборку цепочек, взяв
+# функцию из этого файла разбором AST: прежняя инлайн-копия в тесте уже разошлась с
+# кодом. Функции выводят части цепочки поэлементно, поэтому вызывающий оборачивает
+# вызов в @(): пустой вывод без него — $null, а `@() + $null` в PS 5.1 даёт массив
+# из одного $null (осиротевший -vf с пустым значением).
+
+# E5. Сборка цепочки видео-фильтров
+function Get-VideoFilterChain {
+	param([string]$RotationStatus, [string]$RotationValue, [string]$Resolution,
+	      [string]$KeepAspectStatus, [string]$KeepAspectValue,
+	      [string]$SpeedStatus, [string]$SpeedValue,
+	      [bool]$UseHwAccel, [string]$HwAccelType)
+	$parts = @()
+	# rotation+GPU: CUDA-варианта фильтра поворота не существует. Если включён поворот
+	# и используется GPU — вся цепочка фильтров переводится на CPU (transpose+scale),
+	# иначе получилась бы несовместимая смесь CPU transpose + scale_cuda/scale_qsv.
+	# force_cpu: поворот (нет CUDA-transpose) ИЛИ keep_aspect+разрешение (scale_cuda/qsv не умеют
+	# pad hw-кадры → иная геометрия без letterbox). Тогда scale идёт через CPU (паритет с .sh).
+	$force_cpu_filters = ($UseHwAccel -and (($RotationStatus -eq "+") -or ($KeepAspectStatus -eq "+" -and $KeepAspectValue -eq "yes" -and $Resolution)))
+	$scale_backend = if ($force_cpu_filters) { "cpu" } else { $HwAccelType }
+
+	# Поворот
+	if ($RotationStatus -eq "+") {
+		$parts += "transpose=$RotationValue"
+	}
+
+	# D4. Масштабирование с сохранением пропорций
+	if ($Resolution) {
+		$res_w, $res_h = $Resolution -split 'x'
+		if ($KeepAspectStatus -eq "+" -and $KeepAspectValue -eq "yes") {
+			# Только CPU scale+pad: keep_aspect с GPU всегда уходит сюда ($force_cpu_filters
+			# выше), поэтому вариантов scale_cuda/scale_qsv с decrease здесь нет — не дыра.
+			# force_divisible_by=2 обязателен: на нестандартных пропорциях
+			# force_original_aspect_ratio=decrease даёт нечётную сторону
+			# (1366×768 в рамку 1280×720 → 1280×719), а yuv420p-энкодеры такие
+			# кадры не принимают — «height not divisible by 2», файл падает.
+			$parts += "scale=${res_w}:${res_h}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${res_w}:${res_h}:(ow-iw)/2:(oh-ih)/2"
+		} else {
+			switch ($scale_backend) {
+				"nvidia" { $parts += "scale_cuda=${res_w}:${res_h}" }
+				"intel"  { $parts += "scale_qsv=${res_w}:${res_h}" }
+				default  { $parts += "scale=${res_w}:${res_h}" }
+			}
+		}
+	}
+
+	# D6. Скорость воспроизведения (видео)
+	if ($SpeedStatus -eq "+" -and $SpeedValue -ne "1.0") {
+		$parts += "setpts=PTS/$SpeedValue"
+	}
+
+	# Hwdownload если нужен
+	if ($UseHwAccel -and $parts.Count -gt 0) {
+		$needs_download = $parts | Where-Object { $_ -notmatch '^(scale_cuda|scale_qsv|setpts)' }
+		if ($needs_download) {
+			$parts = @("hwdownload", "format=nv12") + $parts
+		}
+	}
+	return $parts
+}
+
+# D6 (аудио) + D5. Каскад atempo и нормализация звука. Значение скорости вызывающий
+# уже проверил (F15, 0 < speed <= 100): невалидное до этой функции не доходит.
+function Get-AudioFilterChain {
+	param([string]$SpeedStatus, [string]$SpeedValue, [string]$NormalizeStatus, [string]$NormalizeValue)
+	$parts = @()
+	if ($SpeedStatus -eq "+" -and $SpeedValue -ne "1.0") {
+		$speed = [double]::Parse($SpeedValue, [System.Globalization.NumberStyles]::Float,
+			[System.Globalization.CultureInfo]::InvariantCulture)
+		if ($speed -gt 2.0) {
+			$remaining = $speed
+			while ($remaining -gt 2.0) {
+				$parts += "atempo=2.0"
+				$remaining = $remaining / 2.0
+			}
+			$parts += "atempo=" + $remaining.ToString([System.Globalization.CultureInfo]::InvariantCulture)
+		} elseif ($speed -lt 0.5) {
+			$remaining = $speed
+			while ($remaining -lt 0.5) {
+				$parts += "atempo=0.5"
+				$remaining = $remaining / 0.5
+			}
+			$parts += "atempo=" + $remaining.ToString([System.Globalization.CultureInfo]::InvariantCulture)
+		} else {
+			$parts += "atempo=" + $speed.ToString([System.Globalization.CultureInfo]::InvariantCulture)
+		}
+	}
+
+	# D5. Нормализация звука
+	if ($NormalizeStatus -eq "+") {
+		switch ($NormalizeValue) {
+			"loudnorm"   { $parts += "loudnorm=I=-16:TP=-1.5:LRA=11" }
+			"dynaudnorm" { $parts += "dynaudnorm" }
+		}
+	}
+	return $parts
+}
+
 # --- A1. Формат и настройки видео/аудио ---
 # Инициализируем ДО ветки audio_only: иначе при audio_only=yes $vf_parts остаётся
 # неопределён, а PS1 5.1 даёт `@() + $null` = массив из одного $null (Count=1) →
@@ -378,52 +477,10 @@ if ($audio_only -eq "yes") {
 		$format_files_out = "mp4"
 	}
 
-	# E5. Сборка цепочки видео-фильтров
-	# rotation+GPU: CUDA-варианта фильтра поворота не существует. Если включён поворот
-	# и используется GPU — вся цепочка фильтров переводится на CPU (transpose+scale),
-	# иначе получилась бы несовместимая смесь CPU transpose + scale_cuda/scale_qsv.
-	# force_cpu: поворот (нет CUDA-transpose) ИЛИ keep_aspect+разрешение (scale_cuda/qsv не умеют
-	# pad hw-кадры → иная геометрия без letterbox). Тогда scale идёт через CPU (паритет с .sh).
-	$force_cpu_filters = ($use_hw_accel -and (($video_rotation_status -eq "+") -or ($keep_aspect_ratio_status -eq "+" -and $keep_aspect_ratio_value -eq "yes" -and $set_video_resolution)))
-	$scale_backend = if ($force_cpu_filters) { "cpu" } else { $hw_accel_type }
-
-	# Поворот
-	if ($video_rotation_status -eq "+") {
-		$vf_parts += "transpose=$video_rotation_value"
-	}
-
-	# D4. Масштабирование с сохранением пропорций
-	if ($set_video_resolution) {
-		$res_w, $res_h = $set_video_resolution -split 'x'
-		if ($keep_aspect_ratio_status -eq "+" -and $keep_aspect_ratio_value -eq "yes") {
-			# Только CPU scale+pad: keep_aspect с GPU всегда уходит сюда ($force_cpu_filters
-			# выше), поэтому вариантов scale_cuda/scale_qsv с decrease здесь нет — не дыра.
-			# force_divisible_by=2 обязателен: на нестандартных пропорциях
-			# force_original_aspect_ratio=decrease даёт нечётную сторону
-			# (1366×768 в рамку 1280×720 → 1280×719), а yuv420p-энкодеры такие
-			# кадры не принимают — «height not divisible by 2», файл падает.
-			$vf_parts += "scale=${res_w}:${res_h}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${res_w}:${res_h}:(ow-iw)/2:(oh-ih)/2"
-		} else {
-			switch ($scale_backend) {
-				"nvidia" { $vf_parts += "scale_cuda=${res_w}:${res_h}" }
-				"intel"  { $vf_parts += "scale_qsv=${res_w}:${res_h}" }
-				default  { $vf_parts += "scale=${res_w}:${res_h}" }
-			}
-		}
-	}
-
-	# D6. Скорость воспроизведения (видео)
-	if ($playback_speed_status -eq "+" -and $playback_speed_value -ne "1.0") {
-		$vf_parts += "setpts=PTS/$playback_speed_value"
-	}
-
-	# Hwdownload если нужен
-	if ($use_hw_accel -and $vf_parts.Count -gt 0) {
-		$needs_download = $vf_parts | Where-Object { $_ -notmatch '^(scale_cuda|scale_qsv|setpts)' }
-		if ($needs_download) {
-			$vf_parts = @("hwdownload", "format=nv12") + $vf_parts
-		}
-	}
+	# E5/D4/D6. Цепочка видео-фильтров — Get-VideoFilterChain (выше).
+	$vf_parts = @(Get-VideoFilterChain -RotationStatus $video_rotation_status -RotationValue $video_rotation_value `
+		-Resolution $set_video_resolution -KeepAspectStatus $keep_aspect_ratio_status -KeepAspectValue $keep_aspect_ratio_value `
+		-SpeedStatus $playback_speed_status -SpeedValue $playback_speed_value -UseHwAccel $use_hw_accel -HwAccelType $hw_accel_type)
 
 	# Формирование codec-строки
 	$set_video_codec_arg = if ($set_video_codec) { "-c:v $set_video_codec" } else { "" }
@@ -463,7 +520,6 @@ if ($audio_only -eq "yes") {
 }
 
 # D6. Скорость воспроизведения (аудио)
-$af_parts = @()
 if ($playback_speed_status -eq "+" -and $playback_speed_value -ne "1.0") {
 	# F15. Предпусковая валидация: каскад ниже делит remaining на 2.0 (или 0.5), поэтому
 	# 0 остаётся нулём, а отрицательное уходит в минус — цикл не сходится и скрипт
@@ -482,32 +538,10 @@ if ($playback_speed_status -eq "+" -and $playback_speed_value -ne "1.0") {
 		Write-GUIProgress -FilePercent 100 -CurrentFile "Ошибка" -State "failed" -ExitCode 1 -Message "playback_speed должен быть числом в диапазоне 0 < speed <= 100 (получено: '$playback_speed_value')"
 		exit 1
 	}
-	if ($speed -gt 2.0) {
-		$remaining = $speed
-		while ($remaining -gt 2.0) {
-			$af_parts += "atempo=2.0"
-			$remaining = $remaining / 2.0
-		}
-		$af_parts += "atempo=" + $remaining.ToString([System.Globalization.CultureInfo]::InvariantCulture)
-	} elseif ($speed -lt 0.5) {
-		$remaining = $speed
-		while ($remaining -lt 0.5) {
-			$af_parts += "atempo=0.5"
-			$remaining = $remaining / 0.5
-		}
-		$af_parts += "atempo=" + $remaining.ToString([System.Globalization.CultureInfo]::InvariantCulture)
-	} else {
-		$af_parts += "atempo=" + $speed.ToString([System.Globalization.CultureInfo]::InvariantCulture)
-	}
 }
-
-# D5. Нормализация звука
-if ($audio_normalize_status -eq "+") {
-	switch ($audio_normalize_value) {
-		"loudnorm"   { $af_parts += "loudnorm=I=-16:TP=-1.5:LRA=11" }
-		"dynaudnorm" { $af_parts += "dynaudnorm" }
-	}
-}
+# D6 (каскад atempo) + D5 (нормализация) — Get-AudioFilterChain (выше).
+$af_parts = @(Get-AudioFilterChain -SpeedStatus $playback_speed_status -SpeedValue $playback_speed_value `
+	-NormalizeStatus $audio_normalize_status -NormalizeValue $audio_normalize_value)
 
 # --- Аудио-настройки в массив ---
 $audio_settings_args = @()

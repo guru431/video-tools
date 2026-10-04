@@ -279,7 +279,7 @@ assert_empty "ни один тест не переопределяет productio
 #     в четырёх местах (жадный '\s*#.*', нет ${ENV_VAR}, '^\[(.+)\]$', нет .Trim());
 #   • test_10 — inline-пересказ подпрограммы :to_flag, терявший ветку пустого значения.
 # Оба «зелёно» проверяли копию. Здесь ловим определения в тестах, а не вызовы.
-PROD_PS_FUNCS="Read-Config To-Flag Parse-Flag Quote-WinArg Join-WinArgs Get-Platform"
+PROD_PS_FUNCS="Read-Config To-Flag Parse-Flag Quote-WinArg Join-WinArgs Get-Platform Get-VideoFilterChain Get-AudioFilterChain"
 PROD_CMD_LABELS="to_flag resolve_hw build_atempo kbps_from_line trim_val trim_key strip_inline_comment expand_env assign_var log_msg warn_bang_names"
 # `function Read-Config {` — определение. Вызов `Read-Config 'k' 's'` не совпадёт.
 # Перед именем допустимы `\` и `$` — оба ЛИТЕРАЛОМ (`\$?`). Голый `$?` GNU grep

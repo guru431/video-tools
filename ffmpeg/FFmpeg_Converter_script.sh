@@ -861,6 +861,9 @@ manifest_write() {
 # purge_manifest_outputs (см. вызов в encode_file). Пропавший или усечённый выход при
 # прежних источнике и настройках обесцененным не считается: те же настройки дают те
 # же имена частей, и новый прогон перепишет их сам.
+# CR в конце строки снимается при каждом чтении manifest: .ps1 и .cmd пишут его
+# с CRLF, и manifest из того же каталога назначения, записанный ими, иначе не был бы
+# для .sh законченным никогда (`state=complete\r`), а пути выходов несли бы `\r`.
 manifest_is_complete() {
 	local mf="$1" src="$2" sig="$3"
 	MANIFEST_STALE="no"
@@ -870,6 +873,7 @@ manifest_is_complete() {
 	# settings= (как у прежнего `grep | head -1`), state=complete — в любом месте.
 	local line complete="no" rec_size="" rec_sig="" seen_size="no" seen_sig="no"
 	while IFS= read -r line || [ -n "$line" ]; do
+		line="${line%$'\r'}"
 		case "$line" in
 			state=complete) complete="yes" ;;
 			source_size=*)
@@ -885,7 +889,8 @@ manifest_is_complete() {
 	# Подпись настроек: смена контейнера/кодека/фильтров обязана обесценить manifest.
 	[ "$rec_sig" = "$sig" ] || { MANIFEST_STALE="yes"; return 1; }
 	local sz path
-	while IFS= read -r line; do
+	while IFS= read -r line || [ -n "$line" ]; do
+		line="${line%$'\r'}"
 		case "$line" in output=*) ;; *) continue ;; esac
 		line="${line#output=}"
 		sz="${line%%|*}"; path="${line#*|}"
@@ -913,6 +918,7 @@ purge_manifest_outputs() {
 	canon_path "$src"; collision_key "$CANON_PATH"; in_key="$COLLISION_KEY"
 	collision_key ".$ext"; ext_key="$COLLISION_KEY"
 	while IFS= read -r line || [ -n "$line" ]; do
+		line="${line%$'\r'}"
 		case "$line" in output=*) ;; *) continue ;; esac
 		path="${line#output=}"; path="${path#*|}"
 		[ -f "$path" ] || continue

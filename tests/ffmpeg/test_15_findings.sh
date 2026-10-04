@@ -855,13 +855,14 @@ if command -v cygpath >/dev/null 2>&1; then
 fi
 
 # Сценарий A: вход ov.mp4, в manifest — 3 части mp4 (удаляются), часть в прежнем
-# формате mkv и часть в чужом каталоге (обе остаются). $1 = posix|win.
+# формате mkv и часть в чужом каталоге (обе остаются). $1 = posix|posixcrlf|win|winlf.
 # Manifest в форме платформы: Windows-пути и CRLF, как пишут его .ps1 и .cmd.
-# winlf — Windows-пути с LF-концами (manifest от .sh): CMD обязан понимать и его.
+# winlf — Windows-пути с LF-концами (manifest от .sh): CMD обязан понимать и его;
+# posixcrlf — пути .sh с CRLF-концами: .sh обязан понимать manifest от .ps1/.cmd.
 d2_setup() {
     local dd="$DST" od="$D2_OTHER" sep="/" eol="" k
-    if [ "$1" != "posix" ]; then dd="$W_DST"; od="$W_OTHER"; sep='\'; fi
-    if [ "$1" = "win" ]; then eol=$'\r'; fi
+    case "$1" in win|winlf) dd="$W_DST"; od="$W_OTHER"; sep='\' ;; esac
+    case "$1" in win|posixcrlf) eol=$'\r' ;; esac
     rm -f "$DST"/ov* "$DST/.ov.ffconv" "$D2_OTHER"/ov*
     : > "$IN/ov.mp4"
     for k in 1 2 3; do : > "$DST/ov (part.$k).mp4"; done
@@ -942,6 +943,25 @@ d2_incomplete_check "SH" "$OUT_TEXT"
 d2_skip_setup posix
 run_capture
 d2_skip_check "SH"
+# Manifest с CRLF-концами (так его пишут .ps1 и .cmd): `state=complete\r` .sh не
+# узнавал, и законченный manifest для него не был законченным никогда. Обесцененный
+# (settings=old) — хвост убирается, то есть пути выходов прочитаны без `\r`.
+d2_setup posixcrlf
+run_capture
+d2_check "SH overwrite=no, manifest с CRLF" real "$OUT_TEXT"
+# Действительный (только что записан .sh), переведённый в CRLF, — пропуск: и
+# state=complete, и пути выходов (их наличие сверяется) прочитаны без `\r`. Выход
+# перечислен под другим именем, базового нет — пропуск решает manifest, а не F7.
+# Встроенными средствами bash: `sed -i` без суффикса и `\r` в замене BSD sed не знает.
+mv "$DST/ov.mp4" "$DST/ov (part.1).mp4"
+D2_CRLF=""
+while IFS= read -r _l || [ -n "$_l" ]; do
+    case "$_l" in output=*ov.mp4) _l="${_l%ov.mp4}ov (part.1).mp4" ;; esac
+    D2_CRLF="$D2_CRLF$_l"$'\r\n'
+done < "$DST/.ov.ffconv"
+printf '%s' "$D2_CRLF" > "$DST/.ov.ffconv"
+run_capture
+if log_has "-c:v libx264"; then fail "SH: законченный manifest с CRLF — файл пропущен" "ffmpeg не вызван" "перекодирован; вывод: $(printf '%s' "$OUT_TEXT" | tr '\n' '|')"; else pass "SH: законченный manifest с CRLF — файл пропущен"; fi
 
 # --- PS1 (настоящий воркер, мок ffmpeg.cmd) ---
 d2_ps1() {   # $1 = source, $2 = destination (Windows-пути), дальше — PS-присваивания

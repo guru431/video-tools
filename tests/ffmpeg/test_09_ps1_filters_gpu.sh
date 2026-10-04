@@ -44,8 +44,9 @@ run_ps1_vf() {
 \$_, \$playback_speed_status,      \$playback_speed_value      = \$playback_speed -split ':'
 \$set_video_resolution = if (\$video_resolution_status -eq '+') { \$video_resolution_value } else { '' }
 
-# rotation+GPU: transpose_cuda не существует -> вся цепочка фильтров на CPU
-\$force_cpu_filters = (\$video_rotation_status -eq '+' -and \$use_hw_accel)
+# Копия логики FFmpeg_Converter_script.ps1 (E5/D4) — держать в синхроне с production.
+# force_cpu: поворот (transpose_cuda нет) ИЛИ keep_aspect+разрешение -> CPU scale+pad
+\$force_cpu_filters = (\$use_hw_accel -and ((\$video_rotation_status -eq '+') -or (\$keep_aspect_ratio_status -eq '+' -and \$keep_aspect_ratio_value -eq 'yes' -and \$set_video_resolution)))
 \$scale_backend = if (\$force_cpu_filters) { 'cpu' } else { \$hw_accel_type }
 
 \$vf_parts = @()
@@ -55,11 +56,7 @@ if (\$video_rotation_status -eq '+') {
 if (\$set_video_resolution) {
     \$res_w, \$res_h = \$set_video_resolution -split 'x'
     if (\$keep_aspect_ratio_status -eq '+' -and \$keep_aspect_ratio_value -eq 'yes') {
-        switch (\$scale_backend) {
-            'nvidia' { \$vf_parts += \"scale_cuda=\${res_w}:\${res_h}:force_original_aspect_ratio=decrease\" }
-            'intel'  { \$vf_parts += \"scale_qsv=\${res_w}:\${res_h}:force_original_aspect_ratio=decrease\" }
-            default  { \$vf_parts += \"scale=\${res_w}:\${res_h}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=\${res_w}:\${res_h}:(ow-iw)/2:(oh-ih)/2\" }
-        }
+        \$vf_parts += \"scale=\${res_w}:\${res_h}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=\${res_w}:\${res_h}:(ow-iw)/2:(oh-ih)/2\"
     } else {
         switch (\$scale_backend) {
             'nvidia' { \$vf_parts += \"scale_cuda=\${res_w}:\${res_h}\" }
@@ -194,6 +191,12 @@ result=$(run_ps1_vf ":+:2" ":+:1280x720" ":+:yes" ":-:1.0" "nvidia")
 assert_contains "rotation+nvidia+scale → CPU scale (не scale_cuda)" \
     "scale=1280:720:force_original_aspect_ratio" "$result"
 assert_not_contains "rotation+nvidia → нет scale_cuda"  "scale_cuda"  "$result"
+
+# keep_aspect + nvidia без поворота: тоже CPU scale+pad (force_cpu), не scale_cuda
+result=$(run_ps1_vf ":-:2" ":+:1280x720" ":+:yes" ":-:1.0" "nvidia")
+assert_contains "keep_ar+nvidia → CPU scale+pad с force_divisible_by" \
+    "scale=1280:720:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=" "$result"
+assert_not_contains "keep_ar+nvidia → нет scale_cuda"  "scale_cuda"  "$result"
 assert_contains "rotation+nvidia → hwdownload в цепочке"  "hwdownload"  "$result"
 
 # ══════════════════════════════════════════════════════════════

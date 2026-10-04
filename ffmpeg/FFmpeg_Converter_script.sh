@@ -368,15 +368,13 @@ else
 	if [ -n "$set_video_resolution" ]; then
 		IFS='x' read -r res_w res_h <<< "$set_video_resolution"
 		if [ "$keep_aspect_ratio_status" = "+" ] && [ "$keep_aspect_ratio_value" = "yes" ]; then
-			case "$scale_backend" in
-				nvidia) vf_chain="${vf_chain:+$vf_chain,}scale_cuda=${res_w}:${res_h}:force_original_aspect_ratio=decrease" ;;
-				intel)  vf_chain="${vf_chain:+$vf_chain,}scale_qsv=${res_w}:${res_h}:force_original_aspect_ratio=decrease" ;;
-				# force_divisible_by=2 обязателен: на нестандартных пропорциях
+			# Только CPU scale+pad: keep_aspect с GPU всегда уходит сюда (scale_backend=cpu
+			# выше), поэтому вариантов scale_cuda/scale_qsv с decrease здесь нет — не дыра.
+			# force_divisible_by=2 обязателен: на нестандартных пропорциях
 			# force_original_aspect_ratio=decrease даёт нечётную сторону
 			# (1366×768 в рамку 1280×720 → 1280×719), а yuv420p-энкодеры такие
 			# кадры не принимают — «height not divisible by 2», файл падает.
-			*)      vf_chain="${vf_chain:+$vf_chain,}scale=${res_w}:${res_h}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${res_w}:${res_h}:(ow-iw)/2:(oh-ih)/2" ;;
-			esac
+			vf_chain="${vf_chain:+$vf_chain,}scale=${res_w}:${res_h}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${res_w}:${res_h}:(ow-iw)/2:(oh-ih)/2"
 		else
 			case "$scale_backend" in
 				nvidia) vf_chain="${vf_chain:+$vf_chain,}scale_cuda=${res_w}:${res_h}" ;;

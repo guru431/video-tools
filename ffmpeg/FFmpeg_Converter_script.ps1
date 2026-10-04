@@ -396,15 +396,13 @@ if ($audio_only -eq "yes") {
 	if ($set_video_resolution) {
 		$res_w, $res_h = $set_video_resolution -split 'x'
 		if ($keep_aspect_ratio_status -eq "+" -and $keep_aspect_ratio_value -eq "yes") {
-			switch ($scale_backend) {
-				"nvidia" { $vf_parts += "scale_cuda=${res_w}:${res_h}:force_original_aspect_ratio=decrease" }
-				"intel"  { $vf_parts += "scale_qsv=${res_w}:${res_h}:force_original_aspect_ratio=decrease" }
-				# force_divisible_by=2 обязателен: на нестандартных пропорциях
-				# force_original_aspect_ratio=decrease даёт нечётную сторону
-				# (1366×768 в рамку 1280×720 → 1280×719), а yuv420p-энкодеры такие
-				# кадры не принимают — «height not divisible by 2», файл падает.
-				default  { $vf_parts += "scale=${res_w}:${res_h}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${res_w}:${res_h}:(ow-iw)/2:(oh-ih)/2" }
-			}
+			# Только CPU scale+pad: keep_aspect с GPU всегда уходит сюда ($force_cpu_filters
+			# выше), поэтому вариантов scale_cuda/scale_qsv с decrease здесь нет — не дыра.
+			# force_divisible_by=2 обязателен: на нестандартных пропорциях
+			# force_original_aspect_ratio=decrease даёт нечётную сторону
+			# (1366×768 в рамку 1280×720 → 1280×719), а yuv420p-энкодеры такие
+			# кадры не принимают — «height not divisible by 2», файл падает.
+			$vf_parts += "scale=${res_w}:${res_h}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${res_w}:${res_h}:(ow-iw)/2:(oh-ih)/2"
 		} else {
 			switch ($scale_backend) {
 				"nvidia" { $vf_parts += "scale_cuda=${res_w}:${res_h}" }

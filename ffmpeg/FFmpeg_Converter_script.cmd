@@ -228,12 +228,10 @@ if "%audio_only%"=="yes" (
 		rem keep_ar предвычисляем — иначе else-binding отключал бы scale при статусе "-"
 		set "keep_ar=no"
 		if "!keep_aspect_ratio_status!"=="+" if "!keep_aspect_ratio_value!"=="yes" set "keep_ar=yes"
+		rem keep_ar=yes: только CPU scale+pad. С GPU сюда приходит force_cpu_filters,
+		rem см. выше, поэтому scale_cuda/scale_qsv с decrease здесь не бывает — не дыра.
 		if "!keep_ar!"=="yes" (
-			if "!scale_filter!"=="scale" (
-				if defined vf_chain (set "vf_chain=!vf_chain!,scale=!res_w!:!res_h!:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=!res_w!:!res_h!:(ow-iw)/2:(oh-ih)/2") else (set "vf_chain=scale=!res_w!:!res_h!:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=!res_w!:!res_h!:(ow-iw)/2:(oh-ih)/2")
-			) else (
-				if defined vf_chain (set "vf_chain=!vf_chain!,!scale_filter!=!res_w!:!res_h!:force_original_aspect_ratio=decrease") else (set "vf_chain=!scale_filter!=!res_w!:!res_h!:force_original_aspect_ratio=decrease")
-			)
+			if defined vf_chain (set "vf_chain=!vf_chain!,scale=!res_w!:!res_h!:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=!res_w!:!res_h!:(ow-iw)/2:(oh-ih)/2") else (set "vf_chain=scale=!res_w!:!res_h!:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=!res_w!:!res_h!:(ow-iw)/2:(oh-ih)/2")
 		) else (
 			if defined vf_chain (set "vf_chain=!vf_chain!,!scale_filter!=!res_w!:!res_h!") else (set "vf_chain=!scale_filter!=!res_w!:!res_h!")
 		)

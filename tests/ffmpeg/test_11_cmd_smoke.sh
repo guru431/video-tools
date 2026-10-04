@@ -122,6 +122,7 @@ assert_contains "DRY-RUN команда содержит входной sample.m
 assert_contains "DRY-RUN сохраняет литеральный % в имени файла" "50% off.mp4" "$output"
 assert_not_contains "имя с % не искажено (нет '50 off.mp4')" "50 off.mp4" "$output"
 assert_contains "DRY-RUN команда содержит -c:v libx264" "-c:v libx264" "$output"
+assert_contains "keep_aspect: CPU scale+pad с force_divisible_by=2" "scale=1280:720:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=1280:720" "$output"
 assert_contains "итоговая сводка напечатана" "Обработано:" "$output"
 
 # ══════════════════════════════════════════════════════════════

@@ -132,6 +132,29 @@ function Parse-Flag {
     }
 }
 
+# Выбор пункта списка по значению config.ini. Значение пункта — первое слово его
+# текста ("2 - Stereo" → "2"). Раньше всё, что не "1", молча становилось вторым
+# пунктом: `channels = +6` давал в GUI стерео, а CLI с тем же config.ini — `-ac 6`.
+# Допустимое для ffmpeg значение вне списка добавляется пунктом «из config.ini» и
+# уходит в воркер как есть (паритет с CLI); недопустимое — откат на $Default.
+# Оба случая попадают в $script:configWarnings: молча расходиться с CLI нельзя.
+function Select-ConfigComboValue {
+    param($Combo, [string]$Value, [string]$Key, [string]$ValidPattern, [string]$Default)
+    $v = "$Value".Trim()
+    for ($i = 0; $i -lt $Combo.Items.Count; $i++) {
+        if ((([string]$Combo.Items[$i]) -split ' ')[0] -eq $v) { $Combo.SelectedIndex = $i; return }
+    }
+    if ($v -match $ValidPattern) {
+        $Combo.SelectedIndex = $Combo.Items.Add("$v - из config.ini")
+        $script:configWarnings += "WARN: $Key = $v — такого пункта в списке нет, добавлен «$v - из config.ini»"
+        return
+    }
+    for ($i = 0; $i -lt $Combo.Items.Count; $i++) {
+        if ((([string]$Combo.Items[$i]) -split ' ')[0] -eq $Default) { $Combo.SelectedIndex = $i; break }
+    }
+    $script:configWarnings += "WARN: $Key = '$Value' — недопустимое значение, в форме выбрано $Default"
+}
+
 # Загрузка дефолтов из config.ini
 $_cfg_source      = Read-Config "source"      "folders" "_video_\0"
 $_cfg_destination = Read-Config "destination"  "folders" "_video_\1"
@@ -653,12 +676,13 @@ $_ge.Add($checkAudioChannels)
 $comboAudioChannels = [System.Windows.Forms.ComboBox]::new()
 $comboAudioChannels.Location = [System.Drawing.Point]::new($_ainp, 40)
 $comboAudioChannels.Size = [System.Drawing.Size]::new($_aw, 21)
-# Значение берётся ПО ИНДЕКСУ выбранного пункта, поэтому список обязан быть
+# Значение берётся из ВЫБРАННОГО пункта, поэтому список обязан быть
 # нередактируемым: набранный руками текст оставлял SelectedIndex = -1, и в
 # конфиг уезжало `-ac 0` / `transpose=` — ffmpeg падал на каждом файле.
 $comboAudioChannels.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
 $comboAudioChannels.Items.AddRange(@("1 - Mono", "2 - Stereo"))
-$comboAudioChannels.SelectedIndex = if ($_cfg_audio_channels.value -eq "1") { 0 } else { 1 }
+# Каналы: любое целое >= 1 (ffmpeg -ac), ведущие нули не в счёт.
+Select-ConfigComboValue $comboAudioChannels $_cfg_audio_channels.value "[audio] channels" '^0*[1-9]\d*$' "2"
 $_ge.Add($comboAudioChannels)
 
 # Audio Bitrate
@@ -846,7 +870,8 @@ $comboVideoRotation.Size = [System.Drawing.Size]::new($_v2w, 21)
 # конфиг уезжало `-ac 0` / `transpose=` — ffmpeg падал на каждом файле.
 $comboVideoRotation.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
 $comboVideoRotation.Items.AddRange(@("1 - По часовой", "2 - Против часовой"))
-$comboVideoRotation.SelectedIndex = if ($_cfg_video_rotation.value -eq "1") { 0 } else { 1 }
+# Поворот: 0..3 — все значения фильтра transpose (0 и 3 — с отражением).
+Select-ConfigComboValue $comboVideoRotation $_cfg_video_rotation.value "[video] rotation" '^[0-3]$' "2"
 $_ge.Add($comboVideoRotation)
 
 # Video Subtitles
@@ -1583,7 +1608,10 @@ $buttonRun.Add_Click({
 
     # Audio settings
     $script:audio_codec          = if ($checkAudioCodec.Checked)      { ":+:$($comboAudioCodec.Text)" }    else { ":-:$($comboAudioCodec.Text)" }
-    $script:audio_number_channels = if ($checkAudioChannels.Checked)  { ":+:$($comboAudioChannels.SelectedIndex + 1)" } else { ":-:$($comboAudioChannels.SelectedIndex + 1)" }
+    # Как и rotation — первое слово текста пункта, а не SelectedIndex+1: пункт
+    # «6 - из config.ini» (Select-ConfigComboValue) обязан уехать в воркер как 6.
+    $_chVal = ([string]$comboAudioChannels.SelectedItem -split ' ')[0]
+    $script:audio_number_channels = if ($checkAudioChannels.Checked)  { ":+:$_chVal" } else { ":-:$_chVal" }
     $script:audio_bitrate        = if ($checkAudioBitrate.Checked)    { ":+:$($textAudioBitrate.Text)" }           else { ":-:$($textAudioBitrate.Text)" }
     $script:audio_sampling_rate  = if ($checkAudioSampleRate.Checked)  { ":+:$($textAudioSampleRate.Text)" }        else { ":-:$($textAudioSampleRate.Text)" }
     $script:audio_normalize      = if ($checkAudioNorm.Checked)       { ":+:$($comboAudioNorm.Text)" }     else { ":-:$($comboAudioNorm.Text)" }

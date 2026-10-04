@@ -194,4 +194,48 @@ for _v in asr_enabled asr_endpoint asr_api_key asr_api_key_command asr_pinned_pu
     assert_contains "$_v уезжает в runspace" "'$_v'" "$gui_text"
 done
 
+suite "GUI: значение config.ini вне пунктов списка не схлопывается молча"
+# Раньше всё, что не "1", становилось вторым пунктом: `channels = +6` давал в GUI
+# стерео, а CLI с тем же config.ini — `-ac 6`. Форму в тесте не открыть, поэтому
+# функцию берём из НАСТОЯЩЕГО исходника GUI разбором AST и гоняем на живом ComboBox.
+assert_contains "каналы уходят первым словом пункта" \
+    "\$_chVal = ([string]\$comboAudioChannels.SelectedItem -split ' ')[0]" "$gui_text"
+assert_not_contains "каналы больше не по SelectedIndex+1" 'comboAudioChannels.SelectedIndex + 1' "$gui_text"
+_combo_ps=$(mktemp_suffix "${TMPDIR:-/tmp}/gui_combo_" .ps1)
+cat > "$_combo_ps" <<'PSEOF'
+param([string]$Gui)
+Add-Type -AssemblyName System.Windows.Forms
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($Gui, [ref]$null, [ref]$null)
+$fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Select-ConfigComboValue' }, $true)
+if (-not $fn) { Write-Output 'NOFUNC'; exit 1 }
+. ([scriptblock]::Create($fn.Extent.Text))
+function T([string]$Tag, [string[]]$Items, [string]$Value, [string]$Pattern) {
+    $script:configWarnings = @()
+    $c = [System.Windows.Forms.ComboBox]::new()
+    $c.Items.AddRange($Items)
+    Select-ConfigComboValue $c $Value 'k' $Pattern '2'
+    Write-Output ("{0}={1}|{2}|{3}" -f $Tag, ([string]$c.SelectedItem -split ' ')[0], $c.Items.Count, $script:configWarnings.Count)
+}
+$ch = @('1 - Mono', '2 - Stereo'); $chP = '^0*[1-9]\d*$'
+$rot = @('1 - cw', '2 - ccw'); $rotP = '^[0-3]$'   # ASCII: файл без BOM, PS 5.1 прочёл бы как ANSI
+T 'CH1' $ch '1' $chP
+T 'CH6' $ch '6' $chP
+T 'CH0' $ch '0' $chP
+T 'CHX' $ch 'abc' $chP
+T 'R3' $rot '3' $rotP
+T 'R0' $rot '0' $rotP
+T 'R5' $rot '5' $rotP
+PSEOF
+_combo_out=$("$PS_CMD" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$_combo_ps")" \
+    -Gui "$(cygpath -w "$GUI")" 2>&1 | tr -d '\r')
+rm -f "$_combo_ps"
+# Формат: <выбранное значение>|<пунктов в списке>|<предупреждений>.
+assert_contains "channels = 1 — штатный пункт, без WARN"        "CH1=1|2|0" "$_combo_out"
+assert_contains "channels = 6 — пункт «из config.ini» + WARN"   "CH6=6|3|1" "$_combo_out"
+assert_contains "channels = 0 — откат на 2 + WARN"              "CH0=2|2|1" "$_combo_out"
+assert_contains "channels = abc — откат на 2 + WARN"            "CHX=2|2|1" "$_combo_out"
+assert_contains "rotation = 3 — пункт «из config.ini» + WARN"   "R3=3|3|1"  "$_combo_out"
+assert_contains "rotation = 0 — пункт «из config.ini» + WARN"   "R0=0|3|1"  "$_combo_out"
+assert_contains "rotation = 5 — откат на 2 + WARN"              "R5=2|2|1"  "$_combo_out"
+
 summary

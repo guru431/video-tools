@@ -355,6 +355,18 @@ assert_not_contains "hw_accel = off → hardware НЕ включён" "hw=yes"  
 result=$(resolve_hw_cmd "libx264" "nvida" "h264_nvenc")
 assert_contains "hw_accel = nvida → предупреждение с [gpu] hw_accel" "Неизвестное значение [gpu] hw_accel" "$result"
 assert_contains "предупреждение перечисляет off"                    "nvidia, intel или off"               "$result"
+# 6) регистр значения не важен — как в .sh/.ps1 и GUI.
+result=$(resolve_hw_cmd "libx264" "NVIDIA" "h264_nvenc")
+assert_contains "hw_accel = NVIDIA → h264_nvenc"            "codec=h264_nvenc"       "$result"
+assert_contains "hw_accel = NVIDIA → use_hw_accel=yes"      "hw=yes"                 "$result"
+assert_not_contains "hw_accel = NVIDIA → без предупреждения" "Неизвестное значение"  "$result"
+# 7) готовое GPU-имя принимается только по СУФФИКСУ (как *${hw_suffix} в .sh).
+result=$(resolve_hw_cmd "hevc_nvenc" "nvidia" "h264_nvenc hevc_nvenc")
+assert_contains "готовое hevc_nvenc → принято как есть"     "codec=hevc_nvenc"       "$result"
+assert_contains "готовое hevc_nvenc → use_hw_accel=yes"     "hw=yes"                 "$result"
+result=$(resolve_hw_cmd "foo_nvencbar" "nvidia" "h264_nvenc foo_nvencbar")
+assert_contains "foo_nvencbar (подстрока) → нет NVENC-варианта" "нет NVENC-варианта" "$result"
+assert_not_contains "foo_nvencbar → hardware НЕ включён"        "hw=yes"             "$result"
 rm -f "$MOCK_FF"
 
 # ══════════════════════════════════════════════════════════════

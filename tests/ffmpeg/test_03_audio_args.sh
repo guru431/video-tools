@@ -140,6 +140,10 @@ assert_contains "normalize +loudness: предупреждение (текст �
     "[ПРЕДУПРЕЖДЕНИЕ] Неизвестное значение [audio] normalize = 'loudness' (ожидается loudnorm или dynaudnorm). Нормализация звука не применяется." "$OUT"
 OUT=$(run_script 'audio_normalize=":+:loudnorm"')
 assert_not_contains "normalize +loudnorm: без предупреждения" "[audio] normalize" "$OUT"
+# Регистр не важен, как в .ps1/.cmd; дальше (и в JSON удалённой службы) — канонический вид.
+OUT=$(run_script 'audio_normalize=":+:LoudNorm"')
+assert_contains "normalize +LoudNorm: фильтр применён"        "loudnorm=I=-16" "$(getv "$OUT" af_chain)"
+assert_not_contains "normalize +LoudNorm: без предупреждения" "[audio] normalize" "$OUT"
 
 # ══════════════════════════════════════════════════════════════
 suite "Аудио: audio_only (F06 — контейнер/кодек из [audio] codec)"

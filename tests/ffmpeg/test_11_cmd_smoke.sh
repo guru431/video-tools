@@ -171,6 +171,10 @@ assert_not_contains "normalize = loudness: фильтра нет" "loudnorm=I=" 
 build_and_run 'set "audio_normalize=:+:dynaudnorm"'
 assert_not_contains "normalize = dynaudnorm: без предупреждения" "[audio] normalize" "$SMOKE_OUT"
 assert_contains "normalize = dynaudnorm: фильтр в команде" "dynaudnorm" "$SMOKE_OUT"
+# Регистр не важен — как в SH/PS1.
+build_and_run 'set "audio_normalize=:+:LoudNorm"'
+assert_not_contains "normalize = LoudNorm: без предупреждения" "[audio] normalize" "$SMOKE_OUT"
+assert_contains "normalize = LoudNorm: фильтр в команде" "loudnorm=I=" "$SMOKE_OUT"
 
 # ══════════════════════════════════════════════════════════════
 suite "CMD: '!' в пути ffmpeg не теряется"

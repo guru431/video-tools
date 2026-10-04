@@ -118,6 +118,15 @@ N nok    '+' 'loudnorm'
 N nokdyn '+' 'dynaudnorm'
 N noff   '-' 'loudness'
 Write-Output ("typotext={0}|{1}" -f $w.Contains("[gpu] hw_accel = 'nvida'"), ($w.Contains('nvidia, intel') -and $w.Contains(' off)')))
+# Canonical case of enum values (it is what goes into the remote service JSON): the worker's own ifs (AST).
+$cIfs = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.IfStatementAst] -and
+    ($n.Clauses[0].Item1.Extent.Text -match '^\$(hw_accel|audio_normalize)_value -in ') }, $true))
+$hw_accel_value = 'NVIDIA'; $audio_normalize_value = 'LoudNorm'
+foreach ($i in $cIfs) { . ([scriptblock]::Create($i.Extent.Text)) }
+Write-Output ("canon={0}|{1}|{2}" -f $cIfs.Count, $hw_accel_value, $audio_normalize_value)
+$hw_accel_value = 'Nvida'; $audio_normalize_value = 'Loudness'
+foreach ($i in $cIfs) { . ([scriptblock]::Create($i.Extent.Text)) }
+Write-Output ("canonkeep={0}|{1}" -f $hw_accel_value, $audio_normalize_value)
 PSEOF
 _chains_out=$("$PS_CMD" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$_chain_ps")" \
     -Script "$(cygpath -w "$SCRIPT_PS1")" 2>&1)
@@ -258,6 +267,10 @@ chain typotext; assert_eq "WARN опечатки: секция [gpu], off в с�
 chain off;      assert_eq "hw_accel = off → CPU без предупреждения"               "False||libx264||0"              "$result"
 assert_contains "без ffmpeg off не печатает «ускорение не проверяется»" \
     'if ($hw_accel_status -eq "+" -and $hw_accel_value -ne "off" -and -not $ffmpeg_available) {' "$src_ps1"
+# Регистр: локально switch/-eq и так без учёта регистра, но в JSON удалённой службы
+# значение уезжает как есть — воркер приводит его к каноническому виду (паритет с .sh).
+chain canon;     assert_eq "NVIDIA/LoudNorm → nvidia/loudnorm (оба if найдены)"   "2|nvidia|loudnorm"  "$result"
+chain canonkeep; assert_eq "неизвестные значения не трогаются (их ловит WARN)"   "Nvida|Loudness"     "$result"
 
 # ══════════════════════════════════════════════════════════════
 suite "PS1 script.ps1: фиксы Task 3 (анализ исходника)"

@@ -186,6 +186,13 @@ IFS=':' read -r foo gpu_rc_status gpu_rc_value <<< "$gpu_rc"
 IFS=':' read -r foo playback_speed_status playback_speed_value <<< "$playback_speed"
 IFS=':' read -r foo keep_aspect_ratio_status keep_aspect_ratio_value <<< "$keep_aspect_ratio"
 IFS=':' read -r foo output_container_status output_container_value <<< "$output_container"
+# Значения-перечисления сравниваются без учёта регистра, как в .ps1 (switch/-eq) и
+# GUI: «+NVIDIA» в config.ini молча уводил кодирование на процессор только в .sh.
+# Приводим к каноническому виду один раз — дальше (и в JSON удалённой службы) он один.
+_ncm=""; shopt -q nocasematch && _ncm=1; shopt -s nocasematch
+case "$hw_accel_value" in nvidia) hw_accel_value=nvidia ;; intel) hw_accel_value=intel ;; off) hw_accel_value=off ;; esac
+case "$audio_normalize_value" in loudnorm) audio_normalize_value=loudnorm ;; dynaudnorm) audio_normalize_value=dynaudnorm ;; esac
+[ -n "$_ncm" ] || shopt -u nocasematch
 
 # --- Формирование аудио-параметров ---
 if [ "$audio_codec_status" = "+" ]; then set_audio_codec="-c:a $audio_codec_value"; else set_audio_codec=""; fi

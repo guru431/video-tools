@@ -166,6 +166,11 @@ OUT=$(run_script "nvenc" 'hw_accel=":+:nvida"' 'video_codec=":+:libx264"')
 assert_eq "hw_accel = +nvida: use_hw_accel=no"          "no"      "$(getv "$OUT" use_hw_accel)"
 assert_contains "hw_accel = +nvida: предупреждение с [gpu] hw_accel" \
     "Неизвестное значение [gpu] hw_accel = 'nvida' (ожидается nvidia, intel или off)" "$OUT"
+# Регистр значения не важен — как в .ps1 (switch) и GUI: «+NVIDIA» молча уводил на процессор.
+OUT=$(run_script "nvenc" 'hw_accel=":+:NVIDIA"' 'video_codec=":+:libx264"')
+assert_eq "hw_accel = +NVIDIA: регистр не важен → GPU"   "yes"        "$(getv "$OUT" use_hw_accel)"
+assert_eq "hw_accel = +NVIDIA: libx264 → h264_nvenc"     "h264_nvenc" "$(getv "$OUT" set_video_codec)"
+assert_not_contains "hw_accel = +NVIDIA: без предупреждения" "Неизвестное значение" "$OUT"
 
 # ══════════════════════════════════════════════════════════════
 suite "F6: прямой hw-кодек при выключенном hw_accel → -cq/-global_quality, не -crf"

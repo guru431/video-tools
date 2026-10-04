@@ -218,6 +218,10 @@ $_, $gpu_rc_status, $gpu_rc_value = $gpu_rc -split ":"
 $_, $playback_speed_status, $playback_speed_value = $playback_speed -split ":"
 $_, $keep_aspect_ratio_status, $keep_aspect_ratio_value = $keep_aspect_ratio -split ":"
 $_, $output_container_status, $output_container_value = $output_container -split ":"
+# Значения-перечисления — к каноническому виду (паритет с .sh/.cmd): локально switch/-eq
+# и так без учёта регистра, но в JSON удалённой службы уезжало бы «LOUDNORM» как есть.
+if ($hw_accel_value -in @('nvidia', 'intel', 'off')) { $hw_accel_value = "$hw_accel_value".ToLowerInvariant() }
+if ($audio_normalize_value -in @('loudnorm', 'dynaudnorm')) { $audio_normalize_value = "$audio_normalize_value".ToLowerInvariant() }
 
 # --- Формирование аудио-параметров ---
 $set_audio_codec = if ($audio_codec_status -eq "+") { "-c:a $audio_codec_value" } else { "" }

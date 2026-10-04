@@ -326,14 +326,15 @@ if "!playback_speed_status!"=="+" if not "!playback_speed_value!"=="1.0" (
 
 rem D5. Нормализация звука
 if "!audio_normalize_status!"=="+" (
-	if "!audio_normalize_value!"=="loudnorm" (
+	rem /i — без учёта регистра, как .sh/.ps1.
+	if /i "!audio_normalize_value!"=="loudnorm" (
 		if defined af_chain (set "af_chain=!af_chain!,loudnorm=I=-16:TP=-1.5:LRA=11") else (set "af_chain=loudnorm=I=-16:TP=-1.5:LRA=11")
 	)
-	if "!audio_normalize_value!"=="dynaudnorm" (
+	if /i "!audio_normalize_value!"=="dynaudnorm" (
 		if defined af_chain (set "af_chain=!af_chain!,dynaudnorm") else (set "af_chain=dynaudnorm")
 	)
 	rem Иное значение молча не делало ничего. Паритет с .sh и .ps1.
-	if not "!audio_normalize_value!"=="loudnorm" if not "!audio_normalize_value!"=="dynaudnorm" echo [ПРЕДУПРЕЖДЕНИЕ] Неизвестное значение [audio] normalize = '!audio_normalize_value!' ^(ожидается loudnorm или dynaudnorm^). Нормализация звука не применяется.
+	if /i not "!audio_normalize_value!"=="loudnorm" if /i not "!audio_normalize_value!"=="dynaudnorm" echo [ПРЕДУПРЕЖДЕНИЕ] Неизвестное значение [audio] normalize = '!audio_normalize_value!' ^(ожидается loudnorm или dynaudnorm^). Нормализация звука не применяется.
 )
 
 set "audio_settings=!set_audio_codec! !set_audio_number_channels! !set_audio_bitrate! !set_audio_sampling_rate!"
@@ -1170,10 +1171,11 @@ rem   * кодек вне маппинга (например libvpx-vp9) ост�
 rem     -hwaccel_output_format cuda уже включался -> софт получал hardware-кадры.
 :resolve_hw
 set "hw_suffix=" & set "hw_label=" & set "hw_try_type=" & set "hw_try_args="
-if "%hw_accel_value%"=="nvidia" (set "hw_suffix=_nvenc" & set "hw_label=NVENC" & set "hw_try_type=nvidia" & set "hw_try_args=-hwaccel cuda -hwaccel_output_format cuda")
-if "%hw_accel_value%"=="intel"  (set "hw_suffix=_qsv"   & set "hw_label=QSV"   & set "hw_try_type=intel"  & set "hw_try_args=-hwaccel qsv -hwaccel_output_format qsv")
+rem /i — без учёта регистра, как .sh/.ps1 и GUI: «+NVIDIA» не уводит молча на процессор.
+if /i "%hw_accel_value%"=="nvidia" (set "hw_suffix=_nvenc" & set "hw_label=NVENC" & set "hw_try_type=nvidia" & set "hw_try_args=-hwaccel cuda -hwaccel_output_format cuda")
+if /i "%hw_accel_value%"=="intel"  (set "hw_suffix=_qsv"   & set "hw_label=QSV"   & set "hw_try_type=intel"  & set "hw_try_args=-hwaccel qsv -hwaccel_output_format qsv")
 rem off — документированное значение config.ini.example: процессор, без предупреждения.
-if "%hw_accel_value%"=="off" exit /b 0
+if /i "%hw_accel_value%"=="off" exit /b 0
 rem Опечатка в значении (+nvida, +amd) означала «считаем на процессоре» — молча.
 if not defined hw_suffix echo [ПРЕДУПРЕЖДЕНИЕ] Неизвестное значение [gpu] hw_accel = "%hw_accel_value%" ^(ожидается nvidia, intel или off^). Кодирование идёт на процессоре.
 if not defined hw_suffix exit /b 0
@@ -1184,8 +1186,11 @@ if "%set_video_codec%"=="libx264"   set "hw_candidate=h264%hw_suffix%"
 if "%set_video_codec%"=="libx265"   set "hw_candidate=hevc%hw_suffix%"
 if "%set_video_codec%"=="libsvtav1" set "hw_candidate=av1%hw_suffix%"
 if not defined hw_candidate (
+	rem Готовое GPU-имя — только по СУФФИКСУ (как *${hw_suffix} в .sh): хвост после
+	rem первого вхождения суффикса пуст. Прежняя проверка «хвост отличается от имени»
+	rem принимала и foo_nvencbar.
 	call set "_tail=%%set_video_codec:*%hw_suffix%=%%"
-	if not "!_tail!"=="%set_video_codec%" set "hw_candidate=%set_video_codec%"
+	if defined set_video_codec if "!_tail!"=="" set "hw_candidate=%set_video_codec%"
 )
 if not defined hw_candidate (
 	echo [ПРЕДУПРЕЖДЕНИЕ] У кодека %set_video_codec% нет %hw_label%-варианта. Используется программное кодирование.

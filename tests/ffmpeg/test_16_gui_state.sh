@@ -284,6 +284,20 @@ $unset = $ast.Find({ param($x) $x -is [System.Management.Automation.Language.Ass
     $x.Left.Extent.Text -eq '$script:GpuUnsetItem' }, $true)
 if (-not $unset) { Write-Output "NOFUNC=GpuUnsetItem"; exit 1 }
 . ([scriptblock]::Create($unset.Extent.Text))
+# Every form list read through SelectedItem (directly or via Get-GpuComboArg) must be a
+# DropDownList: typed text of an editable list has no SelectedItem and reached the
+# worker empty (`-preset ""`).
+$readers = @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.MemberExpressionAst] -and
+        $x.Member.Extent.Text -eq 'SelectedItem' }, $true) | ForEach-Object { $_.Expression.Extent.Text })
+$readers += @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.CommandAst] -and
+        $x.GetCommandName() -eq 'Get-GpuComboArg' }, $true) | ForEach-Object { $_.CommandElements[1].Extent.Text })
+$readers = @($readers | Where-Object { $_ -clike '$combo*' -or $_ -clike '$cmb*' } | Sort-Object -Unique)
+Write-Output ("READERS={0}" -f $readers.Count)
+foreach ($r in $readers) {
+    $dd = $ast.Find({ param($x) $x -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+        $x.Left.Extent.Text -eq "$r.DropDownStyle" -and $x.Right.Extent.Text -match 'DropDownList' }, $true)
+    if (-not $dd) { Write-Output "EDITABLE=$r" }
+}
 # Fill statement: first "$Combo.Items.AddRange(" whose text contains $Like.
 function Get-Fill([string]$Combo, [string]$Like) {
     $n = $ast.Find({ param($x) $x -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and
@@ -376,7 +390,11 @@ assert_contains "NVENC preset = + (пусто) — «не задано», без
 assert_contains "QSV preset = -p5 (шаблон) — «не задано», без WARN" "PIO=:-:|8|0"       "$_combo2_out"
 assert_contains "tune = -hq — «не задано», без WARN"                "TO=:-:|5|0"        "$_combo2_out"
 assert_contains "rc = -vbr — «не задано», без WARN"                 "RCO=:-:|4|0"       "$_combo2_out"
-assert_contains "GPU выключен — пресет уходит выключенным"          "GOFF=:-:p5"        "$_combo2_out"# Субтитры: CLI знает только burn/meta, иное молча не делает ничего — GUI
+assert_contains "GPU выключен — пресет уходит выключенным"          "GOFF=:-:p5"        "$_combo2_out"
+# Список, читаемый через SelectedItem (напрямую или через Get-GpuComboArg), обязан быть
+# DropDownList: набранный руками текст не имеет SelectedItem и уходил пустым.
+assert_not_contains "списки, читаемые через SelectedItem, — DropDownList" "EDITABLE=" "$_combo2_out"
+assert_not_contains "списки, читаемые через SelectedItem, найдены" "READERS=0" "$_combo2_out"# Субтитры: CLI знает только burn/meta, иное молча не делает ничего — GUI
 # не имеет права молча прожигать.
 assert_contains "subtitles = meta — пункт meta"                     "SM=meta|2|0"    "$_combo2_out"
 assert_contains "subtitles = burn — пункт burn"                     "SB=burn|2|0"    "$_combo2_out"

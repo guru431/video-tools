@@ -566,6 +566,10 @@ $_go.Add($labelGpuPreset)
 $comboGpuPreset = [System.Windows.Forms.ComboBox]::new()
 $comboGpuPreset.Location = [System.Drawing.Point]::new(300, 84)
 $comboGpuPreset.Size = [System.Drawing.Size]::new(90, 21)
+# Списки GPU — DropDownList: значение читается из SelectedItem, и набранный руками
+# текст уходил в воркер пустым (`-preset ""`). Допустимое значение config.ini вне
+# списка добавляется пунктом «из config.ini» (Select-ConfigComboValue).
+$comboGpuPreset.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
 $comboGpuPreset.Items.AddRange(@($script:GpuUnsetItem, "p1", "p2", "p3", "p4", "p5", "p6", "p7"))
 $comboGpuPreset.SelectedIndex = 5
 $comboGpuPreset.Visible = $false
@@ -582,6 +586,7 @@ $_go.Add($labelGpuTune)
 $comboGpuTune = [System.Windows.Forms.ComboBox]::new()
 $comboGpuTune.Location = [System.Drawing.Point]::new(439, 84)
 $comboGpuTune.Size = [System.Drawing.Size]::new(70, 21)
+$comboGpuTune.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
 $comboGpuTune.Items.AddRange(@($script:GpuUnsetItem, "hq", "ll", "ull", "lossless"))
 $comboGpuTune.SelectedIndex = 1
 $comboGpuTune.Visible = $false
@@ -598,6 +603,7 @@ $_go.Add($labelGpuRC)
 $comboGpuRC = [System.Windows.Forms.ComboBox]::new()
 $comboGpuRC.Location = [System.Drawing.Point]::new(545, 84)
 $comboGpuRC.Size = [System.Drawing.Size]::new(70, 21)
+$comboGpuRC.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
 $comboGpuRC.Items.AddRange(@($script:GpuUnsetItem, "vbr", "cbr", "constqp"))
 $comboGpuRC.SelectedIndex = 1
 $comboGpuRC.Visible = $false

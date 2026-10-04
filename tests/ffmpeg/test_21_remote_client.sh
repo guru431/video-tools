@@ -758,7 +758,7 @@ suite "remote: временные файлы с ключом учтены для
 # curl-конфиг с Bearer-ключом и stderr curl'а не попадали в _tmp_files script.sh:
 # Ctrl+C во время отправки куска оставлял в /tmp файл с ключом. Реестр — НАСТОЯЩИЙ,
 # из production (до этого места модуль жил без него — так его подключает этот
-# тест); curl подменён функцией, которая в момент вызова записывает, что учтено.
+# тест), а вместо curl — функция, которая в момент вызова записывает, что учтено.
 eval "$(sed -n '/^_tmp_files=()/p; /^_register_tmp() {/p' "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.sh")"
 _probe="$(mktemp "${TMPDIR:-/tmp}/remote_probe_XXXXXX")"
 _probe_tail=""

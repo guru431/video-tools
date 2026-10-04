@@ -260,37 +260,52 @@ $hw_decode_args = @()
 if ($hw_accel_status -eq "+" -and -not $ffmpeg_available) {
 	Write-Host "[ПРЕДУПРЕЖДЕНИЕ] Локального ffmpeg нет — аппаратное ускорение не проверяется, выбор энкодера остаётся за службой."
 }
-if ($hw_accel_status -eq "+" -and $ffmpeg_available) {
-	$encoders_list = & $ffmpeg -encoders 2>&1 | Out-String
+# Решение «какой энкодер и включать ли hardware» — чистая функция над значением
+# hw_accel, кодеком и выводом `ffmpeg -encoders`: тест (test_09) берёт её из этого
+# файла разбором AST, как цепочки фильтров. Прежняя инлайн-копия в тесте разошлась
+# с кодом (подстрочный поиск вместо якоря, без готовых GPU-имён). Предупреждение
+# функция возвращает, печатает вызывающий.
+function Resolve-HwEncoder {
+	param([string]$HwAccelValue, [string]$VideoCodec, [string]$EncodersList)
+	$r = @{ UseHwAccel = $false; Type = ""; DecodeArgs = @(); Codec = $VideoCodec; Warning = "" }
 	$hw_suffix = ""; $hw_label = ""; $hw_try_args = @(); $hw_try_type = ""
-	switch ($hw_accel_value) {
+	switch ($HwAccelValue) {
 		"nvidia" { $hw_suffix = "_nvenc"; $hw_label = "NVENC"; $hw_try_type = "nvidia"; $hw_try_args = @("-hwaccel", "cuda", "-hwaccel_output_format", "cuda") }
 		"intel"  { $hw_suffix = "_qsv";   $hw_label = "QSV";   $hw_try_type = "intel";  $hw_try_args = @("-hwaccel", "qsv", "-hwaccel_output_format", "qsv") }
 		# Опечатка в значении (+nvida, +amd) означала «считаем на процессоре» — молча.
-		default  { Write-Host "[ПРЕДУПРЕЖДЕНИЕ] Неизвестное значение [performance] hw_accel = '$hw_accel_value' (ожидается nvidia или intel). Кодирование идёт на процессоре." }
+		default  { $r.Warning = "[ПРЕДУПРЕЖДЕНИЕ] Неизвестное значение [performance] hw_accel = '$HwAccelValue' (ожидается nvidia или intel). Кодирование идёт на процессоре." }
 	}
-	if ($hw_suffix) {
-		# Кандидат: маппинг software→GPU либо уже готовое GPU-имя от пользователя.
-		$hw_candidate = switch -Regex ($set_video_codec) {
-			'^libx264$'    { "h264$hw_suffix"; break }
-			'^libx265$'    { "hevc$hw_suffix"; break }
-			'^libsvtav1$'  { "av1$hw_suffix";  break }
-			([regex]::Escape($hw_suffix) + '$') { $set_video_codec; break }
-			default        { "" }
-		}
-		if (-not $hw_candidate) {
-			Write-Host "[ПРЕДУПРЕЖДЕНИЕ] У кодека $set_video_codec нет $hw_label-варианта. Используется программное кодирование."
-		# Якорим имя по границам столбца: подстрочный match поймал бы av1_nvenc
-		# в строке про av1_nvenc_hypothetical и наоборот.
-		} elseif ($encoders_list -match "(?m)^\s*[A-Z.]+\s+$([regex]::Escape($hw_candidate))(\s|$)") {
-			$use_hw_accel = $true
-			$hw_accel_type = $hw_try_type
-			$hw_decode_args = $hw_try_args
-			$set_video_codec = $hw_candidate
-		} else {
-			Write-Host "[ПРЕДУПРЕЖДЕНИЕ] Энкодер $hw_candidate отсутствует в данной сборке ffmpeg. Используется программное кодирование."
-		}
+	if (-not $hw_suffix) { return $r }
+	# Кандидат: маппинг software→GPU либо уже готовое GPU-имя от пользователя.
+	$hw_candidate = switch -Regex ($VideoCodec) {
+		'^libx264$'    { "h264$hw_suffix"; break }
+		'^libx265$'    { "hevc$hw_suffix"; break }
+		'^libsvtav1$'  { "av1$hw_suffix";  break }
+		([regex]::Escape($hw_suffix) + '$') { $VideoCodec; break }
+		default        { "" }
 	}
+	if (-not $hw_candidate) {
+		$r.Warning = "[ПРЕДУПРЕЖДЕНИЕ] У кодека $VideoCodec нет $hw_label-варианта. Используется программное кодирование."
+	# Якорим имя по границам столбца: подстрочный match поймал бы av1_nvenc
+	# в строке про av1_nvenc_hypothetical и наоборот.
+	} elseif ($EncodersList -match "(?m)^\s*[A-Z.]+\s+$([regex]::Escape($hw_candidate))(\s|$)") {
+		$r.UseHwAccel = $true
+		$r.Type = $hw_try_type
+		$r.DecodeArgs = $hw_try_args
+		$r.Codec = $hw_candidate
+	} else {
+		$r.Warning = "[ПРЕДУПРЕЖДЕНИЕ] Энкодер $hw_candidate отсутствует в данной сборке ffmpeg. Используется программное кодирование."
+	}
+	return $r
+}
+if ($hw_accel_status -eq "+" -and $ffmpeg_available) {
+	$encoders_list = & $ffmpeg -encoders 2>&1 | Out-String
+	$hw = Resolve-HwEncoder -HwAccelValue $hw_accel_value -VideoCodec $set_video_codec -EncodersList $encoders_list
+	if ($hw.Warning) { Write-Host $hw.Warning }
+	$use_hw_accel = $hw.UseHwAccel
+	$hw_accel_type = $hw.Type
+	$hw_decode_args = $hw.DecodeArgs
+	$set_video_codec = $hw.Codec
 }
 
 # --- Время начала и длительности ---

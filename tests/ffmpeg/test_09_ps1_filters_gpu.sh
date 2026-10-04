@@ -3,8 +3,8 @@
 # test_09_ps1_filters_gpu.sh — Тест PS1: фильтры и GPU
 # Тестирует: vf (поворот, масштаб, скорость), af (atempo каскад,
 # loudnorm), GPU encoder check (nvidia/intel/off).
-# Цепочки vf/af — настоящие функции воркера (разбор AST), без запуска
-# полного скрипта; GPU encoder check — пока инлайн-пересказ (см. хелпер).
+# Цепочки vf/af и выбор GPU-энкодера — настоящие функции воркера (разбор AST),
+# без запуска полного скрипта.
 # ============================================================
 
 TESTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -35,11 +35,14 @@ SCRIPT_PS1="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1"
 # Аргументы V: тег, поворот (статус, значение), разрешение ('' — выкл.),
 # keep_aspect (статус, значение), скорость (статус, значение), GPU ('' — нет).
 # Аргументы A: тег, скорость (статус, значение), нормализация (статус, значение).
+# Аргументы G (Resolve-HwEncoder — выбор GPU-энкодера; прежняя инлайн-копия искала
+# любое вхождение nvenc/qsv и не знала готовых GPU-имён): тег, hw_accel, кодек,
+# вывод `ffmpeg -encoders`. Строка: включён|тип|кодек|аргументы декодера|предупреждение(0/1).
 _chain_ps=$(mktemp_suffix "${TMPDIR:-/tmp}/ps1_chains_" .ps1)
 cat > "$_chain_ps" <<'PSEOF'
 param([string]$Script)
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($Script, [ref]$null, [ref]$null)
-foreach ($name in 'Get-VideoFilterChain', 'Get-AudioFilterChain') {
+foreach ($name in 'Get-VideoFilterChain', 'Get-AudioFilterChain', 'Resolve-HwEncoder') {
     $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true)
     if (-not $fn) { Write-Output "NOFUNC=$name"; exit 1 }
     . ([scriptblock]::Create($fn.Extent.Text))
@@ -80,6 +83,24 @@ A loud      '-' '1.0'  '+' 'loudnorm'
 A dyn       '-' '1.0'  '+' 'dynaudnorm'
 A normoff   '-' '1.0'  '-' 'loudnorm'
 A spnorm    '+' '1.5'  '+' 'loudnorm'
+function G([string]$Tag, [string]$Hw, [string]$Codec, [string]$Enc) {
+    $r = Resolve-HwEncoder -HwAccelValue $Hw -VideoCodec $Codec -EncodersList $Enc
+    Write-Output ("{0}={1}|{2}|{3}|{4}|{5}" -f $Tag, $r.UseHwAccel, $r.Type, $r.Codec, ($r.DecodeArgs -join ' '), [int][bool]$r.Warning)
+}
+$nv  = "Encoders:`n V....D h264_nvenc            NVIDIA NVENC H.264 encoder`n V....D hevc_nvenc            NVIDIA NVENC hevc encoder"
+$qsv = "Encoders:`n V....D h264_qsv              H.264 QSV encoder`n V....D hevc_qsv              HEVC QSV encoder"
+$hyp = "Encoders:`n V....D av1_nvenc_hypothetical  not a real encoder"
+G nv264     'nvidia' 'libx264'    $nv
+G nvnone    'nvidia' 'libx264'    'no matching encoders'
+G nvav1     'nvidia' 'libsvtav1'  $nv
+G nvanchor  'nvidia' 'libsvtav1'  $hyp
+G nvready   'nvidia' 'hevc_nvenc' $nv
+G nvvp9     'nvidia' 'libvpx-vp9' $nv
+G nvcase    'NVIDIA' 'libx264'    $nv
+G qsv265    'intel'  'libx265'    $qsv
+G qsvnone   'intel'  'libx264'    'no matching encoders'
+G qsvready  'intel'  'h264_qsv'   $qsv
+G typo      'nvida'  'libx264'    $nv
 PSEOF
 _chains_out=$("$PS_CMD" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$_chain_ps")" \
     -Script "$(cygpath -w "$SCRIPT_PS1")" 2>&1)
@@ -101,61 +122,11 @@ src_ps1="$(cat "$SCRIPT_PS1")"
 assert_contains "воркер строит -vf через Get-VideoFilterChain"  '$vf_parts = @(Get-VideoFilterChain' "$src_ps1"
 assert_contains "воркер строит -af через Get-AudioFilterChain"  '$af_parts = @(Get-AudioFilterChain' "$src_ps1"
 
-# ── Хелпер: GPU encoder check ─────────────────────────────────────────────
-run_ps1_gpu() {
-    local hw_accel="${1:-:-:nvidia}"
-    local video_codec="${2:-:+:libx264}"
-    local mock_encoders="${3:-}"   # строка симулирующая вывод ffmpeg -encoders
-
-    $PS_CMD -NoProfile -NonInteractive -Command "
-\$hw_accel     = '$hw_accel'
-\$video_codec  = '$video_codec'
-\$encoders_list = '$mock_encoders'
-
-\$_, \$hw_accel_status, \$hw_accel_value = \$hw_accel -split ':'
-\$_, \$video_codec_status, \$set_video_codec = \$video_codec -split ':'
-
-\$use_hw_accel  = \$false
-\$hw_accel_type = ''
-
-if (\$hw_accel_status -eq '+') {
-    switch (\$hw_accel_value) {
-        'nvidia' {
-            if (\$encoders_list -match 'nvenc') {
-                \$use_hw_accel = \$true
-                \$hw_accel_type = 'nvidia'
-                switch (\$set_video_codec) {
-                    'libx264'   { \$set_video_codec = 'h264_nvenc' }
-                    'libx265'   { \$set_video_codec = 'hevc_nvenc' }
-                    'libsvtav1' { \$set_video_codec = 'av1_nvenc' }
-                }
-            }
-        }
-        'intel' {
-            if (\$encoders_list -match 'qsv') {
-                \$use_hw_accel = \$true
-                \$hw_accel_type = 'intel'
-                switch (\$set_video_codec) {
-                    'libx264'   { \$set_video_codec = 'h264_qsv' }
-                    'libx265'   { \$set_video_codec = 'hevc_qsv' }
-                    'libsvtav1' { \$set_video_codec = 'av1_qsv' }
-                }
-            }
-        }
-    }
-}
-
-Write-Output \"use_hw_accel=\$use_hw_accel\"
-Write-Output \"hw_accel_type=\$hw_accel_type\"
-Write-Output \"set_video_codec=\$set_video_codec\"
-" 2>/dev/null
-}
-
-get_field() {
-    local output="$1"
-    local field="$2"
-    echo "$output" | grep "^${field}=" | sed "s/^${field}=//"
-}
+assert_contains "воркер выбирает GPU-энкодер через Resolve-HwEncoder" \
+    '$hw = Resolve-HwEncoder -HwAccelValue $hw_accel_value -VideoCodec $set_video_codec -EncodersList $encoders_list' "$src_ps1"
+# Выключенный hw_accel (`-nvidia`) до функции не доходит: проверка статуса — у вызова.
+assert_contains "выбор GPU-энкодера только при включённом hw_accel" \
+    'if ($hw_accel_status -eq "+" -and $ffmpeg_available) {' "$src_ps1"
 
 # ══════════════════════════════════════════════════════════════
 suite "PS1: видео-фильтры (поворот)"
@@ -233,35 +204,32 @@ chain spnorm;  assert_eq "скорость + loudnorm → atempo первым" "
 suite "PS1: GPU encoder check (NVIDIA)"
 # ══════════════════════════════════════════════════════════════
 
-out=$(run_ps1_gpu ":+:nvidia" ":+:libx264" "V..... h264_nvenc           NVIDIA NVENC H.264")
-assert_eq "nvidia + nvenc found → use_hw_accel=True"  "True"      "$(get_field "$out" "use_hw_accel")"
-assert_eq "nvidia + nvenc found → hw_accel_type"      "nvidia"    "$(get_field "$out" "hw_accel_type")"
-assert_eq "nvidia + nvenc → libx264 → h264_nvenc"     "h264_nvenc" "$(get_field "$out" "set_video_codec")"
-
-out=$(run_ps1_gpu ":+:nvidia" ":+:libx264" "no matching encoders")
-assert_eq "nvidia + no nvenc → use_hw_accel=False"  "False"    "$(get_field "$out" "use_hw_accel")"
-assert_eq "nvidia + no nvenc → codec unchanged"     "libx264"  "$(get_field "$out" "set_video_codec")"
+CUDA="-hwaccel cuda -hwaccel_output_format cuda"
+QSVA="-hwaccel qsv -hwaccel_output_format qsv"
+chain nv264;    assert_eq "nvidia + h264_nvenc в сборке → libx264 → h264_nvenc"   "True|nvidia|h264_nvenc|$CUDA|0" "$result"
+chain nvnone;   assert_eq "nvidia без nvenc → CPU, кодек прежний, WARN"           "False||libx264||1"              "$result"
+# F33: сборка с h264_nvenc, но без av1_nvenc — нельзя подставлять несуществующий av1_nvenc.
+chain nvav1;    assert_eq "nvidia: av1_nvenc нет в сборке → CPU + WARN"           "False||libsvtav1||1"            "$result"
+# Якорь по столбцу: av1_nvenc_hypothetical не означает наличия av1_nvenc.
+chain nvanchor; assert_eq "nvidia: имя ищется целиком, а не подстрокой"            "False||libsvtav1||1"            "$result"
+chain nvready;  assert_eq "nvidia: готовое GPU-имя hevc_nvenc принимается"         "True|nvidia|hevc_nvenc|$CUDA|0" "$result"
+# Кодек вне маппинга: hardware-декод не включается (иначе софт получал cuda-кадры).
+chain nvvp9;    assert_eq "nvidia: libvpx-vp9 без NVENC-варианта → CPU + WARN"     "False||libvpx-vp9||1"           "$result"
+chain nvcase;   assert_eq "nvidia: регистр значения не важен"                     "True|nvidia|h264_nvenc|$CUDA|0" "$result"
 
 # ══════════════════════════════════════════════════════════════
 suite "PS1: GPU encoder check (Intel QSV)"
 # ══════════════════════════════════════════════════════════════
 
-out=$(run_ps1_gpu ":+:intel" ":+:libx265" "V..... hevc_qsv              H.265/HEVC Intel QSV")
-assert_eq "intel + qsv found → use_hw_accel=True"   "True"     "$(get_field "$out" "use_hw_accel")"
-assert_eq "intel + qsv found → hw_accel_type"        "intel"   "$(get_field "$out" "hw_accel_type")"
-assert_eq "intel + qsv → libx265 → hevc_qsv"         "hevc_qsv" "$(get_field "$out" "set_video_codec")"
-
-out=$(run_ps1_gpu ":+:intel" ":+:libx264" "no matching encoders")
-assert_eq "intel + no qsv → use_hw_accel=False"  "False"    "$(get_field "$out" "use_hw_accel")"
-assert_eq "intel + no qsv → codec unchanged"     "libx264"  "$(get_field "$out" "set_video_codec")"
+chain qsv265;   assert_eq "intel + hevc_qsv в сборке → libx265 → hevc_qsv"        "True|intel|hevc_qsv|$QSVA|0"    "$result"
+chain qsvnone;  assert_eq "intel без qsv → CPU, кодек прежний, WARN"              "False||libx264||1"              "$result"
+chain qsvready; assert_eq "intel: готовое GPU-имя h264_qsv принимается"           "True|intel|h264_qsv|$QSVA|0"    "$result"
 
 # ══════════════════════════════════════════════════════════════
-suite "PS1: GPU выключен"
+suite "PS1: значение hw_accel"
 # ══════════════════════════════════════════════════════════════
 
-out=$(run_ps1_gpu ":-:nvidia" ":+:libx264" "V..... h264_nvenc")
-assert_eq "hw_accel off → use_hw_accel=False"  "False"    "$(get_field "$out" "use_hw_accel")"
-assert_eq "hw_accel off → codec unchanged"     "libx264"  "$(get_field "$out" "set_video_codec")"
+chain typo;     assert_eq "hw_accel = nvida (опечатка) → CPU + WARN"              "False||libx264||1"              "$result"
 
 # ══════════════════════════════════════════════════════════════
 suite "PS1 script.ps1: фиксы Task 3 (анализ исходника)"

@@ -678,8 +678,11 @@ _cleanup_on_int() {
 	[ -n "$results_dir" ] && rm -rf "$results_dir"
 	[ -n "${collisions_file:-}" ] && rm -f "$collisions_file"
 	[ -n "${ASR_RUN_DIR:-}" ] && rm -rf "$ASR_RUN_DIR"
-	# Прерванная публикация расшифровки: .ffconv-partial-* в назначении.
-	[ -n "${ASR_TMP_TXT:-}" ] && rm -f "$ASR_TMP_JSON" "$ASR_TMP_TXT"
+	# Прерванная публикация расшифровки: .ffconv-partial-* в назначении. Каждое
+	# имя проверяется отдельно: сигнал между присваиваниями ASR_TMP_JSON и
+	# ASR_TMP_TXT оставлял бы .json-хвост при пустом ASR_TMP_TXT.
+	[ -n "${ASR_TMP_JSON:-}" ] && rm -f "$ASR_TMP_JSON"
+	[ -n "${ASR_TMP_TXT:-}" ] && rm -f "$ASR_TMP_TXT"
 	exit 130
 }
 trap _cleanup_on_int INT TERM

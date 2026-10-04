@@ -248,5 +248,12 @@ run_asr 'export PATH="$WORK/intmv:$PATH"'
 assert_eq "прерван — код 130" "130" "$RUN_RC"
 assert_empty "временных файлов в назначении нет" "$(find "$OUT" -name '.ffconv-partial-*')"
 
+# Сигнал между присваиваниями ASR_TMP_JSON и ASR_TMP_TXT: имя .json уже задано,
+# .txt — ещё нет. Обработчик вызывается из trap EXIT теста в этом состоянии.
+reset_dirs; ok_routes; : > "$OUT/.ffconv-partial-a.asr.json"
+run_asr 'trap '"'"'ASR_TMP_JSON="$OUT/.ffconv-partial-a.asr.json"; ASR_TMP_TXT=""; _cleanup_on_int'"'"' EXIT'
+assert_eq "обработчик отработал — код 130" "130" "$RUN_RC"
+assert_empty "хвост .json убран при пустом ASR_TMP_TXT" "$(find "$OUT" -name '.ffconv-partial-*')"
+
 rm -rf "$WORK"
 summary

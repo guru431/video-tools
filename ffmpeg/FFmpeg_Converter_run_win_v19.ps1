@@ -166,6 +166,27 @@ function Select-ConfigComboMapped {
     $script:configWarnings += "WARN: $Key = '$Value' — недопустимое значение, в форме выбрано «$($Combo.Items[$Default])»"
 }
 
+# Первый пункт списков [gpu] preset/tune/rc. Выключенное (`preset = -p5`) или пустое
+# значение config.ini CLI в ffmpeg не передаёт вовсе, а GUI всё равно отдавал пункт
+# списка: шаблонный config.ini (`hw_accel = +intel`) давал в GUI `-preset medium`, в
+# CLI — ничего. Такое значение выбирает «не задано», и аргумент уходит в воркер
+# выключенным (`:-:`). Включённое — Select-ConfigComboValue, как прежде.
+$script:GpuUnsetItem = "не задано"
+function Select-GpuComboValue {
+    param($Combo, $Cfg, [string]$Key, [string]$ValidPattern, [string]$Default)
+    if (-not $Cfg.enabled -or -not "$($Cfg.value)".Trim()) { $Combo.SelectedIndex = 0; return }
+    Select-ConfigComboValue $Combo $Cfg.value $Key $ValidPattern $Default
+}
+# Значение для воркера: «не задано» (пункт 0) — выключенный статус без значения;
+# иначе первое слово пункта («slow - из config.ini» уходит как slow).
+function Get-GpuComboArg {
+    param($Combo, [bool]$On)
+    if ($Combo.SelectedIndex -le 0) { return ":-:" }
+    $v = ([string]$Combo.SelectedItem -split ' ')[0]
+    if ($On) { return ":+:$v" }
+    return ":-:$v"
+}
+
 # Загрузка дефолтов из config.ini
 $_cfg_source      = Read-Config "source"      "folders" "_video_\0"
 $_cfg_destination = Read-Config "destination"  "folders" "_video_\1"
@@ -545,8 +566,8 @@ $_go.Add($labelGpuPreset)
 $comboGpuPreset = [System.Windows.Forms.ComboBox]::new()
 $comboGpuPreset.Location = [System.Drawing.Point]::new(300, 84)
 $comboGpuPreset.Size = [System.Drawing.Size]::new(90, 21)
-$comboGpuPreset.Items.AddRange(@("p1", "p2", "p3", "p4", "p5", "p6", "p7"))
-$comboGpuPreset.SelectedIndex = 4
+$comboGpuPreset.Items.AddRange(@($script:GpuUnsetItem, "p1", "p2", "p3", "p4", "p5", "p6", "p7"))
+$comboGpuPreset.SelectedIndex = 5
 $comboGpuPreset.Visible = $false
 $_go.Add($comboGpuPreset)
 
@@ -561,8 +582,8 @@ $_go.Add($labelGpuTune)
 $comboGpuTune = [System.Windows.Forms.ComboBox]::new()
 $comboGpuTune.Location = [System.Drawing.Point]::new(439, 84)
 $comboGpuTune.Size = [System.Drawing.Size]::new(70, 21)
-$comboGpuTune.Items.AddRange(@("hq", "ll", "ull", "lossless"))
-$comboGpuTune.SelectedIndex = 0
+$comboGpuTune.Items.AddRange(@($script:GpuUnsetItem, "hq", "ll", "ull", "lossless"))
+$comboGpuTune.SelectedIndex = 1
 $comboGpuTune.Visible = $false
 $_go.Add($comboGpuTune)
 
@@ -577,8 +598,8 @@ $_go.Add($labelGpuRC)
 $comboGpuRC = [System.Windows.Forms.ComboBox]::new()
 $comboGpuRC.Location = [System.Drawing.Point]::new(545, 84)
 $comboGpuRC.Size = [System.Drawing.Size]::new(70, 21)
-$comboGpuRC.Items.AddRange(@("vbr", "cbr", "constqp"))
-$comboGpuRC.SelectedIndex = 0
+$comboGpuRC.Items.AddRange(@($script:GpuUnsetItem, "vbr", "cbr", "constqp"))
+$comboGpuRC.SelectedIndex = 1
 $comboGpuRC.Visible = $false
 $_go.Add($comboGpuRC)
 
@@ -589,6 +610,23 @@ $labelHWInfo.Size = [System.Drawing.Size]::new(750, 14)
 $labelHWInfo.Text = ""
 $labelHWInfo.Font = [System.Drawing.Font]::new($labelHWInfo.Font.FontFamily, 8, [System.Drawing.FontStyle]::Italic)
 $_go.Add($labelHWInfo)
+
+# Пункты пресета зависят от семейства энкодера, выбор — по config.ini: и при старте,
+# и при смене ускорителя в форме (иначе выключенный в config.ini пресет после
+# переключения снова уходил бы в воркер включённым). Включённое значение вне списка —
+# пункт «из config.ini», если его принимает энкодер (NVENC знает и прежние имена
+# пресетов), прочее — откат на p5/medium с WARN.
+function Set-GpuPresetItems {
+    param([bool]$Intel)
+    $comboGpuPreset.Items.Clear()
+    if ($Intel) {
+        $comboGpuPreset.Items.AddRange(@($script:GpuUnsetItem, "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"))
+        Select-GpuComboValue $comboGpuPreset $_cfg_gpu_preset "[gpu] preset" '^(veryfast|faster|fast|medium|slow|slower|veryslow)$' "medium"
+    } else {
+        $comboGpuPreset.Items.AddRange(@($script:GpuUnsetItem, "p1", "p2", "p3", "p4", "p5", "p6", "p7"))
+        Select-GpuComboValue $comboGpuPreset $_cfg_gpu_preset "[gpu] preset" '^(p[1-7]|default|slow|medium|fast|hp|hq|bd|ll|llhq|llhp|lossless|losslesshp)$' "p5"
+    }
+}
 
 # Event: show/hide GPU controls based on selection
 $comboHWAccel.Add_SelectedIndexChanged({
@@ -602,14 +640,10 @@ $comboHWAccel.Add_SelectedIndexChanged({
     $labelGpuRC.Visible = $isNvidia
     $comboGpuRC.Visible = $isNvidia
     if ($isNvidia) {
-        $comboGpuPreset.Items.Clear()
-        $comboGpuPreset.Items.AddRange(@("p1", "p2", "p3", "p4", "p5", "p6", "p7"))
-        $comboGpuPreset.SelectedIndex = 4
+        Set-GpuPresetItems $false
         $labelHWInfo.Text = "Кодеки автоматически заменяются: libx264->h264_nvenc, libx265->hevc_nvenc, libsvtav1->av1_nvenc"
     } elseif ($isIntel) {
-        $comboGpuPreset.Items.Clear()
-        $comboGpuPreset.Items.AddRange(@("veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"))
-        $comboGpuPreset.SelectedIndex = 3
+        Set-GpuPresetItems $true
         $labelHWInfo.Text = "Кодеки автоматически заменяются: libx264->h264_qsv, libx265->hevc_qsv, libsvtav1->av1_qsv"
     } else {
         $labelHWInfo.Text = ""
@@ -621,43 +655,21 @@ $comboHWAccel.Add_SelectedIndexChanged({
 # hq/vbr, а CLI отдаёт его ffmpeg как есть. Шаблоны — значения, которые принимает
 # энкодер (NVENC знает и прежние имена пресетов, а tune uhq и rc *_hq в список не
 # вынесены): такое добавляется пунктом «из config.ini», прочее — откат с WARN.
-# Выключенное значение CLI не использует — его, как и раньше, берём без проверки.
+# Выключенное или пустое значение CLI не использует — пункт «не задано».
 if ($comboHWAccel.SelectedIndex -eq 2) {
-    $comboGpuPreset.Items.Clear()
-    $comboGpuPreset.Items.AddRange(@("veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"))
-    if ($_cfg_gpu_preset.enabled) {
-        Select-ConfigComboValue $comboGpuPreset $_cfg_gpu_preset.value "[gpu] preset" '^(veryfast|faster|fast|medium|slow|slower|veryslow)$' "medium"
-    } else {
-        $idx = $comboGpuPreset.Items.IndexOf($_cfg_gpu_preset.value)
-        $comboGpuPreset.SelectedIndex = if ($idx -ge 0) { $idx } else { 3 }
-    }
+    Set-GpuPresetItems $true
     $comboGpuPreset.Visible = $true
     $labelGpuPreset.Visible = $true
 } elseif ($comboHWAccel.SelectedIndex -eq 1) {
-    if ($_cfg_gpu_preset.enabled) {
-        Select-ConfigComboValue $comboGpuPreset $_cfg_gpu_preset.value "[gpu] preset" '^(p[1-7]|default|slow|medium|fast|hp|hq|bd|ll|llhq|llhp|lossless|losslesshp)$' "p5"
-    } else {
-        $idx = $comboGpuPreset.Items.IndexOf($_cfg_gpu_preset.value)
-        if ($idx -ge 0) { $comboGpuPreset.SelectedIndex = $idx }
-    }
+    Set-GpuPresetItems $false
     $comboGpuPreset.Visible = $true
     $labelGpuPreset.Visible = $true
     $comboGpuTune.Visible = $true; $labelGpuTune.Visible = $true
     $comboGpuRC.Visible = $true; $labelGpuRC.Visible = $true
 }
 # Инициализация tune/rc из config
-if ($_cfg_gpu_tune.enabled) {
-    Select-ConfigComboValue $comboGpuTune $_cfg_gpu_tune.value "[gpu] tune" '^(hq|uhq|ll|ull|lossless)$' "hq"
-} else {
-    $idxTune = $comboGpuTune.Items.IndexOf($_cfg_gpu_tune.value)
-    if ($idxTune -ge 0) { $comboGpuTune.SelectedIndex = $idxTune }
-}
-if ($_cfg_gpu_rc.enabled) {
-    Select-ConfigComboValue $comboGpuRC $_cfg_gpu_rc.value "[gpu] rc" '^(constqp|vbr|cbr|cbr_ld_hq|cbr_hq|vbr_hq|vbr_minqp|ll_2pass_quality|ll_2pass_size|vbr_2pass)$' "vbr"
-} else {
-    $idxRC = $comboGpuRC.Items.IndexOf($_cfg_gpu_rc.value)
-    if ($idxRC -ge 0) { $comboGpuRC.SelectedIndex = $idxRC }
-}
+Select-GpuComboValue $comboGpuTune $_cfg_gpu_tune "[gpu] tune" '^(hq|uhq|ll|ull|lossless)$' "hq"
+Select-GpuComboValue $comboGpuRC $_cfg_gpu_rc "[gpu] rc" '^(constqp|vbr|cbr|cbr_ld_hq|cbr_hq|vbr_hq|vbr_minqp|ll_2pass_quality|ll_2pass_size|vbr_2pass)$' "vbr"
 
 $groupOptions.Controls.AddRange($_go.ToArray())
 # Жирный заголовок, дочерние контролы — обычный шрифт
@@ -1689,13 +1701,10 @@ $buttonRun.Add_Click({
         $script:hw_accel = ":-:off"
     }
     $isGpuOn = ($hwIndex -gt 0)
-    # Первое слово пункта: «slow - из config.ini» (Select-ConfigComboValue) уходит как slow.
-    $_gpuPresetVal = ([string]$comboGpuPreset.SelectedItem -split ' ')[0]
-    $_gpuTuneVal   = ([string]$comboGpuTune.SelectedItem -split ' ')[0]
-    $_gpuRcVal     = ([string]$comboGpuRC.SelectedItem -split ' ')[0]
-    $script:gpu_preset = if ($isGpuOn) { ":+:$_gpuPresetVal" } else { ":-:$_gpuPresetVal" }
-    $script:gpu_tune   = if ($isGpuOn -and $hwIndex -eq 1) { ":+:$_gpuTuneVal" } else { ":-:$_gpuTuneVal" }
-    $script:gpu_rc     = if ($isGpuOn -and $hwIndex -eq 1) { ":+:$_gpuRcVal" }   else { ":-:$_gpuRcVal" }
+    # «не задано» уходит выключенным (`:-:`), иначе первое слово пункта (Get-GpuComboArg).
+    $script:gpu_preset = Get-GpuComboArg $comboGpuPreset $isGpuOn
+    $script:gpu_tune   = Get-GpuComboArg $comboGpuTune ($isGpuOn -and $hwIndex -eq 1)
+    $script:gpu_rc     = Get-GpuComboArg $comboGpuRC ($isGpuOn -and $hwIndex -eq 1)
 
     # Playback speed
     $script:playback_speed = if ($checkSpeed.Checked) { ":+:$($textSpeed.Text)" } else { ":-:$($textSpeed.Text)" }

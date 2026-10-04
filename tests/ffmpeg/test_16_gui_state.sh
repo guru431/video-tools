@@ -113,6 +113,18 @@ JSON=$(run_worker 0 no "\$playback_speed=':+:0'")
 assert_contains "ранний отказ (playback_speed): state=failed" '"state":"failed"' "$JSON"
 assert_contains "ранний отказ (playback_speed): message"      'playback_speed'   "$JSON"
 
+# «не задано» в списке пресета GPU уходит в воркер как `:-:` (Get-GpuComboArg ниже),
+# и воркер при включённом QSV не передаёт -preset — как CLI с `preset = -p5`.
+FFLOG="$WORK/ffmpeg_args.log"; W_FFLOG=$(cygpath -w "$FFLOG")
+_qsv_env="\$env:MOCK_FFMPEG_ENCODERS='qsv'; \$env:MOCK_FFMPEG_LOG='$W_FFLOG'; \$hw_accel=':+:intel'"
+rm -f "$FFLOG"; run_worker 0 no "$_qsv_env; \$gpu_preset=':-:'" > /dev/null
+_enc_line=$(grep -F -- '-c:v h264_qsv' "$FFLOG" 2>/dev/null | head -1)
+assert_contains     "QSV + пресет «не задано»: кодирование на h264_qsv" "-c:v h264_qsv" "$_enc_line"
+assert_not_contains "QSV + пресет «не задано»: без -preset"            "-preset"       "$_enc_line"
+rm -f "$FFLOG"; run_worker 0 no "$_qsv_env; \$gpu_preset=':+:fast'" > /dev/null
+_enc_line=$(grep -F -- '-c:v h264_qsv' "$FFLOG" 2>/dev/null | head -1)
+assert_contains     "QSV + пресет fast: -preset fast"                   "-preset fast"  "$_enc_line"
+
 # ══════════════════════════════════════════════════════════════
 suite "GUI preflight: конфликт режимов и отсутствующий энкодер — ДО запуска"
 # ══════════════════════════════════════════════════════════════
@@ -250,19 +262,28 @@ suite "GUI: остальные списки из config.ini не схлопыв�
 assert_contains "субтитры уходят первым словом пункта" \
     "\$subtitlesMode = ([string]\$comboSubtitlesMode.SelectedItem -split ' ')[0]" "$gui_text"
 assert_not_contains "субтитры больше не по SelectedIndex" 'comboSubtitlesMode.SelectedIndex -eq 0' "$gui_text"
-assert_contains "пресет GPU уходит первым словом пункта" \
-    "\$_gpuPresetVal = ([string]\$comboGpuPreset.SelectedItem -split ' ')[0]" "$gui_text"
+assert_contains "пресет GPU уходит через Get-GpuComboArg" \
+    "\$script:gpu_preset = Get-GpuComboArg \$comboGpuPreset \$isGpuOn" "$gui_text"
+assert_contains "tune GPU уходит через Get-GpuComboArg" \
+    "\$script:gpu_tune   = Get-GpuComboArg \$comboGpuTune" "$gui_text"
+assert_contains "rc GPU уходит через Get-GpuComboArg" \
+    "\$script:gpu_rc     = Get-GpuComboArg \$comboGpuRC" "$gui_text"
 assert_contains "пустой [asr] language — предупреждение" '[asr] language пуст' "$gui_text"
 _combo2_ps=$(mktemp_suffix "${TMPDIR:-/tmp}/gui_combo2_" .ps1)
 cat > "$_combo2_ps" <<'PSEOF'
 param([string]$Gui)
 Add-Type -AssemblyName System.Windows.Forms
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($Gui, [ref]$null, [ref]$null)
-foreach ($name in 'Select-ConfigComboValue', 'Select-ConfigComboMapped') {
+foreach ($name in 'Select-ConfigComboValue', 'Select-ConfigComboMapped', 'Select-GpuComboValue', 'Get-GpuComboArg', 'Parse-Flag') {
     $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true)
     if (-not $fn) { Write-Output "NOFUNC=$name"; exit 1 }
     . ([scriptblock]::Create($fn.Extent.Text))
 }
+# The "not set" item text of the GPU lists - the GUI's own assignment.
+$unset = $ast.Find({ param($x) $x -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+    $x.Left.Extent.Text -eq '$script:GpuUnsetItem' }, $true)
+if (-not $unset) { Write-Output "NOFUNC=GpuUnsetItem"; exit 1 }
+. ([scriptblock]::Create($unset.Extent.Text))
 # Fill statement: first "$Combo.Items.AddRange(" whose text contains $Like.
 function Get-Fill([string]$Combo, [string]$Like) {
     $n = $ast.Find({ param($x) $x -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and
@@ -278,35 +299,48 @@ function Get-Select([string]$Combo, [string]$Cmd, [string]$SelLike) {
     if ($n) { $n.Extent.Text } else { "throw 'NOSELECT $Combo'" }
 }
 # Output: TAG=<first word of selected item>|<items>|<warnings>; for the mapped list
-# (item text is not the value, and Cyrillic would not survive the console) - #<index>.
+# (item text is not the value, and Cyrillic would not survive the console) - #<index>;
+# for the GPU lists - what goes to the worker (Get-GpuComboArg with GPU on).
+# The config value goes through the GUI's Parse-Flag: '-p5' is a disabled value.
 function C([string]$Tag, [string]$Combo, [string]$CfgVar, [string]$Value, [string]$Like = '',
            [string]$SelLike = '', [string]$Cmd = 'Select-ConfigComboValue', [switch]$Raw) {
     $script:configWarnings = @()
     Set-Variable -Name $Combo.TrimStart('$') -Value ([System.Windows.Forms.ComboBox]::new())
     if ($Raw) { Set-Variable -Name $CfgVar -Value $Value }
-    else      { Set-Variable -Name $CfgVar -Value @{ enabled = $true; value = $Value } }
+    else      { Set-Variable -Name $CfgVar -Value (Parse-Flag $Value) }
     try {
         . ([scriptblock]::Create((Get-Fill $Combo $Like)))
         . ([scriptblock]::Create((Get-Select $Combo $Cmd $SelLike)))
     } catch { Write-Output ("{0}=ERR {1}" -f $Tag, $_); return }
     $c = Get-Variable -Name $Combo.TrimStart('$') -ValueOnly
-    $w = if ($Cmd -eq 'Select-ConfigComboMapped') { "#$($c.SelectedIndex)" } else { ([string]$c.SelectedItem -split ' ')[0] }
+    $w = if ($Cmd -eq 'Select-ConfigComboMapped') { "#$($c.SelectedIndex)" }
+         elseif ($Cmd -eq 'Select-GpuComboValue') { Get-GpuComboArg $c $true }
+         else { ([string]$c.SelectedItem -split ' ')[0] }
     Write-Output ("{0}={1}|{2}|{3}" -f $Tag, $w, $c.Items.Count, $script:configWarnings.Count)
 }
 C 'HWN'  '$comboHWAccel' '_cfg_hw_accel' 'nvidia' -Cmd 'Select-ConfigComboMapped'
 C 'HWI'  '$comboHWAccel' '_cfg_hw_accel' 'INTEL'  -Cmd 'Select-ConfigComboMapped'
 C 'HWO'  '$comboHWAccel' '_cfg_hw_accel' 'off'    -Cmd 'Select-ConfigComboMapped'
 C 'HWX'  '$comboHWAccel' '_cfg_hw_accel' 'nvida'  -Cmd 'Select-ConfigComboMapped'
-C 'PN5'  '$comboGpuPreset' '_cfg_gpu_preset' 'p5'     'p1'       '"p5"'
-C 'PNS'  '$comboGpuPreset' '_cfg_gpu_preset' 'slow'   'p1'       '"p5"'
-C 'PNX'  '$comboGpuPreset' '_cfg_gpu_preset' 'turbo'  'p1'       '"p5"'
-C 'PIS'  '$comboGpuPreset' '_cfg_gpu_preset' 'slow'   'veryfast' '"medium"'
-C 'PIP'  '$comboGpuPreset' '_cfg_gpu_preset' 'p5'     'veryfast' '"medium"'
-C 'TU'   '$comboGpuTune' '_cfg_gpu_tune' 'uhq'
-C 'TX'   '$comboGpuTune' '_cfg_gpu_tune' 'fast'
-C 'RCQ'  '$comboGpuRC' '_cfg_gpu_rc' 'constqp'
-C 'RCH'  '$comboGpuRC' '_cfg_gpu_rc' 'vbr_hq'
-C 'RCX'  '$comboGpuRC' '_cfg_gpu_rc' 'abr'
+$G = 'Select-GpuComboValue'
+C 'PN5'  '$comboGpuPreset' '_cfg_gpu_preset' 'p5'     'p1'       '"p5"'     $G
+C 'PNS'  '$comboGpuPreset' '_cfg_gpu_preset' 'slow'   'p1'       '"p5"'     $G
+C 'PNX'  '$comboGpuPreset' '_cfg_gpu_preset' 'turbo'  'p1'       '"p5"'     $G
+C 'PNO'  '$comboGpuPreset' '_cfg_gpu_preset' '-p5'    'p1'       '"p5"'     $G
+C 'PNE'  '$comboGpuPreset' '_cfg_gpu_preset' '+'      'p1'       '"p5"'     $G
+C 'PIS'  '$comboGpuPreset' '_cfg_gpu_preset' 'slow'   'veryfast' '"medium"' $G
+C 'PIP'  '$comboGpuPreset' '_cfg_gpu_preset' 'p5'     'veryfast' '"medium"' $G
+C 'PIO'  '$comboGpuPreset' '_cfg_gpu_preset' '-p5'    'veryfast' '"medium"' $G
+C 'TU'   '$comboGpuTune' '_cfg_gpu_tune' 'uhq'  '' '' $G
+C 'TX'   '$comboGpuTune' '_cfg_gpu_tune' 'fast' '' '' $G
+C 'TO'   '$comboGpuTune' '_cfg_gpu_tune' '-hq'  '' '' $G
+C 'RCQ'  '$comboGpuRC' '_cfg_gpu_rc' 'constqp' '' '' $G
+C 'RCH'  '$comboGpuRC' '_cfg_gpu_rc' 'vbr_hq'  '' '' $G
+C 'RCX'  '$comboGpuRC' '_cfg_gpu_rc' 'abr'     '' '' $G
+C 'RCO'  '$comboGpuRC' '_cfg_gpu_rc' '-vbr'    '' '' $G
+# GPU off: a chosen preset still goes disabled, with its value (as before).
+$cg = [System.Windows.Forms.ComboBox]::new(); $cg.Items.AddRange(@($script:GpuUnsetItem, 'p1', 'p5')); $cg.SelectedIndex = 2
+Write-Output ("GOFF={0}" -f (Get-GpuComboArg $cg $false))
 C 'SM'   '$comboSubtitlesMode' '_cfg_video_subtitles' 'meta'
 C 'SB'   '$comboSubtitlesMode' '_cfg_video_subtitles' 'burn'
 C 'SX'   '$comboSubtitlesMode' '_cfg_video_subtitles' 'soft'
@@ -323,18 +357,26 @@ assert_contains "hw_accel = nvidia — пункт NVIDIA, без WARN"        "H
 assert_contains "hw_accel = INTEL — регистр не важен (как в CLI)"   "HWI=#2|3|0" "$_combo2_out"
 assert_contains "hw_accel = off — «Без ускорения», без WARN"        "HWO=#0|3|0" "$_combo2_out"
 assert_contains "hw_accel = nvida — «Без ускорения» + WARN"         "HWX=#0|3|1" "$_combo2_out"
-# Пресет: NVENC принимает и прежние имена (slow), QSV — только свои семь.
-assert_contains "NVENC preset = p5 — штатный пункт"                 "PN5=p5|7|0"     "$_combo2_out"
-assert_contains "NVENC preset = slow — пункт «из config.ini» + WARN" "PNS=slow|8|1"  "$_combo2_out"
-assert_contains "NVENC preset = turbo — откат на p5 + WARN"         "PNX=p5|7|1"     "$_combo2_out"
-assert_contains "QSV preset = slow — штатный пункт"                 "PIS=slow|7|0"   "$_combo2_out"
-assert_contains "QSV preset = p5 — откат на medium + WARN"          "PIP=medium|7|1" "$_combo2_out"
-assert_contains "tune = uhq — пункт «из config.ini» + WARN"         "TU=uhq|5|1"     "$_combo2_out"
-assert_contains "tune = fast — откат на hq + WARN"                  "TX=hq|4|1"      "$_combo2_out"
-assert_contains "rc = constqp — штатный пункт"                      "RCQ=constqp|3|0" "$_combo2_out"
-assert_contains "rc = vbr_hq — пункт «из config.ini» + WARN"        "RCH=vbr_hq|4|1" "$_combo2_out"
-assert_contains "rc = abr — откат на vbr + WARN"                    "RCX=vbr|3|1"    "$_combo2_out"
-# Субтитры: CLI знает только burn/meta, иное молча не делает ничего — GUI
+# Пресет: NVENC принимает и прежние имена (slow), QSV — только свои семь. Первый
+# пункт каждого GPU-списка — «не задано»; в выводе — то, что уходит в воркер.
+assert_contains "NVENC preset = p5 — штатный пункт"                 "PN5=:+:p5|8|0"     "$_combo2_out"
+assert_contains "NVENC preset = slow — пункт «из config.ini» + WARN" "PNS=:+:slow|9|1"  "$_combo2_out"
+assert_contains "NVENC preset = turbo — откат на p5 + WARN"         "PNX=:+:p5|8|1"     "$_combo2_out"
+assert_contains "QSV preset = slow — штатный пункт"                 "PIS=:+:slow|8|0"   "$_combo2_out"
+assert_contains "QSV preset = p5 — откат на medium + WARN"          "PIP=:+:medium|8|1" "$_combo2_out"
+assert_contains "tune = uhq — пункт «из config.ini» + WARN"         "TU=:+:uhq|6|1"     "$_combo2_out"
+assert_contains "tune = fast — откат на hq + WARN"                  "TX=:+:hq|5|1"      "$_combo2_out"
+assert_contains "rc = constqp — штатный пункт"                      "RCQ=:+:constqp|4|0" "$_combo2_out"
+assert_contains "rc = vbr_hq — пункт «из config.ini» + WARN"        "RCH=:+:vbr_hq|5|1" "$_combo2_out"
+assert_contains "rc = abr — откат на vbr + WARN"                    "RCX=:+:vbr|4|1"    "$_combo2_out"
+# Выключенное или пустое значение — «не задано», в воркер уходит `:-:` (без -preset/
+# -tune/-rc, как у CLI). Шаблонный config.ini: preset = -p5 при hw_accel = +intel.
+assert_contains "NVENC preset = -p5 — «не задано», без WARN"        "PNO=:-:|8|0"       "$_combo2_out"
+assert_contains "NVENC preset = + (пусто) — «не задано», без WARN"  "PNE=:-:|8|0"       "$_combo2_out"
+assert_contains "QSV preset = -p5 (шаблон) — «не задано», без WARN" "PIO=:-:|8|0"       "$_combo2_out"
+assert_contains "tune = -hq — «не задано», без WARN"                "TO=:-:|5|0"        "$_combo2_out"
+assert_contains "rc = -vbr — «не задано», без WARN"                 "RCO=:-:|4|0"       "$_combo2_out"
+assert_contains "GPU выключен — пресет уходит выключенным"          "GOFF=:-:p5"        "$_combo2_out"# Субтитры: CLI знает только burn/meta, иное молча не делает ничего — GUI
 # не имеет права молча прожигать.
 assert_contains "subtitles = meta — пункт meta"                     "SM=meta|2|0"    "$_combo2_out"
 assert_contains "subtitles = burn — пункт burn"                     "SB=burn|2|0"    "$_combo2_out"

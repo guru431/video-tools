@@ -46,12 +46,14 @@ trap 'rm -rf "$WORK"' EXIT
 
 # Запускает download_batch с mock yt-dlp и печатает итоговые счётчики.
 # $1 = MOCK_YTDLP_OUTFILE (пусто → манифест пустой → «всё в архиве»)
+# $2 = MOCK_YTDLP_RC — код возврата мока (по умолчанию 0)
 run_batch() {
     local outfile="$1"
     (
         export PATH="$TESTS_DIR/mocks:$PATH"
         export MOCK_YTDLP_LOG="$WORK/mock.log"
         export MOCK_YTDLP_OUTFILE="$outfile"
+        export MOCK_YTDLP_RC="${2:-0}"
         : > "$WORK/mock.log"
 
         YTDLP="$TESTS_DIR/mocks/yt-dlp"
@@ -90,6 +92,23 @@ assert_contains "канал без новых видео → fail=0"  "fail=0"  
 RES=$(run_batch "$WORK/out/new_video.mp4")
 assert_contains "канал с новым видео → ok=1"      "ok=1"    "$RES"
 assert_contains "канал с новым видео → skip=0"    "skip=0"  "$RES"
+
+# ══════════════════════════════════════════════════════════════
+suite "SH batch: код 101 (--break-on-reject) — штатный конец обхода"
+# ══════════════════════════════════════════════════════════════
+# yt-dlp на любом DownloadCancelled возвращает 101; в режиме каналов это каждый
+# прогон, где у канала есть ролики старше date_range. Раньше такой канал шёл в
+# ошибки, и штатный повторный прогон заканчивался exit 1.
+RES=$(run_batch "$WORK/out/new_video.mp4" 101)
+assert_contains "101 с новым видео → ok=1"   "ok=1"   "$RES"
+assert_contains "101 с новым видео → fail=0" "fail=0" "$RES"
+RES=$(run_batch "" 101)
+assert_contains "101 без новых видео → skip=1" "skip=1" "$RES"
+assert_contains "101 без новых видео → fail=0" "fail=0" "$RES"
+# Настоящая ошибка по-прежнему ошибка.
+RES=$(run_batch "$WORK/out/new_video.mp4" 1)
+assert_contains "код 1 → fail=1" "fail=1" "$RES"
+assert_contains "код 1 → ok=0"   "ok=0"   "$RES"
 
 # ══════════════════════════════════════════════════════════════
 suite "SH batch: манифест реально доезжает до argv yt-dlp"

@@ -5,6 +5,9 @@
 # Переменные окружения:
 #   MOCK_YTDLP_LOG=  — путь к файлу лога (по умолчанию /tmp/mock_ytdlp_calls.txt)
 #   MOCK_YTDLP_FAIL=1 — вернуть exit code 1
+#   MOCK_YTDLP_RC=N  — код возврата ПОСЛЕ «скачивания» (файлы MOCK_YTDLP_OUTFILE
+#                      созданы); 101 — как у yt-dlp на --break-on-reject и прочих
+#                      DownloadCancelled
 #   MOCK_YTDLP_OUTFILE= — путь(и) «скачанных» файлов через '|'. Мок создаёт их и
 #                         сообщает через --print-to-file (эмуляция after_move:filepath).
 # ============================================================
@@ -47,4 +50,4 @@ if [ -n "${MOCK_YTDLP_OUTFILE:-}" ]; then
     done
 fi
 
-exit 0
+exit "${MOCK_YTDLP_RC:-0}"

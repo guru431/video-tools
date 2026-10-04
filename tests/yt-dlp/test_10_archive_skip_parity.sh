@@ -111,6 +111,37 @@ assert_contains "код 1 → fail=1" "fail=1" "$RES"
 assert_contains "код 1 → ok=0"   "ok=0"   "$RES"
 
 # ══════════════════════════════════════════════════════════════
+suite "SH download_url: код 101 — штатная остановка, как в batch"
+# ══════════════════════════════════════════════════════════════
+# Одиночная загрузка получает 101, когда --max-downloads/--break-on-existing/
+# --break-on-reject задал внешний конфиг yt-dlp. Раньше это шло в ошибки, тогда
+# как download_batch уже трактовал 101 как штатный конец. Логика ok/skip — та же.
+# $1 = MOCK_YTDLP_OUTFILE (пусто → манифест пустой → «уже в архиве»), $2 = код мока.
+run_url() {
+    (
+        export PATH="$TESTS_DIR/mocks:$PATH"
+        export MOCK_YTDLP_LOG="$WORK/mock.log"
+        export MOCK_YTDLP_OUTFILE="$1"
+        export MOCK_YTDLP_RC="$2"
+        YTDLP="$TESTS_DIR/mocks/yt-dlp"
+        DRY_RUN="false"; FORMAT_PRESET="auto"; AUDIO_FORMAT="best"
+        SUB_LANG="ru"; SUB_FORMAT="vtt"; SUBS_WITH_VIDEO="off"
+        CONTINUE_ON_ERROR="true"; SPONSORBLOCK="off"; PROXY_URL=""
+        SPEED_PROFILE="normal"; LIMIT_RATE=""
+        COOKIE_ARGS_ARR=()
+        COUNT_OK=0; COUNT_FAIL=0; COUNT_SKIP=0
+        : > "$WORK/url_manifest.txt"
+        DL_MANIFEST="$WORK/url_manifest.txt" download_url "https://example.invalid/v" \
+            "$WORK/out/%(title)s.%(ext)s" "720" "false" "archive.txt" >/dev/null 2>&1
+        echo "rc=$? ok=$COUNT_OK skip=$COUNT_SKIP fail=$COUNT_FAIL"
+    ) < /dev/null
+}
+assert_eq "101 с новым файлом → загрузка (rc 0)"  "rc=0 ok=1 skip=0 fail=0" "$(run_url "$WORK/out/v.mp4" 101)"
+assert_eq "101 без новых файлов → пропуск (rc 2)" "rc=2 ok=0 skip=1 fail=0" "$(run_url "" 101)"
+assert_eq "код 1 → по-прежнему ошибка"          "rc=1 ok=0 skip=0 fail=1" "$(run_url "$WORK/out/v.mp4" 1)"
+assert_eq "код 0 не изменился"                    "rc=0 ok=1 skip=0 fail=0" "$(run_url "$WORK/out/v.mp4" 0)"
+
+# ══════════════════════════════════════════════════════════════
 suite "SH batch: манифест реально доезжает до argv yt-dlp"
 # ══════════════════════════════════════════════════════════════
 # Без этого проверка выше прошла бы и на «манифест всегда пуст, потому что его
@@ -159,6 +190,10 @@ _ps_block=$(awk '/\$archiveSkipped = \$false/{f=1} f{print} /конец ветк
 assert_contains "successCount увеличивается только в ветке реальной загрузки" \
     '$successCount++' "$_ps_block"
 assert_contains "skipCount увеличивается в ветке пропуска" '$skipCount++' "$_ps_block"
+# Код 101 ведёт в ту же ветку «Готово/пропуск», что и 0 (паритет с .sh; CMD
+# проверяется сквозным прогоном в test_15). Сам обработчик живёт в WinForms-клике.
+assert_contains "PS1: код 101 — штатная остановка, не «Ошибка»" \
+    'if ($exitCode -eq 0 -or $exitCode -eq 101) {' "$src_ps1"
 
 # ══════════════════════════════════════════════════════════════
 suite "Общий контракт: пропуск не запускает AI-перевод"

@@ -553,6 +553,13 @@ if not "%translate_lang%"=="" (
 "!dlp!" !cookie_arg! !deno_arg! !manifest_arg! !audiofmt_arg! !sb_arg! !subsvid_arg! !archive_arg! !embed_arg! --retries 10 --fragment-retries 10 --file-access-retries 5 --socket-timeout 30 --concurrent-fragments 4 -c -i -w --windows-filenames --compat-options filename-sanitization -o "!folder!\%file_tpl%" !save_settings!!sections_arg! "!url!"
 
 set "dl_errorlevel=%errorlevel%"
+rem Код 101 - штатная остановка yt-dlp (DownloadCancelled: --max-downloads,
+rem --break-on-existing, --break-on-reject из внешнего конфига yt-dlp), а не провал.
+rem Паритет с .sh/.ps1: дальше всё как при 0, включая «пустой манифест = архив».
+if "%dl_errorlevel%"=="101" (
+    echo yt-dlp остановил загрузку штатно ^(код 101: --max-downloads/--break-on-*^).
+    set "dl_errorlevel=0"
+)
 if %dl_errorlevel%==0 (
     set "final_message=Загрузка завершена успешно^!"
     set "col=02"

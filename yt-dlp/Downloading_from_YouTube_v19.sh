@@ -979,7 +979,13 @@ download_url() {
 
     log_info "Команда: ${cmd[*]}"
 
-    if "${env_prefix[@]+"${env_prefix[@]}"}" "${cmd[@]}"; then
+    local dl_rc=0
+    "${env_prefix[@]+"${env_prefix[@]}"}" "${cmd[@]}" || dl_rc=$?
+    # Код 101 — штатная остановка (DownloadCancelled), как и в download_batch:
+    # --max-downloads, --break-on-existing, --break-on-reject может задать внешний
+    # конфиг yt-dlp пользователя. Дальше — та же логика ok/skip по манифесту, что и при 0.
+    if [ "$dl_rc" -eq 0 ] || [ "$dl_rc" -eq 101 ]; then
+        [ "$dl_rc" -eq 101 ] && log_info "yt-dlp остановил загрузку штатно (код 101: --max-downloads/--break-on-*): $url"
         # Архив включён, но yt-dlp ничего не переместил (after_move не сработал → пустой
         # manifest) — значит, видео уже было в архиве и реально не скачивалось. Это ПРОПУСК,
         # а не загрузка: иначе COUNT_SKIP навсегда оставался бы 0, а архивные пропуски
@@ -994,8 +1000,7 @@ download_url() {
         COUNT_OK=$((COUNT_OK + 1))
         return 0
     else
-        local exit_code=$?
-        log_error "Ошибка загрузки (код $exit_code): $url"
+        log_error "Ошибка загрузки (код $dl_rc): $url"
         COUNT_FAIL=$((COUNT_FAIL + 1))
         return 1
     fi

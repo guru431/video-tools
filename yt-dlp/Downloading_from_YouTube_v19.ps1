@@ -1757,8 +1757,15 @@ $btnStart.Add_Click({
             # обнуляем (Stop-Download полагается на неё для WaitForExit без NullRef — F5).
             if ($global:downloadProcess) { $global:downloadProcess.Dispose() }
 
-            if ($exitCode -eq 0) {
+            # Код 101 — штатная остановка yt-dlp (DownloadCancelled: --max-downloads,
+            # --break-on-existing, --break-on-reject из внешнего конфига yt-dlp), а не
+            # провал: дальше та же логика «Готово/пропуск по манифесту», что и при 0.
+            # Паритет с download_url/download_batch в .sh. Stop-ProcessTree даёт 1, не 101.
+            if ($exitCode -eq 0 -or $exitCode -eq 101) {
                 Set-UiProgress -Percent 100
+                if ($exitCode -eq 101) {
+                    Append-Output "yt-dlp остановил загрузку штатно (код 101: --max-downloads/--break-on-*)." ([System.Drawing.Color]::Yellow)
+                }
 
                 # Архив включён, yt-dlp отработал успешно, но не переместил ни одного
                 # файла (пустой манифест) → видео уже было в архиве. Это ПРОПУСК, а не

@@ -370,6 +370,20 @@ assert_eq "код возврата 1" "1" "$SMOKE_RC"
 assert_contains "сообщение об ошибке загрузки" "Ошибка при загрузке!" "$SMOKE_OUT"
 
 # ══════════════════════════════════════════════════════════════
+suite "CMD yt-dlp: код 101 — штатная остановка, не ошибка"
+# ══════════════════════════════════════════════════════════════
+# 101 = DownloadCancelled (--max-downloads/--break-on-* из внешнего конфига yt-dlp).
+# Паритет с .sh/.ps1: дальше всё как при 0, включая «пустой манифест = архив».
+MOCK_DLP_RC=101 run_menu url="$YT_URL" quality=3 cookie=0 translate=0 audiofmt=0 sb=0 subsvid=0
+assert_eq "101 → код возврата 0" "0" "$SMOKE_RC"
+assert_contains "101 → загрузка успешна" "Загрузка завершена успешно!" "$SMOKE_OUT"
+assert_contains "101 назван штатной остановкой" "код 101" "$SMOKE_OUT"
+MOCK_DLP_RC=101 MOCK_MANIFEST_EMPTY=1 run_menu url="$YT_URL" quality=3 cookie=0 translate=1 audiofmt=0 sb=0 subsvid=0
+assert_eq "101 + пустой манифест → код возврата 0" "0" "$SMOKE_RC"
+assert_contains "101 + пустой манифест → пропуск по архиву" "видео уже было в архиве" "$SMOKE_OUT"
+assert_not_contains "101 + пустой манифест → vot не вызывался" "vot-cli-live ARGS:" "$SMOKE_LOG"
+
+# ══════════════════════════════════════════════════════════════
 suite "CMD yt-dlp: перевод запрошен, но не выполнен → код 1"
 # ══════════════════════════════════════════════════════════════
 # F14: загрузка успешна, перевода нет — это НЕ полный успех.

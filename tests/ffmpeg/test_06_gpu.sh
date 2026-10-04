@@ -62,9 +62,11 @@ run_script() {
         # local-контекст вызывающей функции ДО запуска EXIT-трапа, и $dump там пуст.
         # shellcheck disable=SC2064
         trap "_dump '$dump'" EXIT
-        source "$SCRIPT" > /dev/null 2>&1
+        # Вывод скрипта — в дамп следом за переменными: тесты предупреждений
+        # проверяют его текст (getv читает только строки «ключ=…»).
+        source "$SCRIPT" > "$dump.out" 2>&1
     ) < /dev/null
-    cat "$dump"; rm -f "$dump"
+    cat "$dump" "$dump.out"; rm -f "$dump" "$dump.out"
 }
 
 # Значения ключа из дампа: все строки «ключ=…», часть после первого «=» — как
@@ -150,6 +152,20 @@ OUT=$(run_script "nvenc" \
 assert_eq "hw disabled: use_hw_accel=no"   "no"       "$(getv "$OUT" use_hw_accel)"
 assert_eq "hw disabled: кодек без замены"  "libx264"  "$(getv "$OUT" set_video_codec)"
 assert_eq "hw disabled: crf_args=-crf 23"  "-crf 23"  "$(getv "$OUT" crf_args)"
+
+# ══════════════════════════════════════════════════════════════
+suite "GPU: значение hw_accel (off и опечатка)"
+# ══════════════════════════════════════════════════════════════
+# off документирован в config.ini.example, но печатал «неизвестное значение»;
+# в тексте предупреждения стояла секция [performance], а ключ живёт в [gpu].
+OUT=$(run_script "nvenc" 'hw_accel=":+:off"' 'video_codec=":+:libx264"')
+assert_eq "hw_accel = +off: use_hw_accel=no"            "no"      "$(getv "$OUT" use_hw_accel)"
+assert_eq "hw_accel = +off: кодек без замены"           "libx264" "$(getv "$OUT" set_video_codec)"
+assert_not_contains "hw_accel = +off: без предупреждения" "Неизвестное значение" "$OUT"
+OUT=$(run_script "nvenc" 'hw_accel=":+:nvida"' 'video_codec=":+:libx264"')
+assert_eq "hw_accel = +nvida: use_hw_accel=no"          "no"      "$(getv "$OUT" use_hw_accel)"
+assert_contains "hw_accel = +nvida: предупреждение с [gpu] hw_accel" \
+    "Неизвестное значение [gpu] hw_accel = 'nvida' (ожидается nvidia, intel или off)" "$OUT"
 
 # ══════════════════════════════════════════════════════════════
 suite "F6: прямой hw-кодек при выключенном hw_accel → -cq/-global_quality, не -crf"

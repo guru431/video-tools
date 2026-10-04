@@ -345,6 +345,16 @@ assert_not_contains "libsvtav1 без av1_nvenc → без hwaccel-кадров"
 result=$(resolve_hw_cmd "libvpx-vp9" "nvidia" "h264_nvenc hevc_nvenc av1_nvenc")
 assert_contains "libvpx-vp9 → кодек software оставлен"  "codec=libvpx-vp9"  "$result"
 assert_not_contains "libvpx-vp9 → hardware НЕ включён"  "hw=yes"  "$result"
+
+# 4) hw_accel = off — документированное значение config.ini.example: процессор без
+# предупреждения «неизвестное значение» (раньше оно печаталось, паритет с SH/PS1).
+result=$(resolve_hw_cmd "libx264" "off" "h264_nvenc")
+assert_not_contains "hw_accel = off → без предупреждения"  "Неизвестное значение"  "$result"
+assert_not_contains "hw_accel = off → hardware НЕ включён" "hw=yes"                "$result"
+# 5) опечатка — предупреждение называет настоящую секцию ключа ([gpu], не [performance]).
+result=$(resolve_hw_cmd "libx264" "nvida" "h264_nvenc")
+assert_contains "hw_accel = nvida → предупреждение с [gpu] hw_accel" "Неизвестное значение [gpu] hw_accel" "$result"
+assert_contains "предупреждение перечисляет off"                    "nvidia, intel или off"               "$result"
 rm -f "$MOCK_FF"
 
 # ══════════════════════════════════════════════════════════════

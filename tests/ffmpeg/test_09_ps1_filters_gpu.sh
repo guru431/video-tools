@@ -101,6 +101,10 @@ G qsv265    'intel'  'libx265'    $qsv
 G qsvnone   'intel'  'libx264'    'no matching encoders'
 G qsvready  'intel'  'h264_qsv'   $qsv
 G typo      'nvida'  'libx264'    $nv
+G off       'off'    'libx264'    $nv
+# Text of the typo warning: the key lives in [gpu], and off is a valid value.
+$w = (Resolve-HwEncoder -HwAccelValue 'nvida' -VideoCodec 'libx264' -EncodersList $nv).Warning
+Write-Output ("typotext={0}|{1}" -f $w.Contains("[gpu] hw_accel = 'nvida'"), ($w.Contains('nvidia, intel') -and $w.Contains(' off)')))
 PSEOF
 _chains_out=$("$PS_CMD" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$_chain_ps")" \
     -Script "$(cygpath -w "$SCRIPT_PS1")" 2>&1)
@@ -230,6 +234,11 @@ suite "PS1: значение hw_accel"
 # ══════════════════════════════════════════════════════════════
 
 chain typo;     assert_eq "hw_accel = nvida (опечатка) → CPU + WARN"              "False||libx264||1"              "$result"
+chain typotext; assert_eq "WARN опечатки: секция [gpu], off в списке допустимых"   "True|True"                      "$result"
+# off документирован в config.ini.example и раньше печатал «неизвестное значение».
+chain off;      assert_eq "hw_accel = off → CPU без предупреждения"               "False||libx264||0"              "$result"
+assert_contains "без ffmpeg off не печатает «ускорение не проверяется»" \
+    'if ($hw_accel_status -eq "+" -and $hw_accel_value -ne "off" -and -not $ffmpeg_available) {' "$src_ps1"
 
 # ══════════════════════════════════════════════════════════════
 suite "PS1 script.ps1: фиксы Task 3 (анализ исходника)"

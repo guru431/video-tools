@@ -257,7 +257,7 @@ $hw_decode_args = @()
 # энкодеров не у кого: CommandNotFoundException — терминирующая, проходит сквозь
 # `2>&1 | Out-String` и уходит в top-level trap, обрывая весь пакет ДО первого файла.
 # Дефолт шаблона hw_accel = +intel делал это поведением по умолчанию. Паритет с .sh.
-if ($hw_accel_status -eq "+" -and -not $ffmpeg_available) {
+if ($hw_accel_status -eq "+" -and $hw_accel_value -ne "off" -and -not $ffmpeg_available) {
 	Write-Host "[ПРЕДУПРЕЖДЕНИЕ] Локального ffmpeg нет — аппаратное ускорение не проверяется, выбор энкодера остаётся за службой."
 }
 # Решение «какой энкодер и включать ли hardware» — чистая функция над значением
@@ -272,8 +272,10 @@ function Resolve-HwEncoder {
 	switch ($HwAccelValue) {
 		"nvidia" { $hw_suffix = "_nvenc"; $hw_label = "NVENC"; $hw_try_type = "nvidia"; $hw_try_args = @("-hwaccel", "cuda", "-hwaccel_output_format", "cuda") }
 		"intel"  { $hw_suffix = "_qsv";   $hw_label = "QSV";   $hw_try_type = "intel";  $hw_try_args = @("-hwaccel", "qsv", "-hwaccel_output_format", "qsv") }
+		# off — документированное значение config.ini.example: процессор, без предупреждения.
+		"off"    { }
 		# Опечатка в значении (+nvida, +amd) означала «считаем на процессоре» — молча.
-		default  { $r.Warning = "[ПРЕДУПРЕЖДЕНИЕ] Неизвестное значение [performance] hw_accel = '$HwAccelValue' (ожидается nvidia или intel). Кодирование идёт на процессоре." }
+		default  { $r.Warning = "[ПРЕДУПРЕЖДЕНИЕ] Неизвестное значение [gpu] hw_accel = '$HwAccelValue' (ожидается nvidia, intel или off). Кодирование идёт на процессоре." }
 	}
 	if (-not $hw_suffix) { return $r }
 	# Кандидат: маппинг software→GPU либо уже готовое GPU-имя от пользователя.

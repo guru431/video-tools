@@ -1170,8 +1170,10 @@ rem     -hwaccel_output_format cuda уже включался -> софт пол
 set "hw_suffix=" & set "hw_label=" & set "hw_try_type=" & set "hw_try_args="
 if "%hw_accel_value%"=="nvidia" (set "hw_suffix=_nvenc" & set "hw_label=NVENC" & set "hw_try_type=nvidia" & set "hw_try_args=-hwaccel cuda -hwaccel_output_format cuda")
 if "%hw_accel_value%"=="intel"  (set "hw_suffix=_qsv"   & set "hw_label=QSV"   & set "hw_try_type=intel"  & set "hw_try_args=-hwaccel qsv -hwaccel_output_format qsv")
+rem off — документированное значение config.ini.example: процессор, без предупреждения.
+if "%hw_accel_value%"=="off" exit /b 0
 rem Опечатка в значении (+nvida, +amd) означала «считаем на процессоре» — молча.
-if not defined hw_suffix echo [ПРЕДУПРЕЖДЕНИЕ] Неизвестное значение [performance] hw_accel = "%hw_accel_value%" ^(ожидается nvidia или intel^). Кодирование идёт на процессоре.
+if not defined hw_suffix echo [ПРЕДУПРЕЖДЕНИЕ] Неизвестное значение [gpu] hw_accel = "%hw_accel_value%" ^(ожидается nvidia, intel или off^). Кодирование идёт на процессоре.
 if not defined hw_suffix exit /b 0
 
 rem Кандидат: маппинг software->GPU либо уже готовое GPU-имя от пользователя.

@@ -220,9 +220,11 @@ if [ "$hw_accel_status" = "+" ]; then
 	case "$hw_accel_value" in
 		nvidia) hw_suffix="_nvenc"; hw_label="NVENC"; hw_try_args="-hwaccel cuda -hwaccel_output_format cuda"; hw_try_type="nvidia" ;;
 		intel)  hw_suffix="_qsv";   hw_label="QSV";   hw_try_args="-hwaccel qsv -hwaccel_output_format qsv";   hw_try_type="intel" ;;
+		# off — документированное значение config.ini.example: процессор, без предупреждения.
+		off) ;;
 		# Опечатка в значении (+nvida, +amd) означала «считаем на процессоре» — молча,
 		# и пользователь узнавал об этом только по времени кодирования.
-		*) echo "[ПРЕДУПРЕЖДЕНИЕ] Неизвестное значение [performance] hw_accel = '$hw_accel_value' (ожидается nvidia или intel). Кодирование идёт на процессоре." ;;
+		*) echo "[ПРЕДУПРЕЖДЕНИЕ] Неизвестное значение [gpu] hw_accel = '$hw_accel_value' (ожидается nvidia, intel или off). Кодирование идёт на процессоре." ;;
 	esac
 	if [ -n "$hw_suffix" ]; then
 		# Кандидат: маппинг software→GPU либо уже готовое GPU-имя от пользователя.

@@ -155,6 +155,17 @@ function Select-ConfigComboValue {
     $script:configWarnings += "WARN: $Key = '$Value' — недопустимое значение, в форме выбрано $Default"
 }
 
+# То же для списка, где текст пункта не начинается со значения («NVIDIA (NVENC)»):
+# пункт ищется по таблице «значение → индекс». Ключи @{} без учёта регистра — как
+# switch воркера. Неизвестное значение — $Default и предупреждение, не молча.
+function Select-ConfigComboMapped {
+    param($Combo, [string]$Value, [string]$Key, [hashtable]$Map, [int]$Default)
+    $v = "$Value".Trim()
+    if ($Map.ContainsKey($v)) { $Combo.SelectedIndex = $Map[$v]; return }
+    $Combo.SelectedIndex = $Default
+    $script:configWarnings += "WARN: $Key = '$Value' — недопустимое значение, в форме выбрано «$($Combo.Items[$Default])»"
+}
+
 # Загрузка дефолтов из config.ini
 $_cfg_source      = Read-Config "source"      "folders" "_video_\0"
 $_cfg_destination = Read-Config "destination"  "folders" "_video_\1"
@@ -514,7 +525,13 @@ $comboHWAccel.Location = [System.Drawing.Point]::new(100, 84)
 $comboHWAccel.Size = [System.Drawing.Size]::new(140, 21)
 $comboHWAccel.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
 $comboHWAccel.Items.AddRange(@("Без ускорения", "NVIDIA (NVENC)", "Intel (QSV)"))
-$comboHWAccel.SelectedIndex = if ($_cfg_hw_accel.enabled) { switch ($_cfg_hw_accel.value) { "nvidia" { 1 } "intel" { 2 } default { 0 } } } else { 0 }
+# Опечатка (+nvida, +amd) раньше молча давала «Без ускорения»; воркер на ней
+# хотя бы предупреждает. off — документированное значение config.ini.example.
+if ($_cfg_hw_accel.enabled) {
+    Select-ConfigComboMapped $comboHWAccel $_cfg_hw_accel.value "[gpu] hw_accel" @{ nvidia = 1; intel = 2; off = 0 } 0
+} else {
+    $comboHWAccel.SelectedIndex = 0
+}
 $_go.Add($comboHWAccel)
 
 # GPU Preset (hidden by default)
@@ -600,26 +617,47 @@ $comboHWAccel.Add_SelectedIndexChanged({
 })
 
 # Инициализация пресетов GPU по выбранному ускорителю (SelectedIndexChanged не срабатывает при начальной установке)
+# Включённое в config.ini значение вне списка раньше молча становилось p5/medium/
+# hq/vbr, а CLI отдаёт его ffmpeg как есть. Шаблоны — значения, которые принимает
+# энкодер (NVENC знает и прежние имена пресетов, а tune uhq и rc *_hq в список не
+# вынесены): такое добавляется пунктом «из config.ini», прочее — откат с WARN.
+# Выключенное значение CLI не использует — его, как и раньше, берём без проверки.
 if ($comboHWAccel.SelectedIndex -eq 2) {
     $comboGpuPreset.Items.Clear()
     $comboGpuPreset.Items.AddRange(@("veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"))
-    $idx = $comboGpuPreset.Items.IndexOf($_cfg_gpu_preset.value)
-    $comboGpuPreset.SelectedIndex = if ($idx -ge 0) { $idx } else { 3 }
+    if ($_cfg_gpu_preset.enabled) {
+        Select-ConfigComboValue $comboGpuPreset $_cfg_gpu_preset.value "[gpu] preset" '^(veryfast|faster|fast|medium|slow|slower|veryslow)$' "medium"
+    } else {
+        $idx = $comboGpuPreset.Items.IndexOf($_cfg_gpu_preset.value)
+        $comboGpuPreset.SelectedIndex = if ($idx -ge 0) { $idx } else { 3 }
+    }
     $comboGpuPreset.Visible = $true
     $labelGpuPreset.Visible = $true
 } elseif ($comboHWAccel.SelectedIndex -eq 1) {
-    $idx = $comboGpuPreset.Items.IndexOf($_cfg_gpu_preset.value)
-    if ($idx -ge 0) { $comboGpuPreset.SelectedIndex = $idx }
+    if ($_cfg_gpu_preset.enabled) {
+        Select-ConfigComboValue $comboGpuPreset $_cfg_gpu_preset.value "[gpu] preset" '^(p[1-7]|default|slow|medium|fast|hp|hq|bd|ll|llhq|llhp|lossless|losslesshp)$' "p5"
+    } else {
+        $idx = $comboGpuPreset.Items.IndexOf($_cfg_gpu_preset.value)
+        if ($idx -ge 0) { $comboGpuPreset.SelectedIndex = $idx }
+    }
     $comboGpuPreset.Visible = $true
     $labelGpuPreset.Visible = $true
     $comboGpuTune.Visible = $true; $labelGpuTune.Visible = $true
     $comboGpuRC.Visible = $true; $labelGpuRC.Visible = $true
 }
 # Инициализация tune/rc из config
-$idxTune = $comboGpuTune.Items.IndexOf($_cfg_gpu_tune.value)
-if ($idxTune -ge 0) { $comboGpuTune.SelectedIndex = $idxTune }
-$idxRC = $comboGpuRC.Items.IndexOf($_cfg_gpu_rc.value)
-if ($idxRC -ge 0) { $comboGpuRC.SelectedIndex = $idxRC }
+if ($_cfg_gpu_tune.enabled) {
+    Select-ConfigComboValue $comboGpuTune $_cfg_gpu_tune.value "[gpu] tune" '^(hq|uhq|ll|ull|lossless)$' "hq"
+} else {
+    $idxTune = $comboGpuTune.Items.IndexOf($_cfg_gpu_tune.value)
+    if ($idxTune -ge 0) { $comboGpuTune.SelectedIndex = $idxTune }
+}
+if ($_cfg_gpu_rc.enabled) {
+    Select-ConfigComboValue $comboGpuRC $_cfg_gpu_rc.value "[gpu] rc" '^(constqp|vbr|cbr|cbr_ld_hq|cbr_hq|vbr_hq|vbr_minqp|ll_2pass_quality|ll_2pass_size|vbr_2pass)$' "vbr"
+} else {
+    $idxRC = $comboGpuRC.Items.IndexOf($_cfg_gpu_rc.value)
+    if ($idxRC -ge 0) { $comboGpuRC.SelectedIndex = $idxRC }
+}
 
 $groupOptions.Controls.AddRange($_go.ToArray())
 # Жирный заголовок, дочерние контролы — обычный шрифт
@@ -895,7 +933,9 @@ $comboSubtitlesMode.Size = [System.Drawing.Size]::new($_v2w, 21)
 # конфиг уезжало `-ac 0` / `transpose=` — ffmpeg падал на каждом файле.
 $comboSubtitlesMode.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
 $comboSubtitlesMode.Items.AddRange(@("burn - На видео", "meta - Дорожкой"))
-$comboSubtitlesMode.SelectedIndex = if ($_cfg_video_subtitles.value -eq "meta") { 1 } else { 0 }
+# Воркер знает только burn и meta; иное значение он молча не применяет вовсе, а
+# GUI раньше так же молча выбирал burn и прожигал титры. Теперь — откат с WARN.
+Select-ConfigComboValue $comboSubtitlesMode $_cfg_video_subtitles.value "[video] subtitles" '^(burn|meta)$' "burn"
 $_ge.Add($comboSubtitlesMode)
 
 # Output Container
@@ -1207,8 +1247,10 @@ $cmbRemotePrefer.Location = [System.Drawing.Point]::new(382, 17)
 $cmbRemotePrefer.Size = [System.Drawing.Size]::new(90, 20)
 $cmbRemotePrefer.DropDownStyle = 'DropDownList'
 [void]$cmbRemotePrefer.Items.AddRange(@("auto", "gpu", "cpu"))
-$cmbRemotePrefer.SelectedItem = $_cfg_remote_pref
-if ($null -eq $cmbRemotePrefer.SelectedItem) { $cmbRemotePrefer.SelectedIndex = 0 }
+# Пустое значение воркер читает как auto, иное вне трёх — отказ preflight'а; GUI
+# раньше молча подставлял auto и считал там, где CLI с тем же config.ini отказал бы.
+if (-not $_cfg_remote_pref) { $_cfg_remote_pref = "auto" }
+Select-ConfigComboValue $cmbRemotePrefer $_cfg_remote_pref "[remote] prefer" '^(auto|gpu|cpu)$' "auto"
 
 $lblRemoteWait = [System.Windows.Forms.Label]::new()
 $lblRemoteWait.Location = [System.Drawing.Point]::new(488, 20)
@@ -1278,7 +1320,12 @@ $cmbAsrLang.DropDownStyle = 'DropDownList'
 [void]$cmbAsrLang.Items.AddRange(@("ru", "en"))
 if ($_cfg_asr_lang -and -not $cmbAsrLang.Items.Contains($_cfg_asr_lang)) { [void]$cmbAsrLang.Items.Add($_cfg_asr_lang) }
 $cmbAsrLang.SelectedItem = $_cfg_asr_lang
-if ($null -eq $cmbAsrLang.SelectedItem) { $cmbAsrLang.SelectedIndex = 0 }
+if ($null -eq $cmbAsrLang.SelectedItem) {
+    $cmbAsrLang.SelectedIndex = 0
+    # Сюда попадает только пустое значение (непустое добавлено пунктом выше); CLI
+    # на нём отказывает «[asr] language пуст», поэтому подстановку ru не скрываем.
+    $script:configWarnings += "WARN: [asr] language пуст — в форме выбрано $($cmbAsrLang.SelectedItem)"
+}
 
 $chkAsrDiarize = [System.Windows.Forms.CheckBox]::new()
 $chkAsrDiarize.Location = [System.Drawing.Point]::new(392, 18)
@@ -1629,7 +1676,7 @@ $buttonRun.Add_Click({
     $script:keep_aspect_ratio    = if ($checkKeepAspect.Checked)      { ":+:yes" }                                 else { ":-:no" }
     $script:output_container     = if ($checkContainer.Checked)       { ":+:$($comboContainer.Text)" }     else { ":-:$($comboContainer.Text)" }
 
-    $subtitlesMode = if ($comboSubtitlesMode.SelectedIndex -eq 0) { "burn" } else { "meta" }
+    $subtitlesMode = ([string]$comboSubtitlesMode.SelectedItem -split ' ')[0]
     $script:video_subtitles = if ($checkVideoSubtitles.Checked) { ":+:$subtitlesMode" } else { ":-:$subtitlesMode" }
 
     # Hardware acceleration
@@ -1642,9 +1689,13 @@ $buttonRun.Add_Click({
         $script:hw_accel = ":-:off"
     }
     $isGpuOn = ($hwIndex -gt 0)
-    $script:gpu_preset = if ($isGpuOn) { ":+:$($comboGpuPreset.SelectedItem)" } else { ":-:$($comboGpuPreset.SelectedItem)" }
-    $script:gpu_tune   = if ($isGpuOn -and $hwIndex -eq 1) { ":+:$($comboGpuTune.SelectedItem)" } else { ":-:$($comboGpuTune.SelectedItem)" }
-    $script:gpu_rc     = if ($isGpuOn -and $hwIndex -eq 1) { ":+:$($comboGpuRC.SelectedItem)" }   else { ":-:$($comboGpuRC.SelectedItem)" }
+    # Первое слово пункта: «slow - из config.ini» (Select-ConfigComboValue) уходит как slow.
+    $_gpuPresetVal = ([string]$comboGpuPreset.SelectedItem -split ' ')[0]
+    $_gpuTuneVal   = ([string]$comboGpuTune.SelectedItem -split ' ')[0]
+    $_gpuRcVal     = ([string]$comboGpuRC.SelectedItem -split ' ')[0]
+    $script:gpu_preset = if ($isGpuOn) { ":+:$_gpuPresetVal" } else { ":-:$_gpuPresetVal" }
+    $script:gpu_tune   = if ($isGpuOn -and $hwIndex -eq 1) { ":+:$_gpuTuneVal" } else { ":-:$_gpuTuneVal" }
+    $script:gpu_rc     = if ($isGpuOn -and $hwIndex -eq 1) { ":+:$_gpuRcVal" }   else { ":-:$_gpuRcVal" }
 
     # Playback speed
     $script:playback_speed = if ($checkSpeed.Checked) { ":+:$($textSpeed.Text)" } else { ":-:$($textSpeed.Text)" }

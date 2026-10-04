@@ -729,9 +729,14 @@ rem а goto из тела for обрывал бы перечисление фа�
 		rem число частей зависит от длительности и здесь ещё неизвестно, поэтому сверяем
 		rem базовое имя — сознательный консерватизм: лучше отклонить файл, чем закодировать
 		rem его поверх самого себя.
-		for %%I in ("%folder_destination%!file_path!!file_name!!part_suffix_known!.!current_format_out!") do set "_canon_out=%%~fI"
-		for %%I in ("!full_path!") do set "_canon_in=%%~fI"
-		if /i "!_canon_out!"=="!_canon_in!" (
+		rem S13. Сверяем короткую форму КАТАЛОГА плюс имя: %%~f не сводит длинное и
+		rem 8.3-написание одного каталога, и destination в 8.3-форме каталога источника
+		rem (или наоборот) совпадения не давал. %%~sf целиком не годится: у существующего
+		rem файла он укорачивает и имя, у ещё не созданного выхода - нет. _canon_out
+		rem остаётся полным путём: по нему сверяется карта коллизий ниже.
+		for %%I in ("%folder_destination%!file_path!!file_name!!part_suffix_known!.!current_format_out!") do (set "_canon_out=%%~fI" & set "_f12_out=%%~sdpI%%~nxI")
+		for %%I in ("!full_path!") do set "_f12_in=%%~sdpI%%~nxI"
+		if /i "!_f12_out!"=="!_f12_in!" (
 			echo [FAIL] !file_name!.!current_format_out!: выход совпадает с входом — файл пропущен& call :log_msg "FAIL" "!full_path!: выход совпадает с входом - файл пропущен (задайте другой destination, префикс или формат; при [split] length имя частей заранее неизвестно, поэтому in-place отклоняется)"
 			set /a "total_fail+=1"
 			goto :eof

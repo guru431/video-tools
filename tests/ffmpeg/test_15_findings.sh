@@ -1055,6 +1055,21 @@ CSEOF
         d2_skip_setup win
         d2_cmd "$W_IN" "$W_DST" 'set "overwrite_existing=no"'
         d2_skip_check "CMD"
+        # S13. F12 в CMD сверял %~f: длинное и 8.3-написание одного каталога давали
+        # «разные» пути, и in-place с destination в 8.3-форме источника (или наоборот)
+        # не отклонялся. Маркер — ASCII-часть строки FAIL: «[FAIL] same.mp4:».
+        F12_DIR="$WORK/Long Dir F12"; mkdir -p "$F12_DIR"; printf 'ORIGINAL' > "$F12_DIR/same.mp4"
+        W_F12_LONG=$(cygpath -w "$F12_DIR"); W_F12_SHORT=$(cygpath -d "$F12_DIR")
+        if [ "$W_F12_SHORT" = "$W_F12_LONG" ]; then
+            skip "CMD F12: длинный и 8.3-путь одного каталога" "на томе нет 8.3-имён"
+        else
+            d2_cmd "$W_F12_LONG" "$W_F12_SHORT" ''
+            assert_contains "CMD F12: destination — 8.3-форма каталога источника → FAIL" "[FAIL] same.mp4:" "$D2_OUT"
+            d2_cmd "$W_F12_SHORT" "$W_F12_LONG" ''
+            assert_contains "CMD F12: source — 8.3-форма каталога назначения → FAIL" "[FAIL] same.mp4:" "$D2_OUT"
+            assert_eq "CMD F12: оригинал не тронут" "ORIGINAL" "$(cat "$F12_DIR/same.mp4" 2>/dev/null)"
+        fi
+        rm -rf "$F12_DIR"
     fi
 fi
 rm -rf "$D2_IP" "$D2_OTHER" "$IN/ov.mp4" "$DST"/ov* "$DST/.ov.ffconv"

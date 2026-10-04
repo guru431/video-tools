@@ -269,6 +269,9 @@ assert_contains "архив загрузок подключён" "--download-arc
 assert_contains "метаданные и главы вшиваются" "--embed-metadata" "$SMOKE_LOG"
 # YouTube + auto → пресет avc1_best: без него молча уехали бы на «best» и получили VP9/AV1.
 assert_contains "для YouTube выбран avc1-пресет" "avc1" "$SMOKE_LOG"
+# Одиночный ролик идёт по одиночному шаблону: детект плейлиста (`echo "!url!" |
+# findstr`) не должен срабатывать без list= (пара к suite про плейлист ниже).
+assert_not_contains "одиночный URL — не плейлист-шаблон" "playlist_index" "$SMOKE_LOG"
 # Без перевода манифест не нужен — лишний файл в %TEMP% на каждую загрузку.
 assert_not_contains "без перевода манифест не запрашивается" "--print-to-file" "$SMOKE_LOG"
 assert_not_contains "vot без перевода не зовётся" "vot-cli-live ARGS:" "$SMOKE_LOG"
@@ -322,6 +325,15 @@ run_menu url="https://www.youtube.com/playlist?list=PL0000000000" \
 assert_eq "код возврата 0" "0" "$SMOKE_RC"
 assert_contains "перевод отключён для плейлиста" "недоступен для плейлистов" "$SMOKE_OUT"
 assert_contains "использован playlist-шаблон" "playlist_index" "$SMOKE_LOG"
+
+# Ролик внутри плейлиста: list= идёт после '&'. Детект — `echo "!url!" | findstr`:
+# для ПРОСТОЙ команды слева от пайпа !url! раскрывает родитель (delayed expansion
+# включён), и '&' в кавычках до дочернего cmd не доходит. Обёртка в блок
+# `( echo "!url!" ) | findstr` раскрытие потеряла бы — этот прогон её и поймает.
+run_menu url="${YT_URL}&list=PL0000000000" \
+         quality=3 cookie=0 translate=0 audiofmt=0 sb=0 subsvid=0
+assert_eq "&list=: код возврата 0" "0" "$SMOKE_RC"
+assert_contains "&list=: использован playlist-шаблон" "playlist_index" "$SMOKE_LOG"
 
 # ══════════════════════════════════════════════════════════════
 suite "CMD yt-dlp: пустой манифест = архив, перевод пропускается"

@@ -177,7 +177,10 @@ try {
     }
 
     $manifestPath = Join-Path $root 'release-manifest.json'
-    ($manifest | ConvertTo-Json -Depth 6) | Set-Content -Path $manifestPath -Encoding UTF8
+    # Без BOM: Set-Content -Encoding UTF8 в PS 5.1 пишет EF BB BF, и внешние читатели
+    # манифеста (jq и т. п.) спотыкаются на первом байте. Перевод строки в конце — как
+    # был у Set-Content.
+    [System.IO.File]::WriteAllText($manifestPath, (($manifest | ConvertTo-Json -Depth 6) + "`r`n"), (New-Object System.Text.UTF8Encoding $false))
 
     Write-Host ""
     Write-Host "release-manifest.json обновлён:"

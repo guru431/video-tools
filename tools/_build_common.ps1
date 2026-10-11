@@ -4,7 +4,7 @@
 
 $script:Ps2ExeSha    = 'D9EBC34E7AE83FDE75DE935175A333745B3D8DDD04900F47DD267036B5527F53'  # PS2EXE @ MScholtes/PS2EXE d32d5ce + локальные патчи: экранирование метаданных для C#-литералов (\ " CR LF TAB); экранирование целевого пути -embedFiles в verbatim-литерале @"…" (там кавычка удваивается, а не гасится бэкслешем) и имени ресурса в обычном; STDERR в -conHost на OpenStandardError вместо OpenStandardOutput; сериализация параметров в команду powershell.exe на PowerShell Core — каждая строка и ключ/значение -embedFiles в одинарных кавычках с удвоением апострофа, двойная кавычка вынесена из литерала конкатенацией [char]34 (в строке команды нет ни одной "), апостроф экранируется и в $PSScriptRoot/имени команды
 $script:Ps2ExeCommit = 'd32d5ce21c458696e860a7533943b1466d925be9'  # закреплённый commit ps2exe (провенанс)
-$script:BuildVersion = '19.0.0.0'
+$script:BuildVersion = '20.0.0.0'
 
 # Проверяет наличие вендоренного ps2exe и совпадение SHA256 (supply-chain).
 function Assert-Ps2Exe {

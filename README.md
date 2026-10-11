@@ -10,28 +10,28 @@ ffmpeg/yt-dlp скрипты для загрузки и конвертации �
 video/
 ├── ffmpeg/                              # Конвертер видео/аудио
 │   ├── config.ini.example               # Шаблон настроек (скопировать в config.ini)
-│   ├── FFmpeg_Converter_run_v19.sh      # Загрузчик конфига (Bash)
-│   ├── FFmpeg_Converter_run_v19.cmd     # Загрузчик конфига (CMD)
-│   ├── FFmpeg_Converter_run_v19.ps1     # Загрузчик конфига (PowerShell)
-│   ├── FFmpeg_Converter_run_win_v19.ps1 # GUI (WinForms)
+│   ├── FFmpeg_Converter_run_v20.sh      # Загрузчик конфига (Bash)
+│   ├── FFmpeg_Converter_run_v20.cmd     # Загрузчик конфига (CMD)
+│   ├── FFmpeg_Converter_run_v20.ps1     # Загрузчик конфига (PowerShell)
+│   ├── FFmpeg_Converter_run_win_v20.ps1 # GUI (WinForms)
 │   ├── FFmpeg_Converter_script.*        # Основная логика (.sh/.cmd/.ps1)
-│   ├── build_exe.ps1                    # Сборка -> _VideoConverter_v19.exe
+│   ├── build_exe.ps1                    # Сборка -> _VideoConverter_v20.exe
 │   ├── ffmpeg.exe                       # Портативный ffmpeg (нужно скачать, см. ниже)
 │   ├── remote_client.*                  # Клиент удалённого бэкенда (.sh/.ps1)
 │   ├── asr_client.*                     # Клиент сервера распознавания речи (.sh/.ps1)
-│   └── _VideoConverter_v19.exe          # Скомпилированный GUI
+│   └── _VideoConverter_v20.exe          # Скомпилированный GUI
 │
 ├── yt-dlp/                              # Загрузчик видео с YouTube и 1000+ сайтов
 │   ├── config.ini.example               # Шаблон настроек (скопировать в config.ini)
-│   ├── Downloading_from_YouTube_v19.sh  # CLI (Bash)
-│   ├── Downloading_from_YouTube_v19.cmd # CLI (Windows)
-│   ├── Downloading_from_YouTube_v19.ps1 # GUI (WinForms)
-│   ├── build_exe.ps1                    # Сборка -> _VideoDownloader_v19.exe
+│   ├── Downloading_from_YouTube_v20.sh  # CLI (Bash)
+│   ├── Downloading_from_YouTube_v20.cmd # CLI (Windows)
+│   ├── Downloading_from_YouTube_v20.ps1 # GUI (WinForms)
+│   ├── build_exe.ps1                    # Сборка -> _VideoDownloader_v20.exe
 │   ├── yt-dlp.exe                       # Загрузчик видео (нужно скачать, см. ниже)
 │   ├── ffmpeg.exe / ffprobe.exe         # Нужны для мержа дорожек и AI-перевода
 │   ├── deno.exe                         # JS-рантайм ДЛЯ yt-dlp (YouTube), не для vot
 │   ├── vot-cli-live.exe                 # AI-перевод аудио через Яндекс (опционально)
-│   └── _VideoDownloader_v19.exe         # Скомпилированный GUI
+│   └── _VideoDownloader_v20.exe         # Скомпилированный GUI
 │
 ├── tests/                               # Автоматические тесты
 │   ├── run_tests.sh                     # Точка входа
@@ -61,8 +61,8 @@ video/
 
 В `ffmpeg/` **`ffprobe.exe` не нужен** — эта сторона его не вызывает.
 Проверить раскладку одной командой:
-`bash yt-dlp/Downloading_from_YouTube_v19.sh --doctor` и
-`bash ffmpeg/FFmpeg_Converter_run_v19.sh --doctor`.
+`bash yt-dlp/Downloading_from_YouTube_v20.sh --doctor` и
+`bash ffmpeg/FFmpeg_Converter_run_v20.sh --doctor`.
 
 Ссылки:
 
@@ -192,7 +192,7 @@ format_files_in`, что у конвертера: записи диктофон�
 - **AI-перевод аудио:** 3 режима — dual_track, replace, mix
 - **Плейлисты:** `[download] playlist = auto|single|full` либо флаги `--no-playlist` / `--yes-playlist`
 - **Диагностика:** `--doctor` — какие инструменты найдены, где и что без каждого не работает
-- **Batch:** загрузка каналов из channels.txt с задержками и архивом скачанного — **только SH** (`Downloading_from_YouTube_v19.sh`, флаг `--batch`); в CMD и GUI (PS1) batch-режима нет
+- **Batch:** загрузка каналов из channels.txt с задержками и архивом скачанного — **только SH** (`Downloading_from_YouTube_v20.sh`, флаг `--batch`); в CMD и GUI (PS1) batch-режима нет
 - **Субтитры:** авторские и автоматические (`--write-subs --write-auto-subs`); формат из `[subtitles] format` — у YouTube нативно доступен `vtt`
 
 **Формат channels.txt:** одна строка на канал, `category|handle|mode` (где `mode` = `videos` либо `playlists`, `handle` — без ведущего `@`). `category` задаёт подпапку для сохранения, строки с `#` игнорируются. Шаблон для копирования — [`yt-dlp/channels.txt.example`](yt-dlp/channels.txt.example) (скопировать в `yt-dlp/channels.txt`).
@@ -218,7 +218,7 @@ format_files_in`, что у конвертера: записи диктофон�
 
 Бинарники (ffmpeg, yt-dlp) автоматически определяются рядом со скриптом, затем в PATH. Относительные пути в config.ini разрешаются от директории скрипта.
 
-**Исключение (по дизайну):** `yt-dlp/Downloading_from_YouTube_v19.cmd` — интерактивный CLI (спрашивает параметры в консоли) и **не читает `config.ini`**. Это санкционированное отклонение от config-driven паттерна: config-driven режим для yt-dlp даёт SH (`.sh`) и GUI (`.ps1`). Мета-тест `tests/common/test_config_keys.sh` учитывает это исключение (для yt-dlp ключ обязан читаться в `.sh` ИЛИ `.ps1`, CMD не требуется).
+**Исключение (по дизайну):** `yt-dlp/Downloading_from_YouTube_v20.cmd` — интерактивный CLI (спрашивает параметры в консоли) и **не читает `config.ini`**. Это санкционированное отклонение от config-driven паттерна: config-driven режим для yt-dlp даёт SH (`.sh`) и GUI (`.ps1`). Мета-тест `tests/common/test_config_keys.sh` учитывает это исключение (для yt-dlp ключ обязан читаться в `.sh` ИЛИ `.ps1`, CMD не требуется).
 
 Почему многое устроено именно так (ограничения платформ, контракт удалённого бэкенда, правила тестов) — в [`docs/constraints.md`](docs/constraints.md).
 
@@ -228,18 +228,18 @@ format_files_in`, что у конвертера: записи диктофон�
 
 ```bash
 # FFmpeg Converter (из папки ffmpeg/)
-bash FFmpeg_Converter_run_v19.sh
+bash FFmpeg_Converter_run_v20.sh
 
 # YT-DLP Downloader (из папки yt-dlp/)
-bash Downloading_from_YouTube_v19.sh
+bash Downloading_from_YouTube_v20.sh
 
 # GUI (Windows PowerShell)
-powershell -File ffmpeg/FFmpeg_Converter_run_win_v19.ps1
-powershell -File yt-dlp/Downloading_from_YouTube_v19.ps1
+powershell -File ffmpeg/FFmpeg_Converter_run_win_v20.ps1
+powershell -File yt-dlp/Downloading_from_YouTube_v20.ps1
 
 # Готовые EXE (собираются через build_exe.ps1)
-ffmpeg/_VideoConverter_v19.exe
-yt-dlp/_VideoDownloader_v19.exe
+ffmpeg/_VideoConverter_v20.exe
+yt-dlp/_VideoDownloader_v20.exe
 ```
 
 ---

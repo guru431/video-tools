@@ -78,7 +78,7 @@ set "dest_inside_source="
 call set "_di_probe=%%canon_dst:%canon_src%\=%%"
 if not "%_di_probe%"=="%canon_dst%" set "dest_inside_source=1"
 
-rem S14. Путь ffmpeg - только !ffmpeg!: run_v19 находит ffmpeg.exe рядом со скриптом,
+rem S14. Путь ffmpeg - только !ffmpeg!: run_v20 находит ffmpeg.exe рядом со скриптом,
 rem и в каталоге с "!" процентная подстановка под EnableDelayedExpansion теряла
 rem восклицательные знаки - ffmpeg "не найден" при лежащем рядом exe.
 "!ffmpeg!" -version >nul 2>&1

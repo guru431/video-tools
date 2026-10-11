@@ -6,9 +6,9 @@
 # выходов, исходы «файл / прогон», части, сводка и код возврата. Те же
 # сценарии, что test_28 для .sh: файловый цикл .ps1 — основной путь в
 # Windows (GUI и EXE). Один процесс PowerShell на сценарий: воркер кончается exit.
-# Harness передаёт код воркера процессу так же, как FFmpeg_Converter_run_v19.ps1
+# Harness передаёт код воркера процессу так же, как FFmpeg_Converter_run_v20.ps1
 # (`exit` дот-сорснутого скрипта под -File иначе даёт 0); последний сюит
-# проверяет код возврата самого run_v19.ps1.
+# проверяет код возврата самого run_v20.ps1.
 # ============================================================
 
 TESTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -242,13 +242,13 @@ assert_not_contains "сервер распознавания не опрашив
 # ══════════════════════════════════════════════════════════════
 suite "CLI .ps1: код возврата воркера доходит до процесса"
 # ══════════════════════════════════════════════════════════════
-# Настоящая обёртка run_v19.ps1 рядом с настоящим воркером: источник не найден —
+# Настоящая обёртка run_v20.ps1 рядом с настоящим воркером: источник не найден —
 # воркер делает `exit 1`. Под -File код дот-сорснутого скрипта терялся, и
 # cron/планировщик видели 0 на любом провале.
 mkdir -p "$WORK/cli"
-cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v19.ps1" "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1" "$WORK/cli/"
+cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v20.ps1" "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1" "$WORK/cli/"
 printf '[folders]\nsource = %s\n' "$(_w "$WORK/no-such-dir")" > "$WORK/cli/config.ini"
-"$PS_BIN" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(_w "$WORK/cli/FFmpeg_Converter_run_v19.ps1")" > "$WORK/cli.raw" 2>&1 < /dev/null
+"$PS_BIN" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(_w "$WORK/cli/FFmpeg_Converter_run_v20.ps1")" > "$WORK/cli.raw" 2>&1 < /dev/null
 _rc=$?
 assert_eq "источник не найден — код 1" "1" "$_rc"
 assert_contains "причина напечатана" "Папка источника не найдена" "$(tr -d '\r' < "$WORK/cli.raw")"
@@ -257,8 +257,8 @@ assert_contains "причина напечатана" "Папка источни
 # ранних отказов воркера; Pause-Prompt живёт в ненайденном файле). Без -NonInteractive:
 # Read-Host не бросает, и без проверки IsInputRedirected он ждал бы stdin.
 mkdir -p "$WORK/lone"
-cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v19.ps1" "$WORK/lone/"
-"$PS_BIN" -NoProfile -ExecutionPolicy Bypass -File "$(_w "$WORK/lone/FFmpeg_Converter_run_v19.ps1")" > "$WORK/lone.raw" 2>&1 < /dev/null
+cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v20.ps1" "$WORK/lone/"
+"$PS_BIN" -NoProfile -ExecutionPolicy Bypass -File "$(_w "$WORK/lone/FFmpeg_Converter_run_v20.ps1")" > "$WORK/lone.raw" 2>&1 < /dev/null
 _rc=$?
 assert_eq "воркер не найден — код 1" "1" "$_rc"
 # Переводы строк снимаются вместе с CR: Write-Error печатает запись об ошибке с
@@ -267,7 +267,7 @@ assert_eq "воркер не найден — код 1" "1" "$_rc"
 assert_contains "воркер не найден — причина" "FFmpeg_Converter_script.ps1" "$(tr -d '\r\n' < "$WORK/lone.raw")"
 assert_contains "пауза — только при интерактивном stdin" \
     'try { if (-not [Console]::IsInputRedirected) { Read-Host "Нажмите [Enter], чтобы выйти..." | Out-Null } } catch {}' \
-    "$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v19.ps1")"
+    "$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v20.ps1")"
 
 rm -f "$HARNESS"
 rm -rf "$WORK"

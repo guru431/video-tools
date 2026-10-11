@@ -38,7 +38,7 @@ done < <(find "$PROJECT_DIR" -name '*.sh' 2>/dev/null)
 
 # ── Entry-point .cmd — chcp 65001 (script.cmd наследует кодировку от run.cmd) ──
 suite "entry .cmd — chcp 65001"
-for f in "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v19.cmd" "$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v19.cmd"; do
+for f in "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v20.cmd" "$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v20.cmd"; do
     rel "$f"
     if grep -qi 'chcp 65001' "$f"; then pass "chcp: $REL"; else fail "chcp: $REL" "chcp 65001" "нет chcp"; fi
 done

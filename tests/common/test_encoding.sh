@@ -5,6 +5,7 @@
 #   .sh   — без BOM (BOM ломает shebang)
 #   entry .cmd — chcp 65001 (UTF-8-консоль для кириллицы)
 #   .cmd  — CRLF-концы строк (с LF cmd.exe неверно разбирает многострочные блоки)
+#   .sha256 — LF при checkout (с CRLF `sha256sum -c` не находит файл)
 # ============================================================
 
 TESTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -62,5 +63,27 @@ while IFS= read -r f; do
         fail "CRLF: $REL" "все $_all строк с CRLF" "с CRLF только $_crlf"
     fi
 done < <(find "$PROJECT_DIR" -name '*.cmd' -not -path '*/.git/*' 2>/dev/null)
+
+# ── .sha256 — из git выходят с LF при любом core.autocrlf ─────────────────
+# Sidecar сверяют `sha256sum -c`, а для него CR в конце строки — часть имени файла:
+# «No such file or directory» на верной сумме. Write-ExeChecksum пишет LF, но без
+# атрибута core.autocrlf=true (умолчание Git for Windows) возвращал CRLF при первом же
+# checkout — свежий Windows-клон не мог сверить EXE с его собственным sidecar. Рабочая
+# копия этого не показывает (сразу после сборки в ней LF), поэтому спрашиваем у git
+# действующий атрибут: один процесс на все файлы.
+suite ".sha256 — LF при checkout"
+_sidecars=()
+while IFS= read -r f; do
+    rel "$f"; _sidecars+=("$REL")
+done < <(find "$PROJECT_DIR/ffmpeg" "$PROJECT_DIR/yt-dlp" -maxdepth 1 -name '*.sha256' 2>/dev/null)
+if [ "${#_sidecars[@]}" -eq 0 ]; then
+    fail "sidecar-файлы .sha256 на месте" "хотя бы один" "ни одного"
+elif _attrs=$(git -C "$PROJECT_DIR" check-attr eol -- "${_sidecars[@]}" 2>/dev/null); then
+    for f in "${_sidecars[@]}"; do
+        assert_contains "eol=lf: $f" "$f: eol: lf" "$_attrs"
+    done
+else
+    skip ".sha256: действующий атрибут eol" "git не ответил"
+fi
 
 summary

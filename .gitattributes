@@ -12,6 +12,12 @@ tests/mocks/* text eol=lf
 # и сравнение упало бы при верном коде.
 tests/fixtures/** -text
 
+# Sidecar-суммы EXE сверяют `sha256sum -c`, а для него CR в конце строки — часть имени
+# файла: «No such file or directory» на верной сумме. Write-ExeChecksum пишет LF, но без
+# этого правила core.autocrlf=true возвращал CRLF при checkout, и свежий Windows-клон
+# не мог сверить EXE с его собственным sidecar.
+*.sha256 text eol=lf
+
 # CMD batch files обязаны быть CRLF, и это правило стоит ПОСЛЕДНИМ — оно должно
 # перекрывать `tests/mocks/*` выше (тот glob написан для extension-less bash-моков,
 # но захватывал и tests/mocks/ffmpeg.cmd).

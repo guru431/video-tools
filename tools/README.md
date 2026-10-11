@@ -57,12 +57,23 @@ used by `ffmpeg/build_exe.ps1` and `yt-dlp/build_exe.ps1` to compile the PS1 GUI
 
 - **Source:** `https://raw.githubusercontent.com/MScholtes/PS2EXE/<commit>/Module/ps2exe.ps1`
 - **Upstream base commit:** `d32d5ce21c458696e860a7533943b1466d925be9` (2025-08-21)
-- **SHA256 (vendored, patched artifact):** `E180C1264C131CAEDDFA37130A2F0EB826A3FFCA701B808DA3337689721FF45A`
+- **SHA256 (vendored, patched artifact):** `D9EBC34E7AE83FDE75DE935175A333745B3D8DDD04900F47DD267036B5527F53`
 
-The vendored file is the upstream base commit **plus a local patch** (escaping `\`, `"` and real
-CR/LF/TAB in the generated assembly metadata, so no value can break out of a C# string literal) — so its SHA256 does **not** match the raw upstream file; the hash
-above is of the patched artifact actually shipped in this repo, while the commit identifies the
-upstream base it was derived from.
+The vendored file is the upstream base commit **plus local patches**, so its SHA256 does **not**
+match the raw upstream file; the hash above is of the patched artifact actually shipped in this
+repo, while the commit identifies the upstream base it was derived from. The patches:
+
+- **Assembly metadata** — `\`, `"` and real CR/LF/TAB are escaped, so no value can break out of
+  a C# string literal.
+- **`-embedFiles`** — the target path sits inside a verbatim literal `@"…"`, where a quote is
+  closed by doubling, not by a backslash; the resource name sits inside a regular literal and
+  gets the metadata escaping. Without this a quote in the target path broke out of the literal.
+- **`-conHost`** — STDERR is connected through `OpenStandardError` instead of
+  `OpenStandardOutput`, which pushed error output down stdout.
+- **Relaunch from PowerShell Core** — parameters are serialized into the `powershell.exe`
+  command in single quotes with doubled apostrophes (strings and `-embedFiles` keys/values
+  alike); a double quote is moved out of the literal by `[char]34` concatenation, so the command
+  line contains no `"` at all; apostrophes in `$PSScriptRoot` and the command name are escaped too.
 
 The build scripts verify this SHA256 before dot-sourcing the file. It is vendored (not
 downloaded at build time) to avoid executing a moving remote `master` script — a supply-chain
@@ -71,11 +82,12 @@ risk for a public repo.
 The single source of truth for the pinned SHA256/commit and `BuildVersion` is
 [`tools/_build_common.ps1`](_build_common.ps1) (`$script:Ps2ExeSha` / `$script:Ps2ExeCommit` /
 `$script:BuildVersion`); `ffmpeg/build_exe.ps1`, `yt-dlp/build_exe.ps1` and `check_release.ps1`
-dot-source it. The values quoted here **mirror** that file for documentation — keep them in sync.
+dot-source it. The values quoted here **mirror** that file for documentation;
+`tests/common/test_guardrails.sh` fails when the mirror and the pin drift apart.
 
 ### Updating
 
 1. Download the new version from a specific commit/tag (not `master`).
-2. Review the diff; re-apply the local metadata-escaping patch if still needed.
+2. Review the diff; re-apply the local patches listed above that are still needed.
 3. Update the pin in `tools/_build_common.ps1` (`$script:Ps2ExeSha` / `$script:Ps2ExeCommit`) —
    the canonical source — then refresh the mirrored values in this README.

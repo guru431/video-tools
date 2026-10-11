@@ -694,6 +694,27 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════
+suite "tools/README.md: зеркало пинов ps2exe"
+# ══════════════════════════════════════════════════════════════
+# README цитирует SHA256 и коммит вендоренного ps2exe и сам просит держать их в
+# синхроне с _build_common.ps1 — но просьбу ничто не исполняло: пин менялся вместе с
+# локальными патчами, а в README оставался прежний хеш. Читателю публичного
+# репозитория такое расхождение говорит «файл не тот, что описан» — ровно тот сигнал
+# подмены, ради которого пин заведён. Пины читаются встроенным read, без процессов.
+_pin_sha=""; _pin_commit=""
+while IFS= read -r _l; do
+    case "$_l" in
+        '$script:Ps2ExeSha'*)    _t="${_l#*\'}"; _pin_sha="${_t%%\'*}" ;;
+        '$script:Ps2ExeCommit'*) _t="${_l#*\'}"; _pin_commit="${_t%%\'*}" ;;
+    esac
+done < "$PROJECT_DIR/tools/_build_common.ps1"
+assert_not_empty "пин SHA256 прочитан из _build_common.ps1" "$_pin_sha"
+assert_not_empty "пин коммита прочитан из _build_common.ps1" "$_pin_commit"
+_tools_readme="$(cat "$PROJECT_DIR/tools/README.md")"
+assert_contains "README называет действующий SHA256 ps2exe" "${_pin_sha:-<нет пина>}"    "$_tools_readme"
+assert_contains "README называет действующий коммит ps2exe" "${_pin_commit:-<нет пина>}" "$_tools_readme"
+
+# ══════════════════════════════════════════════════════════════
 suite "Сборка EXE: значок приложения"
 # ══════════════════════════════════════════════════════════════
 # Без -iconFile ps2exe собирает EXE с безликим значком, а форма без .Icon показывает

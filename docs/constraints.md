@@ -610,3 +610,17 @@
   в упакованном скрипте — лишний признак для эвристики антивируса (см.
   [`knowledge-base.md`](knowledge-base.md)). Закреплено suite'ом «Сборка EXE: значок
   приложения» в `tests/common/test_guardrails.sh`.
+- **Sidecar `.sha256` выходит из git с LF** (`*.sha256 text eol=lf` в `.gitattributes`).
+  Его сверяют `sha256sum -c`, а для него CR в конце строки — часть имени файла:
+  «No such file or directory» на верной сумме, в Git Bash так же, как на Linux.
+  `Write-ExeChecksum` пишет LF, но этого мало: `core.autocrlf=true` (умолчание Git for
+  Windows) возвращал CRLF при первом же checkout, и свежий Windows-клон не мог сверить
+  EXE с его собственным sidecar. CI этого не видел — он сравнивает первое поле, а не
+  зовёт `sha256sum -c`; рабочая копия тоже: сразу после сборки в ней LF. Поэтому
+  `tests/common/test_encoding.sh` спрашивает у git действующий атрибут.
+- **Пины ps2exe в `tools/README.md` — зеркало, и оно сверяется.** Единственный
+  источник SHA256 и коммита — `tools/_build_common.ps1`; README цитирует их для
+  читателя. Пока зеркало держалось на просьбе «keep them in sync», пин менялся вместе
+  с локальными патчами, а в README оставался прежний хеш — для публичного репозитория
+  это выглядит как подменённый файл. Сверяет suite «tools/README.md: зеркало пинов
+  ps2exe» в `tests/common/test_guardrails.sh`.

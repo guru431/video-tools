@@ -317,7 +317,7 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 | Файл | Что тестирует |
 |------|---------------|
 | `test_framework_selfcheck` | Сам фреймворк: ассерты честны при `pipefail` и сравнивают паттерн буквально, без glob (без ложной зелёнки) |
-| `test_encoding` | Кодировки: `.ps1`=BOM, `.sh`=без BOM, entry `.cmd`=chcp |
+| `test_encoding` | Кодировки: `.ps1`=BOM, `.sh`=без BOM, entry `.cmd`=chcp, `.cmd`=CRLF, `.sha256`=LF при checkout |
 | `test_config_keys` | Паритет ключей config.ini по платформам |
 | `test_config_contract` | Контракт `config-key-contract.yaml` ↔ реальность (CI-safe) |
 | `test_guardrails` | Статические guardrail'ы против регресса опасных паттернов |

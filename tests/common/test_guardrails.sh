@@ -626,6 +626,69 @@ if [ -f "$CHK" ]; then
     assert_contains "зависимость: клиент remote"    "ffmpeg/remote_client.ps1"                "$chk"
     assert_contains "зависимость: клиент asr"       "ffmpeg/asr_client.ps1"                   "$chk"
     assert_contains "зависимость: GUI yt-dlp"       "yt-dlp/Downloading_from_YouTube_v19.ps1" "$chk"
+
+    # Проверка свежести обязана отказывать, когда git не ответил: пустой ответ
+    # `git log` (dubious ownership, нет репозитория) раньше ПРОПУСКАЛ зависимость,
+    # и устаревший EXE проходил проверку вхолостую — ровно тот случай, ради
+    # которого она заведена. Функция берётся из настоящего исходника разбором AST,
+    # git подменён функцией. Harness — ASCII: он пишется без BOM.
+    _ps_chk=""
+    for _c in powershell powershell.exe; do
+        if command -v "$_c" >/dev/null 2>&1; then _ps_chk="$_c"; break; fi
+    done
+    if [ -z "$_ps_chk" ]; then
+        skip "Get-StaleExeSources: поведение при сбое git" "powershell не доступен"
+    else
+        _stale_ps=$(mktemp_suffix "${TMPDIR:-/tmp}/chk_stale_" .ps1)
+        cat > "$_stale_ps" << 'PS1EOF'
+param([string]$Chk)
+$ErrorActionPreference = 'Stop'
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($Chk, [ref]$null, [ref]$null)
+$fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-StaleExeSources' }, $true)
+if (-not $fn) { Write-Output 'NOFUNC'; exit 1 }
+. ([scriptblock]::Create($fn.Extent.Text))
+$root = 'C:\repo'
+$exes = @(@{ Path = 'a/x.exe'; Source = 'a/x.ps1' })
+$exeDeps = @{ 'a/x.exe' = @('a/x.ps1', 'a/y.ps1') }
+function git {
+    if ($args -contains 'log') {
+        switch ($script:logMode) {
+            'ok'    { $global:LASTEXITCODE = 0; return 'aaaaaaaa11111111' }
+            'empty' { $global:LASTEXITCODE = 0; return }
+            'throw' { throw 'fatal: detected dubious ownership in repository' }
+        }
+    }
+    switch ($script:mbMode) {
+        'ancestor' { $global:LASTEXITCODE = 0 }
+        'newer'    { $global:LASTEXITCODE = 1 }
+        'error'    { $global:LASTEXITCODE = 128 }
+        'throw'    { throw 'fatal: bad object' }
+    }
+}
+# TAG=<stale entries>|<1 when the first entry blames git, not a newer source>
+function Probe([string]$Tag, [string]$L, [string]$M) {
+    $script:logMode = $L; $script:mbMode = $M
+    $s = @(Get-StaleExeSources 'bbbbbbbb22222222')
+    Write-Output ("{0}={1}|{2}" -f $Tag, $s.Count, [int]([string]$s[0] -match 'git'))
+}
+Probe 'FRESH' 'ok' 'ancestor'
+Probe 'NEWER' 'ok' 'newer'
+Probe 'LOGFAIL' 'throw' 'ancestor'
+Probe 'LOGEMPTY' 'empty' 'ancestor'
+Probe 'MBERR' 'ok' 'error'
+Probe 'MBTHROW' 'ok' 'throw'
+PS1EOF
+        _stale_out=$("$_ps_chk" -NoProfile -NonInteractive -ExecutionPolicy Bypass \
+            -File "$(cygpath -w "$_stale_ps" 2>/dev/null || echo "$_stale_ps")" \
+            -Chk "$(cygpath -w "$CHK" 2>/dev/null || echo "$CHK")" 2>&1 | tr -d '\r')
+        rm -f "$_stale_ps"
+        assert_contains "исходники не новее сборки — EXE свежий"          "FRESH=0|0"    "$_stale_out"
+        assert_contains "исходник изменён после сборки — EXE устарел"     "NEWER=2|0"    "$_stale_out"
+        assert_contains "git log упал — отказ, а не пропуск зависимости"  "LOGFAIL=2|1"  "$_stale_out"
+        assert_contains "git log промолчал — отказ, а не пропуск"         "LOGEMPTY=2|1" "$_stale_out"
+        assert_contains "merge-base с ошибкой — отказ с причиной «git»"   "MBERR=2|1"    "$_stale_out"
+        assert_contains "merge-base упал — отказ с причиной «git»"        "MBTHROW=2|1"  "$_stale_out"
+    fi
 else
     fail "check_release.ps1 на месте" "$CHK" "не найден"
 fi

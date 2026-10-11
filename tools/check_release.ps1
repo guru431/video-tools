@@ -45,14 +45,27 @@ function Get-StaleExeSources {
             # try/catch, а не проверка кода: под $ErrorActionPreference = 'Stop'
             # любой stderr от git — терминирующая ошибка (см. ниже про dubious ownership).
             try { $last = (& git -C $root log -1 --format=%H -- $dep 2>$null | Out-String).Trim() } catch { $last = '' }
-            if (-not $last) { continue }
-            $isAncestor = $false
+            # Пустой ответ — git не выполнился (dubious ownership, нет репозитория) либо
+            # у исходника нет ни одного коммита: свежесть EXE в обоих случаях НЕ
+            # проверена. Раньше зависимость здесь пропускалась, и проверка проходила
+            # вхолостую — устаревший EXE уезжал в выпуск ровно в том случае, ради
+            # которого она заведена.
+            if (-not $last) {
+                $stale += "$($e.Path): git не назвал последний коммит $dep (не выполнился либо файл не закоммичен) — свежесть EXE не проверена"
+                continue
+            }
+            # Код 1 — «не предок» (исходник новее сборки); всё прочее, включая
+            # исключение, — git не выполнился, и это тоже отказ, но с другой причиной.
+            $rc = -1
             try {
                 & git -C $root merge-base --is-ancestor $last $Commit 2>$null
-                $isAncestor = ($LASTEXITCODE -eq 0)
-            } catch { $isAncestor = $false }
-            if (-not $isAncestor) {
-                $stale += "$($e.Path): собран на $($Commit.Substring(0, [Math]::Min(8, $Commit.Length))), а $dep изменён позже (в $($last.Substring(0,8)))"
+                $rc = $LASTEXITCODE
+            } catch { $rc = -1 }
+            $short = $Commit.Substring(0, [Math]::Min(8, $Commit.Length))
+            if ($rc -eq 1) {
+                $stale += "$($e.Path): собран на $short, а $dep изменён позже (в $($last.Substring(0,8)))"
+            } elseif ($rc -ne 0) {
+                $stale += "$($e.Path): git не сравнил коммит сборки $short с $dep — свежесть EXE не проверена"
             }
         }
     }
@@ -101,7 +114,9 @@ try {
         if (Test-Path -LiteralPath $manifestOld) {
             try { $builtAt = (Get-Content -LiteralPath $manifestOld -Raw | ConvertFrom-Json).source_commit } catch { $builtAt = '' }
         }
-        if ($builtAt) {
+        # 'unknown' пишет в манифест прогон, у которого не ответил git: сверять с ним
+        # нечего, и это та же «свежесть не проверена», что и пустое поле.
+        if ($builtAt -and $builtAt -ne 'unknown') {
             $stale = Get-StaleExeSources $builtAt
             if ($stale.Count -gt 0) {
                 throw ("EXE устарел — пересоберите (без -ManifestOnly):`n  " + ($stale -join "`n  "))

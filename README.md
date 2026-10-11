@@ -16,6 +16,7 @@ video/
 │   ├── FFmpeg_Converter_run_win_v20.ps1 # GUI (WinForms)
 │   ├── FFmpeg_Converter_script.*        # Основная логика (.sh/.cmd/.ps1)
 │   ├── build_exe.ps1                    # Сборка -> _VideoConverter_v20.exe
+│   ├── converter.ico                    # Значок EXE и окна (рисует tools/make_icons.ps1)
 │   ├── ffmpeg.exe                       # Портативный ffmpeg (нужно скачать, см. ниже)
 │   ├── remote_client.*                  # Клиент удалённого бэкенда (.sh/.ps1)
 │   ├── asr_client.*                     # Клиент сервера распознавания речи (.sh/.ps1)
@@ -27,6 +28,7 @@ video/
 │   ├── Downloading_from_YouTube_v20.cmd # CLI (Windows)
 │   ├── Downloading_from_YouTube_v20.ps1 # GUI (WinForms)
 │   ├── build_exe.ps1                    # Сборка -> _VideoDownloader_v20.exe
+│   ├── downloader.ico                   # Значок EXE и окна (рисует tools/make_icons.ps1)
 │   ├── yt-dlp.exe                       # Загрузчик видео (нужно скачать, см. ниже)
 │   ├── ffmpeg.exe / ffprobe.exe         # Нужны для мержа дорожек и AI-перевода
 │   ├── deno.exe                         # JS-рантайм ДЛЯ yt-dlp (YouTube), не для vot
@@ -357,3 +359,5 @@ powershell -File yt-dlp/build_exe.ps1
 ```
 
 `ps2exe.ps1` вендорится в `tools/` (закреплённый коммит + проверка SHA256 перед dot-source, без скачивания на лету). См. [tools/README.md](tools/README.md).
+
+Значки `ffmpeg/converter.ico` и `yt-dlp/downloader.ico` вшиваются в EXE при сборке и лежат рядом с ним — окно берёт значок из файла рядом, а одиночный EXE — из себя. Перерисовать: `powershell -File tools\make_icons.ps1`, затем пересобрать оба EXE.

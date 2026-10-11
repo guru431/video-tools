@@ -2,6 +2,7 @@
 $out      = Join-Path $PSScriptRoot '_VideoDownloader_v20.exe'
 $tmpSrc   = Join-Path $PSScriptRoot '_build_tmp.ps1'
 $ps2exePs = Join-Path $PSScriptRoot '..\tools\ps2exe.ps1'
+$icon     = Join-Path $PSScriptRoot 'downloader.ico'
 
 # Общие константы (SHA-пин ps2exe + версия) и проверка — один источник на оба build-скрипта.
 . (Join-Path $PSScriptRoot '../tools/_build_common.ps1')
@@ -29,6 +30,7 @@ try {
     Invoke-ps2exe `
         -inputFile  $tmpSrc `
         -outputFile $out `
+        -iconFile   $icon `
         -noConsole `
         -STA `
         -x64 `

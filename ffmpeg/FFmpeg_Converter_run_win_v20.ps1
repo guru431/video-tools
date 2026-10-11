@@ -299,6 +299,16 @@ $form.Size = [System.Drawing.Size]::new(820, 1022)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
+# Значок окна и панели задач. converter.ico рядом с приложением даёт все размеры сразу;
+# одиночному EXE без файла рядом достаётся значок из собственных ресурсов (сборка вшивает
+# тот же .ico), только 32 px. Под try: значок — косметика, а отказать может —
+# ExtractAssociatedIcon бросает исключение на UNC-пути (EXE запущен с сетевой папки).
+# Тогда остаётся стандартный значок WinForms.
+try {
+    $_iconFile = Join-Path $script:_appDir 'converter.ico'
+    $form.Icon = if (Test-Path -LiteralPath $_iconFile) { [System.Drawing.Icon]::new($_iconFile) }
+                 else { [System.Drawing.Icon]::ExtractAssociatedIcon([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) }
+} catch { }
 $form.Font = [System.Drawing.Font]::new("Segoe UI", 9, [System.Drawing.FontStyle]::Regular)
 # Двойная буферизация формы не включается: соответствующее свойство у Control
 # защищённое, добраться до него можно только рефлексией к непубличному члену, а такая

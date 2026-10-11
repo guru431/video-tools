@@ -33,6 +33,18 @@ powershell -ExecutionPolicy Bypass -File tools\amsi_probe.ps1 yt-dlp\Downloading
 Прежняя редакция этого раздела называла обёртку в комментарий единственным
 поведением — то есть описывала НЕ тот режим, который запускается по умолчанию.
 
+## make_icons.ps1
+
+Рисует значки обоих EXE — `ffmpeg/converter.ico` и `yt-dlp/downloader.ico` — средствами
+`System.Drawing`: без внешнего редактора и без чужих логотипов. Кадры 16–64 px хранятся
+32-битным DIB, 256 px — PNG; кадры 16/24/32 px заданы по пиксельной сетке, а не масштабом
+мастера. Оба файла коммитятся и числятся в `$exeDeps` у `check_release.ps1`, поэтому после
+запуска пересобираются оба EXE.
+
+```powershell
+powershell -File tools\make_icons.ps1
+```
+
 ## _build_common.ps1
 
 Единый источник пинов сборки: `$script:Ps2ExeSha`, `$script:Ps2ExeCommit`,

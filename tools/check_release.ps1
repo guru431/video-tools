@@ -30,9 +30,11 @@ $exeDeps = @{
         'ffmpeg/FFmpeg_Converter_run_win_v20.ps1',
         'ffmpeg/FFmpeg_Converter_script.ps1',
         'ffmpeg/remote_client.ps1',
-        'ffmpeg/asr_client.ps1')
+        'ffmpeg/asr_client.ps1',
+        'ffmpeg/converter.ico')
     'yt-dlp/_VideoDownloader_v20.exe' = @(
-        'yt-dlp/Downloading_from_YouTube_v20.ps1')
+        'yt-dlp/Downloading_from_YouTube_v20.ps1',
+        'yt-dlp/downloader.ico')
 }
 
 function Get-StaleExeSources {

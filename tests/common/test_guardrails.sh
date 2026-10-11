@@ -694,6 +694,39 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════
+suite "Сборка EXE: значок приложения"
+# ══════════════════════════════════════════════════════════════
+# Без -iconFile ps2exe собирает EXE с безликим значком, а форма без .Icon показывает
+# в заголовке и на панели задач стандартный значок WinForms. Значок — такая же
+# зависимость EXE, как исходник: файл обязан лежать в репозитории (иначе сборка в CI
+# падает), быть настоящим ICO со всеми размерами, которые просит оболочка Windows,
+# и числиться в $exeDeps — иначе перерисованный значок не устаревает EXE.
+# Заголовок читает один od на файл: ICONDIR (6 байт) + по 16 байт на кадр, ширина
+# кадра — первый байт записи, 0 означает 256. Размеры кадров — в $ICO_SIZES.
+_ico_sizes() {
+    local _b _i
+    ICO_SIZES=""
+    [ -f "$1" ] || return 0
+    # shellcheck disable=SC2207
+    _b=( $(od -An -v -tu1 -N 262 "$1") )
+    [ "${_b[0]} ${_b[1]} ${_b[2]} ${_b[3]}" = "0 0 1 0" ] || return 0
+    for ((_i = 0; _i < ${_b[4]}; _i++)); do
+        ICO_SIZES="$ICO_SIZES ${_b[$((6 + 16 * _i))]}"
+    done
+}
+for _spec in "ffmpeg:converter.ico:FFmpeg_Converter_run_win_v20.ps1" \
+             "yt-dlp:downloader.ico:Downloading_from_YouTube_v20.ps1"; do
+    _dir="${_spec%%:*}"; _rest="${_spec#*:}"; _ico="${_rest%%:*}"; _gui_name="${_rest#*:}"
+    _build="$(cat "$PROJECT_DIR/$_dir/build_exe.ps1")"
+    assert_contains "$_dir: сборка передаёт значок в ps2exe" "-iconFile" "$_build"
+    assert_contains "$_dir: сборка называет файл значка"     "'$_ico'"   "$_build"
+    _ico_sizes "$PROJECT_DIR/$_dir/$_ico"
+    assert_eq "$_dir/$_ico: ICO с кадрами 16–256" " 16 24 32 48 64 0" "$ICO_SIZES"
+    assert_contains "$_dir/$_ico числится зависимостью EXE" "'$_dir/$_ico'" "$chk"
+    assert_contains "$_dir: GUI ставит значок окна" '$form.Icon = ' "$(cat "$PROJECT_DIR/$_dir/$_gui_name")"
+done
+
+# ══════════════════════════════════════════════════════════════
 suite "ffmpeg: интерпретатор параллели, пауза и метки времени"
 # ══════════════════════════════════════════════════════════════
 FF_SH="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.sh"

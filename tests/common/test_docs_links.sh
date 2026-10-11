@@ -26,7 +26,8 @@ is_excluded() {
         # gitignored: рабочие файлы пользователя, на свежем клоне их нет
         ffmpeg/config.ini|yt-dlp/config.ini|yt-dlp/channels.txt) return 0 ;;
         .sanitize-patterns) return 0 ;;
-        # временный конфиг, который тест пишет сам перед запуском
+        # прежнее место тестового конфига: упомянуто в историческом tests/PLAN_TESTS.md,
+        # сами тесты пишут его во временный каталог
         tests/ffmpeg/config.ini) return 0 ;;
         # пути ВНУТРИ стороннего архива (инструкция по распаковке ffmpeg)
         bin/*) return 0 ;;

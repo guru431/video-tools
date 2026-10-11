@@ -14,7 +14,6 @@
 
 TESTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
-MY_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 source "$TESTS_DIR/lib/framework.sh"
 
@@ -154,7 +153,9 @@ suite "PS1 vs Bash: паритет значений"
 # ══════════════════════════════════════════════════════════════
 # Проверяем что PS1 и Bash дают одинаковый результат
 
-CONFIG_INI="$MY_DIR/config.ini"
+# Во временном каталоге, а не рядом с тестом: файл внутри репозитория переживал
+# прерванный прогон как неотслеживаемый (см. test_01).
+CONFIG_INI="$(mktemp_suffix "${TMPDIR:-/tmp}/test_ffcfg_ps1_" .ini)"
 cat > "$CONFIG_INI" << 'EOF'
 [audio]
 codec = +libmp3lame
@@ -197,6 +198,6 @@ assert_eq "Паритет: video codec (raw)"    "$bash_raw_video"     "$ps1_vid
 assert_eq "Паритет: container (raw)"      "$bash_raw_container" "$ps1_container"
 
 # ── Cleanup ───────────────────────────────────────────────────
-rm -f "$MY_DIR/config.ini"
+rm -f "$CONFIG_INI"
 
 summary

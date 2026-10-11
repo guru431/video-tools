@@ -9,7 +9,6 @@
 
 TESTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
-MY_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 source "$TESTS_DIR/lib/framework.sh"
 
@@ -28,7 +27,10 @@ fi
 source "$RUN_SH"
 
 # ── Единый тестовый config.ini на все тесты ──────────────────────────────────
-CONFIG_FILE="$MY_DIR/config.ini"
+# Во временном каталоге, а не рядом с тестом: read_config получает путь явно
+# (CONFIG_FILE), а файл внутри репозитория переживал прерванный прогон как
+# неотслеживаемый — «грязное дерево» для выпуска и добыча для авто-коммита.
+CONFIG_FILE="$(mktemp_suffix "${TMPDIR:-/tmp}/test_ffcfg_" .ini)"
 cat > "$CONFIG_FILE" << 'EOCONFIG'
 # Тестовый config.ini
 [folders]
@@ -197,6 +199,6 @@ assert_contains "пауза — только при интерактивном s
     'if [ -t 0 ]; then read -r -p "Нажмите [Enter], чтобы выйти..." _; fi' "$src_run"
 
 # ── Cleanup ───────────────────────────────────────────────────
-rm -f "$MY_DIR/config.ini"
+rm -f "$CONFIG_FILE"
 
 summary

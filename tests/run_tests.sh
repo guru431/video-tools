@@ -409,9 +409,9 @@ fi
 
 TIMEOUT_BIN=$(find_timeout_bin) || TIMEOUT_BIN=""
 
-# Параллельно — только быстрый уровень: его файлы общих путей не пишут. В полном
-# уровне это не так — tests/ffmpeg/config.ini пишут ffmpeg/test_01/02/13, а test_13
-# ещё и подменяет рабочий ffmpeg/config.ini, который читает common/test_config_keys.
+# Параллельно — только быстрый уровень: его файлы общих путей не пишут и не поднимают
+# PowerShell/CMD (сверяет test_guardrails). Файлы полного уровня на одновременный
+# запуск не рассчитаны: многие из них поднимают PowerShell и cmd.exe.
 PARALLEL=0
 [ "$FAST" = "1" ] && PARALLEL=1
 

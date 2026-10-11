@@ -1157,4 +1157,23 @@ for _f in ffmpeg/FFmpeg_Converter_run_win_v19.ps1 yt-dlp/Downloading_from_YouTub
         "$(cat "$PROJECT_DIR/$_f")"
 done
 
+# ══════════════════════════════════════════════════════════════
+suite "тесты не трогают рабочие конфиги пользователя"
+# ══════════════════════════════════════════════════════════════
+# ffmpeg/config.ini и yt-dlp/config.ini — рабочие файлы: адрес и ключ службы, прокси,
+# cookies. test_13 на время прогона ПОДМЕНЯЛ ffmpeg/config.ini, откладывая настоящий в
+# config.ini.parity-bak (не закрыт .gitignore): оборванный прогон оставлял заглушку на
+# месте конфига, а конфиг с ключом — добычей авто-коммита в публичный репозиторий.
+# Тест, которому нужен config.ini рядом со скриптом, копирует скрипт во временный
+# каталог (test_12, test_13). Строки-комментарии не считаются.
+_cfg_re='\$PROJECT_DIR/(ffmpeg|yt-dlp)/(config\.ini|channels\.txt)(["'"'"' ;)]|$)'
+_cfg_offenders="$(grep -rnE --include='*.sh' --exclude=test_guardrails.sh "$_cfg_re" "$TESTS_DIR" 2>/dev/null \
+    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' || true)"
+assert_empty "ни один тест не обращается к рабочему config.ini / channels.txt" "$_cfg_offenders"
+# Негативная самопроверка: синтетический нарушитель обязан ловиться.
+_cfg_probe="$(mktemp_suffix "${TMPDIR:-/tmp}/gr_cfg_" .sh)"
+printf '%s\n' 'cp "$BOM_CFG" "$PROJECT_DIR/ffmpeg/config.ini"' > "$_cfg_probe"
+assert_not_empty "синтетический нарушитель ловится" "$(grep -nE "$_cfg_re" "$_cfg_probe" || true)"
+rm -f "$_cfg_probe"
+
 summary

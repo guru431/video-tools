@@ -13,7 +13,6 @@
 # ============================================================
 
 TESTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-MY_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 source "$TESTS_DIR/lib/framework.sh"
 
@@ -64,11 +63,13 @@ Read-Config '$key' '$section' '$default' 6>\$null
 }
 
 # ── Единый каверзный config.ini (одинарные кавычки → ${VAR} не раскрывается) ─
-CONFIG_FILE="$MY_DIR/config.ini"
-# Уборка через trap, а не только в конце файла: config.ini создаётся ВНУТРИ репозитория
-# (парсеры читают его рядом со скриптом), и прерванный прогон оставлял его в рабочем
-# дереве — ночной auto-commit подобрал этот артефакт как исходник.
-trap 'rm -f "$CONFIG_FILE"' EXIT
+# Всё пишется во временный каталог, а не в репозиторий: парсерам путь задаётся явно
+# (CONFIG_FILE / $configFile). Прежде config.ini лежал рядом с тестом, и прерванный
+# прогон оставлял его в рабочем дереве — ночной auto-commit подобрал этот артефакт
+# как исходник. Уборка — через trap, а не только в конце файла.
+CFG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/test_parity_XXXXXX")"
+trap 'rm -rf "$CFG_DIR"' EXIT
+CONFIG_FILE="$CFG_DIR/config.ini"
 cat > "$CONFIG_FILE" << 'EOCONFIG'
 [tricky]
 embed_eq = a=b=c
@@ -221,8 +222,7 @@ suite "config.ini с UTF-8 BOM: первая секция распознаётс
 # вовсе, скрипт брал умолчания и падал с «Папка источника не найдена: …/_video_/0».
 # PS1 читал тот же файл верно — расхождение платформ на обычном пользовательском
 # действии «открыл config.ini в блокноте и сохранил».
-BOM_CFG="$MY_DIR/config_bom.ini"
-trap 'rm -f "$CONFIG_FILE" "$BOM_CFG"' EXIT
+BOM_CFG="$CFG_DIR/config_bom.ini"
 printf '\xEF\xBB\xBF[folders]\r\nsource = C:/bom/in\r\ndestination = C:/bom/out\r\n' > "$BOM_CFG"
 # Байты BOM обязаны реально стоять в файле — иначе тест проверяет не то.
 _bom_head=$(head -c 3 "$BOM_CFG" | od -An -tx1 | tr -d ' \n')
@@ -230,7 +230,7 @@ assert_eq "тестовый файл действительно с BOM" "efbbbf"
 
 CONFIG_FILE="$BOM_CFG"
 assert_eq "SH: [folders] source читается из файла с BOM" "C:/bom/in" "$(read_config source folders '__MISS__')"
-CONFIG_FILE="$MY_DIR/config.ini"
+CONFIG_FILE="$CFG_DIR/config.ini"
 
 if [ "$HAVE_PS1" = true ]; then
     BOM_WIN=$(cygpath -w "$BOM_CFG" 2>/dev/null || echo "$BOM_CFG")
@@ -240,22 +240,23 @@ else
     skip "PS1: [folders] source читается из файла с BOM" "PowerShell не найден"
 fi
 
-# CMD-сторона: подменяем рабочий config.ini на BOM-версию и смотрим --print-config.
+# CMD-сторона: run-скрипт читает config.ini из СВОЕГО каталога, поэтому берётся его
+# копия во временном каталоге с BOM-версией рядом (как в test_12). Прежде тест на время
+# прогона подменял РАБОЧИЙ ffmpeg/config.ini пользователя: оборванный в этом окне
+# прогон оставлял вместо него заглушку, а настоящий конфиг — с адресом и ключом
+# службы — в неотслеживаемом и не закрытом .gitignore файле config.ini.parity-bak.
 if cmd //c "exit 0" &>/dev/null; then
-    FF_CFG="$PROJECT_DIR/ffmpeg/config.ini"
-    FF_CFG_BAK="$PROJECT_DIR/ffmpeg/config.ini.parity-bak"
-    if [ -f "$FF_CFG" ]; then mv "$FF_CFG" "$FF_CFG_BAK"; fi
-    cp "$BOM_CFG" "$FF_CFG"
-    RUN_CMD_WIN=$(cygpath -w "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v19.cmd" 2>/dev/null || echo "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v19.cmd")
-    cmd_src=$(cmd //c "$RUN_CMD_WIN --print-config" 2>/dev/null | tr -d '\r' | grep '^folder_sources=' | head -1 | sed 's/^folder_sources=//')
-    rm -f "$FF_CFG"
-    if [ -f "$FF_CFG_BAK" ]; then mv "$FF_CFG_BAK" "$FF_CFG"; fi
+    mkdir -p "$CFG_DIR/cmd"
+    cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v19.cmd" "$CFG_DIR/cmd/"
+    cp "$BOM_CFG" "$CFG_DIR/cmd/config.ini"
+    RUN_CMD_WIN=$(cygpath -w "$CFG_DIR/cmd/FFmpeg_Converter_run_v19.cmd" 2>/dev/null || echo "$CFG_DIR/cmd/FFmpeg_Converter_run_v19.cmd")
+    cmd_src=$(cmd //c "$RUN_CMD_WIN --print-config" < /dev/null 2>/dev/null | tr -d '\r' | grep '^folder_sources=' | head -1 | sed 's/^folder_sources=//')
     assert_eq "CMD: [folders] source читается из файла с BOM" "C:/bom/in" "$cmd_src"
 else
     skip "CMD: [folders] source читается из файла с BOM" "cmd.exe не доступен"
 fi
 
 # ── Cleanup ───────────────────────────────────────────────────
-rm -f "$CONFIG_FILE" "$BOM_CFG"
+rm -rf "$CFG_DIR"
 
 summary

@@ -425,7 +425,31 @@ _out="$(MOCK_CURL_LOG="$CURL_LOG" MOCK_CURL_ROUTES="$_routes" REMOTE_RETRY_SECON
 _jobs="$(grep -F -- 'mock.invalid/v1/jobs' "$CURL_LOG" 2>/dev/null | grep -F -- '-X POST')"
 assert_eq "задач создано по числу частей" "2" "$(printf '%s\n' "$_jobs" | grep -c 'mock.invalid')"
 assert_eq "каждая задача несёт subtitle_upload_id" "2" "$(printf '%s\n' "$_jobs" | grep -c 'subtitle_upload_id')"
-rm -rf "$_tc_in" "$_tc_out"; rm -f "$CURL_LOG"
+
+# ══════════════════════════════════════════════════════════════
+suite "remote: тонкий клиент + [split] length — сбой ранней загрузки проваливает файл"
+# ══════════════════════════════════════════════════════════════
+# Ранняя загрузка (ради длительности) на сбое только печатала перевод строки: прогон
+# шёл дальше без длительности, цикл по частям грузил файл ВТОРОЙ раз и при удаче
+# отправлял его одной задачей целиком — вместо разбиения, о котором просил
+# config.ini. Сбой загрузки — отказ службы, и решает его on_failure.
+# Коды по порядку запросов: /capabilities — 200, первый POST /uploads — 500; дальше
+# действуют маршруты, то есть повторная загрузка удалась бы.
+rm -rf "$_tc_out"; mkdir -p "$_tc_out"; rm -f "$CURL_LOG"
+_tc_seq="$(mktemp /tmp/test_tc_seq_XXXXXX)"; printf '200\n500\n' > "$_tc_seq"
+_out="$(MOCK_CURL_LOG="$CURL_LOG" MOCK_CURL_ROUTES="$_routes" MOCK_CURL_CODE_SEQ_FILE="$_tc_seq" \
+    REMOTE_HTTP_RETRIES=1 REMOTE_RETRY_SECONDS=0 REMOTE_POLL_SECONDS=1 \
+    run_script_out \
+        "folder_sources=\"$_tc_in\"" "folder_destination=\"$_tc_out\"" \
+        'ffmpeg="/nonexistent/ffmpeg-does-not-exist"' \
+        'remote_enabled="yes"' 'remote_endpoint="http://mock.invalid/v1"' 'remote_api_key="k"' \
+        'video_subtitles=":+:burn"' 'length_coding=":+:00-00-10"')"
+assert_contains "сбой загрузки назван" "загрузка не удалась" "$_out"
+assert_contains "файл попал в ошибки сводки" "Ошибки:" "$_out"
+assert_not_contains "файл не уходит целиком под видом «длительность неизвестна»" "разбиение пропущено" "$_out"
+assert_eq "повторной загрузки нет" "1" "$(grep -F -- '-X POST' "$CURL_LOG" 2>/dev/null | grep -c 'mock.invalid/v1/uploads$')"
+assert_eq "ни одной задачи не создано" "0" "$(grep -F -- '-X POST' "$CURL_LOG" 2>/dev/null | grep -c 'mock.invalid/v1/jobs$')"
+rm -rf "$_tc_in" "$_tc_out"; rm -f "$CURL_LOG" "$_tc_seq"
 
 # ── Cleanup ───────────────────────────────────────────────────
 rm -f "$FFMPEG_LOG"

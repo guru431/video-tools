@@ -88,7 +88,7 @@ cat > "$_harness" <<PSEOF
 # Подмена: сети нет, ответы консервированные, вызовы записываются.
 function Invoke-RemoteHttp {
 	param([string]\$Method, [string]\$Path, [string]\$Body = '',
-	      [hashtable]\$Headers = @{}, [string]\$OutFile = '', [string]\$InFile = '',
+	      [hashtable]\$Headers = @{}, [string]\$OutFile = '',
 	      [byte[]]\$InBytes = \$null, [int]\$TimeoutMs = 60000)
 	\$range = if (\$Headers.ContainsKey('Content-Range')) { \$Headers['Content-Range'] } else { '' }
 	[void]\$script:calls.Add("\$Method \$Path \$range \$Body")
@@ -181,7 +181,7 @@ param([string]$Module)
 $script:capsBody = ''
 function Invoke-RemoteHttp {
 	param([string]$Method, [string]$Path, [string]$Body = '', [hashtable]$Headers = @{},
-	      [string]$OutFile = '', [string]$InFile = '', [byte[]]$InBytes = $null, [int]$TimeoutMs = 60000)
+	      [string]$OutFile = '', [byte[]]$InBytes = $null, [int]$TimeoutMs = 60000)
 	return [pscustomobject]@{ Code = 200; Body = $script:capsBody }
 }
 $remote_endpoint = 'http://mock.invalid/v1'; $remote_api_key = 'k'
@@ -205,6 +205,18 @@ $video_quality_status = '-'; $threads = 4
 # Успешный повтор сбрасывает прежнюю причину.
 [void](Invoke-RemotePreflight 6>$null)
 Write-Output ("RESETERR=[" + $script:RemotePreflightError + "]")
+# The container is checked after the local path's mapping: m4v goes to the service as mp4.
+$script:capsBody = '{"args_version":"2","chunk_size":1048576,"ops":{"transcode":{"values":{"container":["mp4"]}}}}'
+$output_container_value = 'm4v'
+Write-Output ("M4V=" + [bool](Invoke-RemotePreflight 6>$null))
+$output_container_value = 'wmv'
+[void](Invoke-RemotePreflight 6>$null)
+Write-Output ("WMVERR=" + $script:RemotePreflightError)
+$output_container_value = 'mp4'
+# A disabled codec key (codec = -libx264) gives an empty codec.
+$set_video_codec = ''
+[void](Invoke-RemotePreflight 6>$null)
+Write-Output ("NOCODEC=" + $script:RemotePreflightError)
 PSEOF
 _out="$("$PS_BIN" -NoProfile -NonInteractive -File "$_harness" -Module "$MODULE" 2>&1 | tr -d '\r')"
 _f() { printf '%s\n' "$_out" | grep "^${1}=" | sed "s/^${1}=//"; }
@@ -215,6 +227,12 @@ assert_contains "причина отказа: пустой адрес"        "T
 assert_contains "главная причина — первая ошибка"      "quality" "$(_f CFGERR)"
 assert_not_contains "вторая ошибка не перетирает первую" "threads" "$(_f CFGERR)"
 assert_eq "успешный preflight сбрасывает причину"     "[]" "$(_f RESETERR)"
+# Двойники проверок test_21: контейнер сверяется после отображения локального пути,
+# выключенный кодек назван своими словами, а не «Кодек «» неизвестен».
+assert_eq "m4v сверяется как mp4"                     "True" "$(_f M4V)"
+assert_contains "wmv → asf: назван отображённый контейнер" "asf" "$(_f WMVERR)"
+assert_contains "выключенный кодек: названо, что включить" "+libx264" "$(_f NOCODEC)"
+assert_not_contains "выключенный кодек — не «неизвестный»" "h264/hevc/av1" "$(_f NOCODEC)"
 rm -f "$_harness"
 
 # ══════════════════════════════════════════════════════════════
@@ -240,7 +258,7 @@ cat > "$_harness" <<PSEOF
 \$script:patchCount = 0
 function Invoke-RemoteHttp {
 	param([string]\$Method, [string]\$Path, [string]\$Body = '',
-	      [hashtable]\$Headers = @{}, [string]\$OutFile = '', [string]\$InFile = '',
+	      [hashtable]\$Headers = @{}, [string]\$OutFile = '',
 	      [byte[]]\$InBytes = \$null, [int]\$TimeoutMs = 60000)
 	if (\$Method -eq 'POST' -and \$Path -eq '/uploads') {
 		return [pscustomobject]@{ Code = 200; Body = '{"upload_id":"up-77","chunk_size":1024}' }
@@ -292,7 +310,7 @@ cat > "$_harness" <<PSEOF
 \$script:calls = New-Object System.Collections.ArrayList
 function Invoke-RemoteHttp {
 	param([string]\$Method, [string]\$Path, [string]\$Body = '',
-	      [hashtable]\$Headers = @{}, [string]\$OutFile = '', [string]\$InFile = '',
+	      [hashtable]\$Headers = @{}, [string]\$OutFile = '',
 	      [int]\$TimeoutMs = 60000)
 	[void]\$script:calls.Add("\$Method \$Path")
 	return [pscustomobject]@{ Code = 200; Body = '{"state":"running","progress":10}' }
@@ -334,7 +352,7 @@ function Get-Date { return $script:now }
 function Start-Sleep { param([int]$Seconds) $script:now = $script:now.AddSeconds($Seconds) }
 function Invoke-RemoteHttp {
 	param([string]$Method, [string]$Path, [string]$Body = '', [hashtable]$Headers = @{},
-	      [string]$OutFile = '', [string]$InFile = '', [byte[]]$InBytes = $null, [int]$TimeoutMs = 60000)
+	      [string]$OutFile = '', [byte[]]$InBytes = $null, [int]$TimeoutMs = 60000)
 	if ($Method -eq 'DELETE') { $script:deleted = $true; return [pscustomobject]@{ Code = 200; Body = '{}' } }
 	$script:polls++
 	# После $script:maxPolls опросов карта «освобождается» — задача готова.
@@ -374,7 +392,7 @@ cat > "$_harness" <<PSEOF
 \$script:calls = New-Object System.Collections.ArrayList
 function Invoke-RemoteHttp {
 	param([string]\$Method, [string]\$Path, [string]\$Body = '',
-	      [hashtable]\$Headers = @{}, [string]\$OutFile = '', [string]\$InFile = '',
+	      [hashtable]\$Headers = @{}, [string]\$OutFile = '',
 	      [int]\$TimeoutMs = 60000)
 	[void]\$script:calls.Add("\$Method \$Path")
 	if (\$Method -eq 'DELETE') { return [pscustomobject]@{ Code = 200; Body = '{}' } }
@@ -430,6 +448,15 @@ Write-RemoteUploadSidecarJob -Source \$src -Part 1 -Signature 'SIG-B' -JobId 'jo
 Write-Output ("NEW=" + (Read-RemoteUploadSidecarJob -Source \$src -Part 1 -Signature 'SIG-B'))
 Write-Output ("OLD2=" + (Read-RemoteUploadSidecarJob -Source \$src -Part 2 -Signature 'SIG-B'))
 Write-Output ("KEEPUID=" + [bool]((Get-Content -LiteralPath \$script:RemoteUploadSidecar -Raw) -match 'up-70'))
+# Та же часть под той же подписью: запись заменяется (прежняя задача признана мёртвой).
+Write-RemoteUploadSidecarJob -Source \$src -Part 1 -Signature 'SIG-B' -JobId 'job-81'
+Write-Output ("REPL1=" + (Read-RemoteUploadSidecarJob -Source \$src -Part 1 -Signature 'SIG-B'))
+Write-RemoteUploadSidecarJob -Source \$src -Part 2 -Signature 'SIG-B' -JobId 'job-82'
+Write-RemoteUploadSidecarJob -Source \$src -Part 1 -Signature 'SIG-B' -JobId 'job-83'
+\$scLines = @([System.IO.File]::ReadAllLines(\$script:RemoteUploadSidecar))
+Write-Output ("REPL2=" + (Read-RemoteUploadSidecarJob -Source \$src -Part 1 -Signature 'SIG-B') + '|' +
+	(Read-RemoteUploadSidecarJob -Source \$src -Part 2 -Signature 'SIG-B') + '|' +
+	@(\$scLines | Where-Object { \$_ -like 'job.1=*' }).Count + '|' + [bool](\$scLines -contains 'upload_id=up-70'))
 # Файла может не быть — запись обязана его создать.
 Remove-Item -LiteralPath \$script:RemoteUploadSidecar -Force
 Write-RemoteUploadSidecarJob -Source \$src -Part 1 -Signature 'SIG-C' -JobId 'job-90'
@@ -456,7 +483,7 @@ Write-Output ("NOTMP=" + (-not (Test-Path -LiteralPath "\$(\$script:RemoteUpload
 \$script:calls = New-Object System.Collections.ArrayList
 function Invoke-RemoteHttp {
 	param([string]\$Method, [string]\$Path, [string]\$Body = '',
-	      [hashtable]\$Headers = @{}, [string]\$OutFile = '', [string]\$InFile = '',
+	      [hashtable]\$Headers = @{}, [string]\$OutFile = '',
 	      [byte[]]\$InBytes = \$null, [int]\$TimeoutMs = 60000)
 	[void]\$script:calls.Add("\$Method \$Path")
 	if (\$Path -like '*/probe') { return [pscustomobject]@{ Code = 200; Body = '{"duration":42}' } }
@@ -488,6 +515,10 @@ assert_empty "другая подпись настроек — пусто"      
 assert_eq "новая задача под новой подписью"   "job-80" "$(_f NEW)"
 assert_empty "задача прежней подписи удалена"          "$(_f OLD2)"
 assert_eq "upload_id пережил перезапись"      "True"   "$(_f KEEPUID)"
+# Раньше запись той же части молча не обновлялась: sidecar навсегда держал мёртвый
+# идентификатор, и каждый следующий запуск плодил задачу-сироту.
+assert_eq "мёртвая задача части заменена новой" "job-81" "$(_f REPL1)"
+assert_eq "замена: своя часть, соседняя, одна запись, upload_id" "job-83|job-82|1|True" "$(_f REPL2)"
 assert_eq "sidecar создан при записи задачи"  "True"   "$(_f CREATED)"
 assert_eq "задача читается из созданного"     "job-90" "$(_f AFTER)"
 assert_eq "сорванная запись не тронула sidecar" "True"  "$(_f INTACT)"
@@ -525,9 +556,13 @@ cat > "$_harness" <<PSEOF
 \$script:calls = New-Object System.Collections.ArrayList
 function Invoke-RemoteHttp {
 	param([string]\$Method, [string]\$Path, [string]\$Body = '',
-	      [hashtable]\$Headers = @{}, [string]\$OutFile = '', [string]\$InFile = '',
+	      [hashtable]\$Headers = @{}, [string]\$OutFile = '',
 	      [byte[]]\$InBytes = \$null, [int]\$TimeoutMs = 60000)
 	[void]\$script:calls.Add("\$Method \$Path \$Body")
+	if ("\$Method \$Path" -eq 'POST /uploads' -and \$env:TC_FAIL_FIRST_UPLOAD -and -not \$script:uploadFailed) {
+		\$script:uploadFailed = \$true
+		return [pscustomobject]@{ Code = 500; Body = '{}' }
+	}
 	\$b = switch ("\$Method \$Path") {
 		'GET /capabilities'             { '{"args_version":"2","chunk_size":1048576}' }
 		'POST /uploads'                 { '{"upload_id":"up-1"}' }
@@ -566,11 +601,26 @@ try { . '$(cd "$PROJECT_DIR/ffmpeg" && pwd -W 2>/dev/null || echo "$PROJECT_DIR/
 \$jobs = @(\$script:calls | Where-Object { \$_ -like 'POST /jobs *' })
 Write-Output ("JOBS=" + \$jobs.Count)
 Write-Output ("WITHSUB=" + @(\$jobs | Where-Object { \$_ -match 'subtitle_upload_id' }).Count)
+Write-Output ("UPLOADS=" + @(\$script:calls | Where-Object { \$_ -like 'POST /uploads *' }).Count)
 PSEOF
 _out="$("$PS_BIN" -NoProfile -NonInteractive -File "$_harness" 2>&1 < /dev/null | tr -d '\r')"
 _f() { printf '%s\n' "$_out" | grep "^${1}=" | sed "s/^${1}=//"; }
 assert_eq "задач создано по числу частей"          "2" "$(_f JOBS)"
 assert_eq "каждая задача несёт subtitle_upload_id" "2" "$(_f WITHSUB)"
+
+# ══════════════════════════════════════════════════════════════
+suite "remote PS1: тонкий клиент + [split] length — сбой ранней загрузки проваливает файл"
+# ══════════════════════════════════════════════════════════════
+# Двойник suite'а в test_07. Ранняя загрузка (ради длительности) на сбое молча шла
+# дальше: цикл по частям грузил файл ВТОРОЙ раз и при удаче отправлял его одной
+# задачей целиком — вместо разбиения, о котором просил config.ini. Первый
+# POST /uploads здесь отвечает 500, следующий удался бы.
+rm -rf "$_tc_out"; mkdir -p "$_tc_out"
+_out="$(TC_FAIL_FIRST_UPLOAD=1 REMOTE_HTTP_RETRIES=1 "$PS_BIN" -NoProfile -NonInteractive -File "$_harness" 2>&1 < /dev/null | tr -d '\r')"
+assert_eq "повторной загрузки нет"            "1" "$(_f UPLOADS)"
+assert_eq "ни одной задачи не создано"        "0" "$(_f JOBS)"
+assert_contains "сбой загрузки назван"        "загрузка не удалась" "$_out"
+assert_not_contains "файл не уходит целиком под видом «длительность неизвестна»" "разбиение пропущено" "$_out"
 rm -f "$_harness"; rm -rf "$_tc_in" "$_tc_out"
 
 # ══════════════════════════════════════════════════════════════
@@ -616,12 +666,12 @@ cat > "$_harness" <<PSEOF
 \$remote_endpoint = "http://127.0.0.1:\$(\$tl.LocalEndpoint.Port)/v1"
 \$remote_api_key = 'k'
 \$ok = Join-Path '$_nodir_win' 'ok.bin'
-\$r = Invoke-RemoteHttpRetry GET '/jobs/j/result' '' @{} \$ok '' \$null 5000
+\$r = Invoke-RemoteHttpRetry GET '/jobs/j/result' '' @{} \$ok \$null 5000
 Write-Output ("OKCODE=" + \$r.Code)
 Write-Output ("OKBODY=" + [System.IO.File]::ReadAllText(\$ok))
 \$hits.n = 0
 \$bad = Join-Path '$_nodir_win' 'no-such-dir\res.bin'
-\$r = Invoke-RemoteHttpRetry GET '/jobs/j/result' '' @{} \$bad '' \$null 5000
+\$r = Invoke-RemoteHttpRetry GET '/jobs/j/result' '' @{} \$bad \$null 5000
 Write-Output ("BADCODE=" + \$r.Code)
 Write-Output ("BADHITS=" + \$hits.n)
 Write-Output ("RECV=" + (Receive-RemoteResult 'j' \$bad))
@@ -633,17 +683,17 @@ Write-Output ("RECV=" + (Receive-RemoteResult 'j' \$bad))
 # съело бы Timeout следующего запроса. Поэтому сначала тело с паузой, потом молчание.
 \$hits.mode = 'stall'
 Remove-Item -LiteralPath \$ok -Force -ErrorAction SilentlyContinue
-\$r = Invoke-RemoteHttp GET '/jobs/j/result' '' @{} \$ok '' \$null 400
+\$r = Invoke-RemoteHttp GET '/jobs/j/result' '' @{} \$ok \$null 400
 Write-Output ("STALLCODE=" + \$r.Code)
 Write-Output ("STALLBODY=" + [System.IO.File]::ReadAllText(\$ok))
 \$hits.mode = 'silent'
-\$r = Invoke-RemoteHttp GET '/jobs/j/result' '' @{} \$ok '' \$null 400
+\$r = Invoke-RemoteHttp GET '/jobs/j/result' '' @{} \$ok \$null 400
 Write-Output ("SILENTCODE=" + \$r.Code)
 \$tl.Stop()
 # Какой Timeout Receive-RemoteResult на самом деле передаёт в HTTP-слой.
 function Invoke-RemoteHttp {
 	param([string]\$Method, [string]\$Path, [string]\$Body = '', [hashtable]\$Headers = @{},
-	      [string]\$OutFile = '', [string]\$InFile = '', [byte[]]\$InBytes = \$null, [int]\$TimeoutMs = 60000)
+	      [string]\$OutFile = '', [byte[]]\$InBytes = \$null, [int]\$TimeoutMs = 60000)
 	\$script:seenTimeout = \$TimeoutMs
 	return [pscustomobject]@{ Code = 200; Body = '' }
 }

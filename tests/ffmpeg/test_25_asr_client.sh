@@ -261,6 +261,15 @@ _vc "https://a:1" ru maybe ""; assert_eq "diarize не yes/no" "1" "$VC"
 # 2^64+5 арифметика bash превращала в 5 — проверка шаблоном, без $(( )).
 for _n in 0 000 51 abc -1 99999999999999999999 18446744073709551621; do _vc "https://a:1" ru yes "$_n"; assert_eq "num_speakers=$_n отвергнут" "1" "$VC"; done
 for _n in 1 05 50; do _vc "https://a:1" ru yes "$_n"; assert_eq "num_speakers=$_n принят" "0" "$VC"; done
+# Переменные тонкой настройки: «abc» в ASR_RETRIES ломало сравнение попыток (повторы
+# при 503 молча отключались), а [int] в .ps1 бросал исключение после извлечения звука.
+for _n in abc 1.5 -1 9999999; do
+    ASR_RETRIES="$_n" _vc "https://a:1" ru yes ""; assert_eq "ASR_RETRIES=$_n отвергнут" "1" "$VC"
+    ASR_RETRY_WAIT="$_n" _vc "https://a:1" ru yes ""; assert_eq "ASR_RETRY_WAIT=$_n отвергнут" "1" "$VC"
+done
+ASR_RETRIES=abc _vc "https://a:1" ru yes ""
+assert_contains "названа переменная и её значение" "ASR_RETRIES = 'abc'" "$VC_ERR"
+ASR_RETRIES=0 ASR_RETRY_WAIT=120 _vc "https://a:1" ru yes ""; assert_eq "целые значения приняты" "0" "$VC"
 
 # ══════════════════════════════════════════════════════════════
 suite "ключ из api_key_command"

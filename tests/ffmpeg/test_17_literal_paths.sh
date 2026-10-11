@@ -127,6 +127,14 @@ if [ -d "$DST/nested [x]" ]; then
 else
     pass "dry-run не создал подкаталог назначения"
 fi
+# Корень destination — то же правило D7: холостой прогон не создаёт и его.
+OUT_NEW=$(run_worker "\$folder_destination = \$folder_destination + 'not-yet [n]'")
+assert_contains "dry-run без каталога назначения: команда напечатана" "[DRY-RUN]" "$OUT_NEW"
+if [ -e "$DST/not-yet [n]" ]; then
+    fail "dry-run не создал корень назначения" "нет '$DST/not-yet [n]'" "создан в dry-run"
+else
+    pass "dry-run не создал корень назначения"
+fi
 OUT_REAL=$(run_worker "\$dry_run='no'")
 if [ -d "$DST/nested [x]" ]; then
     pass "подкаталог назначения 'nested [x]' создан"

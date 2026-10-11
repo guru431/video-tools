@@ -394,12 +394,50 @@ assert_contains "GPU выключен — пресет уходит выключ
 # Список, читаемый через SelectedItem (напрямую или через Get-GpuComboArg), обязан быть
 # DropDownList: набранный руками текст не имеет SelectedItem и уходил пустым.
 assert_not_contains "списки, читаемые через SelectedItem, — DropDownList" "EDITABLE=" "$_combo2_out"
-assert_not_contains "списки, читаемые через SelectedItem, найдены" "READERS=0" "$_combo2_out"# Субтитры: CLI знает только burn/meta, иное молча не делает ничего — GUI
+assert_not_contains "списки, читаемые через SelectedItem, найдены" "READERS=0" "$_combo2_out"
+# Субтитры: CLI знает только burn/meta, иное молча не делает ничего — GUI
 # не имеет права молча прожигать.
 assert_contains "subtitles = meta — пункт meta"                     "SM=meta|2|0"    "$_combo2_out"
 assert_contains "subtitles = burn — пункт burn"                     "SB=burn|2|0"    "$_combo2_out"
 assert_contains "subtitles = soft — откат на burn + WARN"           "SX=burn|2|1"    "$_combo2_out"
 assert_contains "prefer = gpu — пункт gpu"                          "RPG=gpu|3|0"    "$_combo2_out"
 assert_contains "prefer = fastest — откат на auto + WARN"           "RPX=auto|3|1"   "$_combo2_out"
+
+suite "GUI: «Проверить обновления» сравнивает версии ffmpeg, а не строки"
+# Сверка шла равенством строк: git/nightly-сборке («N-118…», «2025-03-03-git-…»)
+# кнопка вечно предлагала «Скачать» релиз, хотя сборка новее него, а сборке новее
+# релиза — откат. Функция берётся из настоящего исходника GUI разбором AST.
+assert_contains "обработчик кнопки зовёт Get-FfmpegUpdateState" \
+    'Get-FfmpegUpdateState $script:ffmpegCurrentVersion $latestVer' "$gui_text"
+assert_not_contains "сверки равенством строк больше нет" '$currentShort -eq $latestVer' "$gui_text"
+_ver_ps=$(mktemp_suffix "${TMPDIR:-/tmp}/gui_ver_" .ps1)
+cat > "$_ver_ps" <<'PSEOF'
+param([string]$Gui)
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($Gui, [ref]$null, [ref]$null)
+$fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-FfmpegUpdateState' }, $true)
+if (-not $fn) { Write-Output 'NOFUNC'; exit 1 }
+. ([scriptblock]::Create($fn.Extent.Text))
+$i = 0
+foreach ($c in @(
+        @('7.1.1-essentials_build-www.gyan.dev', '7.1.1'), @('7.1-full_build', '7.1.1'),
+        @('7.10-x', '7.9'), @('8.0', '7.1.1'), @('7.1', '7.1.0'),
+        @('N-118193-g5f38c82536-20250101', '7.1.1'),
+        @('2025-03-03-git-d21ed2298e-full_build-www.gyan.dev', '7.1.1'),
+        @('', '7.1.1'), @('7.1.1', '<html>'))) {
+    Write-Output ("V{0}={1}" -f $i, (Get-FfmpegUpdateState $c[0] $c[1])); $i++
+}
+PSEOF
+_ver_out=$("$PS_CMD" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$_ver_ps")" \
+    -Gui "$(cygpath -w "$GUI")" 2>&1 | tr -d '\r')
+rm -f "$_ver_ps"
+assert_contains "та же версия релиза — актуально"                    "V0=current" "$_ver_out"
+assert_contains "релиз старее — обновление"                          "V1=update"  "$_ver_out"
+assert_contains "7.10 новее 7.9 — числа, а не строки"                "V2=current" "$_ver_out"
+assert_contains "сборка новее релиза — не «Скачать»"                 "V3=current" "$_ver_out"
+assert_contains "7.1 и 7.1.0 — одна версия"                          "V4=current" "$_ver_out"
+assert_contains "git-сборка N-… — не сравнивается"                   "V5=unknown" "$_ver_out"
+assert_contains "git-сборка с датой — не сравнивается"               "V6=unknown" "$_ver_out"
+assert_contains "ffmpeg не найден — предлагаем скачать"              "V7=update"  "$_ver_out"
+assert_contains "не версия в ответе сервера — не сравнивается"       "V8=unknown" "$_ver_out"
 
 summary

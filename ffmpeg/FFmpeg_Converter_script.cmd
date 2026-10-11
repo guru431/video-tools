@@ -47,7 +47,9 @@ if not exist "%folder_sources%\" (
 	exit /b 1
 )
 
-if not exist "%folder_destination%\" (
+rem D7. Dry-run только печатает команды - корень destination тоже не создаём: холостой
+rem прогон оставлял каталог на диске и этим маскировал ошибку в самом пути.
+if not "%dry_run%"=="yes" if not exist "%folder_destination%\" (
 	mkdir "%folder_destination%"
 	if errorlevel 1 (
 		echo.
@@ -67,6 +69,7 @@ rem S16. Сравнивается короткая форма %%~sf: %%~f не �
 rem одного каталога, и destination в 8.3-форме внутри источника (или наоборот) не
 rem распознавался. Оба каталога к этому месту существуют (destination создан выше),
 rem поэтому %%~sf укорачивает весь путь. Так же сверяется файл в :process_file.
+rem При dry_run destination может не существовать - тогда и исключать в нём нечего.
 for %%I in ("%folder_sources%")     do set "canon_src=%%~sfI"
 for %%I in ("%folder_destination%") do set "canon_dst=%%~sfI"
 if "%canon_src:~-1%"=="\" set "canon_src=%canon_src:~0,-1%"

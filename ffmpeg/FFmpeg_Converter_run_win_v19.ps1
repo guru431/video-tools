@@ -39,6 +39,26 @@ function Test-GpuEncoder {
     }
 }
 
+# Итог сверки установленного ffmpeg с последним релизом: 'current' | 'update' | 'unknown'.
+# Сравниваются числовые сегменты, а не строки целиком (7.10 новее 7.9, а сборка новее
+# релиза — не повод предлагать его). 'unknown' — версия не числовая (git/nightly:
+# «N-118…», «2025-03-03-git-…»): с номером релиза она не сравнима, и «Скачать» для
+# неё значило бы «у вас старая» при сборке новее релиза.
+function Get-FfmpegUpdateState {
+    param([string]$Current, [string]$Latest)
+    if (-not $Current) { return 'update' }
+    $cur = ($Current -split '-')[0]
+    $re = '^\d{1,9}(\.\d{1,9}){1,3}\z'
+    if ($cur -notmatch $re -or $Latest -notmatch $re) { return 'unknown' }
+    $a = @($cur.Split('.')); $b = @($Latest.Split('.'))
+    for ($i = 0; $i -lt [Math]::Max($a.Count, $b.Count); $i++) {
+        $x = if ($i -lt $a.Count) { [int]$a[$i] } else { 0 }
+        $y = if ($i -lt $b.Count) { [int]$b[$i] } else { 0 }
+        if ($x -ne $y) { return $(if ($x -gt $y) { 'current' } else { 'update' }) }
+    }
+    return 'current'
+}
+
 # --- Фallback для $PSScriptRoot при запуске из ps2exe-экзешника ---
 $script:_appDir = $PSScriptRoot
 if ([string]::IsNullOrEmpty($script:_appDir)) {
@@ -353,14 +373,15 @@ $btnCheckFfmpeg.Add_Click({
         $dlUrl     = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
         $script:ffmpegUpdateUrl = $dlUrl
 
-        $currentShort = if ($script:ffmpegCurrentVersion) { ($script:ffmpegCurrentVersion -split '-')[0] } else { "" }
-        if ($currentShort -and $currentShort -eq $latestVer) {
+        $updateState = Get-FfmpegUpdateState $script:ffmpegCurrentVersion $latestVer
+        if ($updateState -eq 'current') {
             $lnkFfmpegUpdate.Links.Clear()
             $lnkFfmpegUpdate.Text      = "актуально ($latestVer)"
             $lnkFfmpegUpdate.ForeColor = [System.Drawing.Color]::Gray
             $script:ffmpegUpdateUrl    = ""
         } else {
-            $linkText = "Скачать $latestVer"
+            # 'unknown' (git/nightly-сборка): релиз называем, но обновлением не объявляем.
+            $linkText = if ($updateState -eq 'unknown') { "релиз $latestVer" } else { "Скачать $latestVer" }
             $lnkFfmpegUpdate.Text = $linkText
             $lnkFfmpegUpdate.Links.Clear()
             $lnkFfmpegUpdate.Links.Add(0, $linkText.Length) | Out-Null

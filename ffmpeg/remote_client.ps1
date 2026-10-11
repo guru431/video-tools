@@ -173,6 +173,22 @@ function Test-RemoteCodecSupported {
 	return $false
 }
 
+# Контейнер для службы — после того же отображения, что у локального пути
+# (script.ps1, D3): m4v→mp4, mpg→mpeg, wmv→asf, mts/m2ts→mpegts. Выход на обоих путях
+# называется по отображённому имени, а службе уходило исходное: `container = +m4v`
+# локально давал mp4, удалённо — отказ «служба не умеет m4v». Без статуса «+» — mp4,
+# как локально. Паритет с remote_container в .sh.
+function Get-RemoteContainer {
+	if ($output_container_status -ne '+') { return 'mp4' }
+	switch -Regex ("$output_container_value") {
+		'^m4v$'        { return 'mp4' }
+		'^mpg$'        { return 'mpeg' }
+		'^wmv$'        { return 'asf' }
+		'^(mts|m2ts)$' { return 'mpegts' }
+	}
+	return "$output_container_value"
+}
+
 # Порядок полей здесь — контракт с .sh, а не вкус: тест паритета сравнивает
 # строки целиком. Меняя одну платформу, поменяйте вторую.
 function Get-RemoteOpForConfig {
@@ -223,7 +239,8 @@ function Get-RemoteOpForConfig {
 	# Контейнер — ПО СТАТУСУ, как в локальном пути («+» → значение, иначе mp4).
 	# Раньше значение бралось всегда: `container = -mkv` локально давал movie.mp4, а
 	# службе уходило "container":"mkv" — публиковался movie.mp4 с MKV внутри.
-	if ($output_container_status -eq '+') { $p += ",`"container`":`"$output_container_value`"" } else { $p += ",`"container`":`"mp4`"" }
+	# Значение — после отображения локального пути (Get-RemoteContainer).
+	$p += ",`"container`":`"$(Get-RemoteContainer)`""
 	$t = if ($threads) { $threads } else { 4 }
 	$p += ",`"threads`":$t"
 
@@ -296,7 +313,6 @@ function Invoke-RemoteHttp {
 		[string]$Body = '',
 		[hashtable]$Headers = @{},
 		[string]$OutFile = '',
-		[string]$InFile = '',
 		# Тело запроса БАЙТАМИ: кусок в 32 МБ раньше проходил через temp-файл
 		# (WriteAllBytes → ReadAllBytes), то есть лишняя запись на диск в размер
 		# всего исходника плюс второй буфер той же длины в памяти.
@@ -325,12 +341,6 @@ function Invoke-RemoteHttp {
 			$req.ContentLength = $InBytes.Length
 			$rs = $req.GetRequestStream()
 			$rs.Write($InBytes, 0, $InBytes.Length); $rs.Close()
-		} elseif ($InFile) {
-			$req.ContentType = 'application/octet-stream'
-			$bytes = [System.IO.File]::ReadAllBytes($InFile)
-			$req.ContentLength = $bytes.Length
-			$rs = $req.GetRequestStream()
-			$rs.Write($bytes, 0, $bytes.Length); $rs.Close()
 		} elseif ($Body) {
 			$req.ContentType = 'application/json'
 			$bytes = [System.Text.Encoding]::UTF8.GetBytes($Body)
@@ -404,14 +414,13 @@ function Invoke-RemoteHttpRetry {
 		[string]$Body = '',
 		[hashtable]$Headers = @{},
 		[string]$OutFile = '',
-		[string]$InFile = '',
 		[byte[]]$InBytes = $null,
 		[int]$TimeoutMs = 60000
 	)
 	$tries = if ($env:REMOTE_HTTP_RETRIES) { [int]$env:REMOTE_HTTP_RETRIES } else { 4 }
 	$pause = if ($env:REMOTE_RETRY_SECONDS) { [int]$env:REMOTE_RETRY_SECONDS } else { 3 }
 	for ($try = 1; ; $try++) {
-		$r = Invoke-RemoteHttp $Method $Path $Body $Headers $OutFile $InFile $InBytes $TimeoutMs
+		$r = Invoke-RemoteHttp $Method $Path $Body $Headers $OutFile $InBytes $TimeoutMs
 		if ($r.Code -ge 200 -and $r.Code -le 204) { return $r }
 		if (-not (Test-RemoteRetryableCode $r.Code)) { return $r }
 		if ($try -ge $tries) { return $r }
@@ -484,7 +493,14 @@ function Invoke-RemotePreflight {
 	# дороже, чем на нулевом. Раньше список encoders игнорировался вовсе.
 	$family = Get-RemoteCodec $set_video_codec
 	if (-not $family) {
-		Write-RemotePreflightError "Кодек «$set_video_codec» удалённой службе неизвестен (ожидаются h264/hevc/av1-энкодеры)."
+		# Выключенный ключ (codec = -libx264) локально означает «энкодер выберет
+		# ffmpeg», а службе нужно семейство: не отправленное поле приняло бы её
+		# умолчание и тихо разошлось бы с локальным результатом. Паритет с .sh.
+		if (-not $set_video_codec) {
+			Write-RemotePreflightError "[video] codec выключен (статус «-»), а удалённой службе нужен явный кодек: включите codec = +libx264, +libx265 или +libsvtav1."
+		} else {
+			Write-RemotePreflightError "Кодек «$set_video_codec» удалённой службе неизвестен (ожидаются h264/hevc/av1-энкодеры)."
+		}
 		return $false
 	}
 	if (-not (Test-RemoteCodecSupported $family $script:RemoteEncoders)) {
@@ -501,7 +517,7 @@ function Invoke-RemotePreflight {
 	# Контейнер выхода — тоже 400 после загрузки. Проверяем только когда список
 	# разобран: молчание службы не повод отказывать.
 	if (@($script:RemoteCapsContainers).Count -gt 0) {
-		$wantContainer = if ($output_container_status -eq '+') { "$output_container_value" } else { 'mp4' }
+		$wantContainer = Get-RemoteContainer
 		if ($script:RemoteCapsContainers -notcontains $wantContainer) {
 			Write-RemotePreflightError "Служба не умеет контейнер «$wantContainer» (из [video] container). Служба объявила: $($script:RemoteCapsContainers -join ', ')"
 			return $false
@@ -648,7 +664,12 @@ function Write-RemoteUploadSidecarJob {
 			# возобновление молча не работало бы до его удаления руками.
 			$lines = @($lines | Where-Object { $_ -notlike 'sig=*' -and $_ -notlike 'job.*' }) + @("sig=$Signature")
 		} elseif (@($lines | Where-Object { $_ -like "job.$Part=*" }).Count -gt 0) {
-			return
+			# Запись этой части уже есть, а пишется сюда только идентификатор СОЗДАННОЙ
+			# задачи: значит, прежняя признана негодной (Test-RemoteJobUsable) и
+			# заменяется. Раньше здесь был выход — sidecar навсегда держал мёртвый
+			# идентификатор, и каждый следующий запуск заново отбрасывал его и
+			# создавал задачу-сироту. Паритет с .sh.
+			$lines = @($lines | Where-Object { $_ -notlike "job.$Part=*" })
 		}
 		# Одна запись итогового содержимого вместо цепочки «создать → переписать →
 		# дописать»: каждое звено было отдельным окном для обрыва.
@@ -762,7 +783,7 @@ function Send-RemoteUpload {
 				# стоили лишней записи на диск в размер всего исходника и второго
 				# буфера той же длины в памяти.
 				$r = Invoke-RemoteHttp PATCH "/uploads/$uid" '' `
-					@{ 'Content-Range' = "bytes $offset-$($offset + $take - 1)/$size" } '' '' $buf
+					@{ 'Content-Range' = "bytes $offset-$($offset + $take - 1)/$size" } '' $buf
 				if ($r.Code -eq 200) { $sent = $true; break }
 				if (-not (Test-RemoteRetryableCode $r.Code)) { break }
 				if ($try -lt $tries) {
@@ -790,7 +811,7 @@ function Send-RemoteUpload {
 	# и штатных 60 с не хватало — клиент получал «HTTP 0» после полностью
 	# отправленных гигабайт, а sidecar (см. выше) загонял следующий запуск в тот же
 	# таймаут. Отдельный потолок в 30 минут.
-	$r = Invoke-RemoteHttp POST "/uploads/$uid/complete" "{`"size`":$size,`"sha256`":`"$sha`"}" @{} '' '' $null 1800000
+	$r = Invoke-RemoteHttp POST "/uploads/$uid/complete" "{`"size`":$size,`"sha256`":`"$sha`"}" @{} '' $null 1800000
 	if ($r.Code -ne 200) {
 		Write-Host "[ОШИБКА] Служба не подтвердила загрузку: HTTP $($r.Code)."
 		# Sidecar здесь ОБЯЗАН исчезнуть: он хранит upload_id, и следующий запуск
@@ -1018,7 +1039,7 @@ function Receive-RemoteResult {
 	# --speed-limit 1 --speed-time 600 на оба. Прежний час означал, что служба, принявшая
 	# соединение и молчащая, вешала клиента на час.
 	$script:RemoteResultVerified = 'no'
-	$r = Invoke-RemoteHttpRetry GET "/jobs/$JobId/result" '' @{} $Destination '' $null 600000
+	$r = Invoke-RemoteHttpRetry GET "/jobs/$JobId/result" '' @{} $Destination $null 600000
 	if ($r.Code -eq -1) {
 		# Служба результат отдала, не смогли сохранить мы (см. Invoke-RemoteHttp).
 		Write-Host "[ОШИБКА] Результат получен, но $($r.Body)"

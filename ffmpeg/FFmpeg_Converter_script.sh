@@ -91,7 +91,9 @@ if [ ! -d "$folder_sources" ]; then
 	exit 1
 fi
 
-if [ ! -d "$folder_destination" ]; then
+# D7. Dry-run только печатает команды — корень destination тоже не создаём: холостой
+# прогон оставлял каталог на диске и этим маскировал ошибку в самом пути.
+if [ "$dry_run" != "yes" ] && [ ! -d "$folder_destination" ]; then
 	mkdir -p "$folder_destination"
 	if [ $? -ne 0 ]; then
 		echo -e "\n[ОШИБКА] Не удалось создать папку назначения: $folder_destination\n"
@@ -991,7 +993,7 @@ collision_key() {
 
 # --- Канонизация пути для сравнения input/output ---
 # Файл назначения может ещё не существовать, поэтому канонизируем только каталог
-# (он гарантированно создан выше через mkdir -p) и приклеиваем basename.
+# (вне dry_run он создан выше через mkdir -p) и приклеиваем basename.
 # Результат — в CANON_PATH. Канонический вид СУЩЕСТВУЮЩЕГО каталога за прогон не
 # меняется, поэтому два последних запоминаются: encode_file канонизирует по очереди
 # каталог выхода и каталог входа, и каждая канонизация — это подоболочка с `cd`.
@@ -1412,6 +1414,9 @@ encode_file() {
 	# «Длительность неизвестна, разбиение пропущено», и обещанный фолбэк был мёртв.
 	# Условия узкие намеренно: обычный клиент с ffmpeg сюда не заходит вовсе, а
 	# dry_run не грузит байты по определению.
+	# file_remote — решение для ФАЙЛА: откат после сбоя ранней загрузки действует на
+	# все его части (цикл по частям берёт отсюда исходное значение part_remote).
+	local file_remote="$remote_active"
 	if [ "$remote_active" = "yes" ] && [ "$dry_run" != "yes" ] && \
 	   [ "${file_duration:-0}" -le 0 ] 2>/dev/null && [ "$length_coding_status" = "+" ]; then
 		log_msg "INFO" "Длительность неизвестна локально — берём её у службы: ${full_path##*/}"
@@ -1422,6 +1427,18 @@ encode_file() {
 			[ -n "${REMOTE_UPLOAD_DURATION:-}" ] && file_duration="${REMOTE_UPLOAD_DURATION%%.*}"
 		else
 			printf "\n"
+			REMOTE_UPLOAD_SIDECAR=""
+			# Сбой загрузки — отказ службы, а не «длительность неизвестна». Раньше
+			# прогон шёл дальше: цикл по частям грузил файл второй раз и при удаче
+			# отправлял его одной задачей ЦЕЛИКОМ, без разбиения, о котором просил
+			# config.ini. Решает on_failure — как при сбое загрузки внутри цикла.
+			if remote_fallback_allowed "$full_path" "загрузка не удалась"; then
+				file_remote="no"
+			else
+				log_msg "FAIL" "${full_path##*/}: загрузка не удалась"
+				put_result "fail"
+				return
+			fi
 		fi
 		REMOTE_UPLOAD_SIDECAR=""
 		[ "${file_duration:-0}" -gt 0 ] 2>/dev/null || file_duration=0
@@ -1684,7 +1701,7 @@ encode_file() {
 		# и обычный локальный путь. Дубль локальной ветки означал бы два
 		# разных «кодирования» из одного config.ini — ровно то, что
 		# publish_result держит в одном экземпляре.
-		local part_remote="$remote_active"
+		local part_remote="$file_remote"
 		local part_done="no"
 		if [ "$part_remote" = "yes" ]; then
 			local r_len=0

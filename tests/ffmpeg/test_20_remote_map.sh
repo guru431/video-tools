@@ -140,6 +140,27 @@ params="$(remote_op_for_config 0 0 | tail -1)"
 assert_contains     "выключенный container → mp4, как локально" '"container":"mp4"' "$params"
 assert_not_contains "выключенное значение container не уехало"  '"container":"mkv"' "$params"
 
+# Контейнер уезжает ПОСЛЕ того же отображения, что у локального пути (script.sh, D3):
+# выход на обоих путях называется по отображённому имени, а службе уходило исходное —
+# `container = +m4v` локально давал mp4, удалённо отказ «служба не умеет m4v».
+_setup_cfg
+output_container_status="+"; output_container_value="m4v"
+params="$(remote_op_for_config 0 0 | tail -1)"
+assert_contains "container = +m4v уезжает как mp4" '"container":"mp4"' "$params"
+# Таблица отображения записана дважды — в script.sh (блок D3) и в remote_container:
+# модуль необязателен и подключается отдельно, общей функции у них нет. Чтобы правка
+# одного места не разошлась с другим, сверяется НАСТОЯЩИЙ блок D3, вырезанный из
+# script.sh, а не список ожиданий в тесте. Адрес — по отступу в два таба: в файле
+# есть и другие `case "$format_files_out"` (muxer, кодек субтитров, совместимость).
+_d3="$(sed -n $'/^\t\tcase "\\$format_files_out" in$/,/^\t\tesac$/p' "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.sh")"
+assert_eq "вырезан ровно один блок" "1" "$(printf '%s\n' "$_d3" | grep -c 'case "\$format_files_out" in')"
+assert_contains "блок D3 найден в script.sh" 'format_files_out="mpegts"' "$_d3"
+for _c in m4v mpg wmv mts m2ts mkv mp4 webm avi mov ts flv; do
+    format_files_out="$_c"; eval "$_d3" > /dev/null
+    output_container_status="+"; output_container_value="$_c"; remote_container
+    assert_eq "container = +$_c: службе — то же имя, что у локального выхода" "$format_files_out" "$REMOTE_CONTAINER"
+done
+
 _setup_cfg
 keep_aspect_ratio_status="-"; keep_aspect_ratio_value="yes"
 params="$(remote_op_for_config 0 0 | tail -1)"

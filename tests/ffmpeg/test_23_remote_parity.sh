@@ -39,6 +39,8 @@ profiles=(
   "стиль со спецсимволами|subs_escapes"
   "GPU-пресеты|gpu"
   "звук без перекодирования|audio_copy"
+  # Контейнер уезжает после отображения локального пути (m4v → mp4) на обеих платформах.
+  "контейнер с отображением|container_map"
 )
 
 # Одно значение на обе платформы: `\` (законен в ASS/SSA), `"`, `/` и кириллица.
@@ -72,6 +74,7 @@ sh_vars() {
     subs_escapes) video_subtitles_status="+"; subtitles_style="$STYLE_ESCAPES" ;;
     gpu)          gpu_preset_status="+"; gpu_tune_status="+"; gpu_rc_status="+" ;;
     audio_copy)   audio_codec_status="-" ;;
+    container_map) output_container_status="+"; output_container_value="m4v" ;;
   esac
 }
 
@@ -106,6 +109,7 @@ PSEOF
                   printf '$subtitles_style = %s%s%s\n' "'" "$STYLE_ESCAPES" "'" ;;
     gpu)          echo '$gpu_preset_status="+"; $gpu_tune_status="+"; $gpu_rc_status="+"' ;;
     audio_copy)   echo '$audio_codec_status="-"' ;;
+    container_map) echo '$output_container_status="+"; $output_container_value="m4v"' ;;
   esac
 }
 
@@ -140,8 +144,31 @@ for entry in "${profiles[@]}"; do
       assert_contains "$name ($1/$2): video.bitrate в бит/с"  '"bitrate":3000000,' "$ps_params"
       assert_contains "$name ($1/$2): audio.bitrate в кбит/с" '"audio":{"codec":"aac","bitrate":128,' "$ps_params"
     fi
+    if [ "$key" = "container_map" ]; then
+      assert_contains "$name ($1/$2): m4v уезжает как mp4" '"container":"mp4"' "$ps_params"
+    fi
   done
 done
+
+# ══════════════════════════════════════════════════════════════
+suite "remote: паритет отображения контейнера SH ↔ PS1"
+# ══════════════════════════════════════════════════════════════
+# Таблица отображения (m4v→mp4, mpg→mpeg, …) записана на каждой платформе; .sh-сторону
+# с блоком D3 в script.sh сверяет test_20, здесь — две платформы между собой.
+_cvals="m4v mpg wmv mts m2ts mkv mp4 webm avi ts"
+sh_cmap=""
+for _c in $_cvals; do
+  output_container_status="+"; output_container_value="$_c"; remote_container
+  sh_cmap="$sh_cmap$_c=$REMOTE_CONTAINER "
+done
+ps_cmap="$("$PS_BIN" -NoProfile -NonInteractive -Command "
+  . '$MODULE'
+  \$output_container_status = '+'; \$o = ''
+  foreach (\$c in '$_cvals'.Split(' ')) { \$output_container_value = \$c; \$o += \$c + '=' + (Get-RemoteContainer) + ' ' }
+  Write-Output \$o
+" 2>&1 | tr -d '\r' | head -1)"
+assert_eq "одно отображение на обеих платформах" "$sh_cmap" "$ps_cmap"
+output_container_status="-"; output_container_value="mp4"
 
 # ══════════════════════════════════════════════════════════════
 suite "remote: паритет нормализации адреса SH ↔ PS1"

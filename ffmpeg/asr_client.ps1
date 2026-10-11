@@ -151,6 +151,15 @@ function Test-AsrConfigValues {
 	if ($asr_num_speakers -and $asr_num_speakers -notmatch '^0*([1-9]|[1-4][0-9]|50)\z') {
 		$errors += "[asr] num_speakers = '$asr_num_speakers': целое от 1 до 50 или пусто."
 	}
+	# Переменные тонкой настройки — тем же приёмом: [int]'abc' в Invoke-AsrTranscribePart
+	# бросал исключение уже после извлечения звука, а .sh на том же значении молча
+	# отключал повторы при 503.
+	foreach ($n in 'ASR_RETRIES', 'ASR_RETRY_WAIT') {
+		$v = [Environment]::GetEnvironmentVariable($n)
+		if ($v -and $v -notmatch '^[0-9]{1,6}\z') {
+			$errors += "[asr] переменная окружения $n = '$v': целое от 0 до 999999 или пусто."
+		}
+	}
 	foreach ($m in $errors) { Write-Host "[ОШИБКА] $m" }
 	if ($errors.Count -gt 0) { $script:AsrPreflightError = $errors[0]; return $false }
 	return $true

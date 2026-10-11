@@ -261,7 +261,10 @@ cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v19.ps1" "$WORK/lone/"
 "$PS_BIN" -NoProfile -ExecutionPolicy Bypass -File "$(_w "$WORK/lone/FFmpeg_Converter_run_v19.ps1")" > "$WORK/lone.raw" 2>&1 < /dev/null
 _rc=$?
 assert_eq "воркер не найден — код 1" "1" "$_rc"
-assert_contains "воркер не найден — причина" "FFmpeg_Converter_script.ps1" "$(tr -d '\r' < "$WORK/lone.raw")"
+# Переводы строк снимаются вместе с CR: Write-Error печатает запись об ошибке с
+# переносом по ширине консоли, а строка начинается с полного пути к скрипту — при
+# длинном %TEMP% перенос попадал внутрь имени файла («FFm» / «peg_Converter…»).
+assert_contains "воркер не найден — причина" "FFmpeg_Converter_script.ps1" "$(tr -d '\r\n' < "$WORK/lone.raw")"
 assert_contains "пауза — только при интерактивном stdin" \
     'try { if (-not [Console]::IsInputRedirected) { Read-Host "Нажмите [Enter], чтобы выйти..." | Out-Null } } catch {}' \
     "$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v19.ps1")"

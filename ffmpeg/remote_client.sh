@@ -82,6 +82,24 @@ remote_map_codec() {
 	esac
 }
 
+# --- Контейнер для службы ---
+# То же отображение, что у локального пути (script.sh, D3): m4v→mp4, mpg→mpeg,
+# wmv→asf, mts/m2ts→mpegts. Выход на обоих путях называется по отображённому имени,
+# а службе уходило исходное: `container = +m4v` локально давал mp4, удалённо —
+# отказ «служба не умеет m4v». Без статуса «+» — mp4, как локально.
+# Результат — в REMOTE_CONTAINER.
+remote_container() {
+	REMOTE_CONTAINER="mp4"
+	[ "$output_container_status" = "+" ] || return 0
+	case "$output_container_value" in
+		m4v)      REMOTE_CONTAINER="mp4" ;;
+		mpg)      REMOTE_CONTAINER="mpeg" ;;
+		wmv)      REMOTE_CONTAINER="asf" ;;
+		mts|m2ts) REMOTE_CONTAINER="mpegts" ;;
+		*)        REMOTE_CONTAINER="$output_container_value" ;;
+	esac
+}
+
 # --- Операция и параметры из уже разобранного config.ini ---
 # Аргументы: <начало в секундах> <длительность в секундах>; 0 0 = файл целиком.
 # Печатает две строки: операцию и JSON параметров.
@@ -149,11 +167,9 @@ remote_op_for_config() {
 	# movie.mp4, а службе уходило "container":"mkv" — она отдавала Matroska, клиент
 	# клал её в .ffconv-partial-movie.mp4, проверка `-f null -` по содержимому
 	# проходила, и публиковался movie.mp4 с MKV внутри. Тихо неверный результат.
-	if [ "$output_container_status" = "+" ]; then
-		p="$p,\"container\":\"$output_container_value\""
-	else
-		p="$p,\"container\":\"mp4\""
-	fi
+	# Значение — после отображения локального пути (remote_container).
+	remote_container
+	p="$p,\"container\":\"$REMOTE_CONTAINER\""
 	p="$p,\"threads\":${threads:-4}"
 
 	[ "$gpu_preset_status" = "+" ] && p="$p,\"preset\":\"$gpu_preset_value\""
@@ -617,7 +633,15 @@ remote_preflight() {
 	# который контракт запрещает, и вдобавок молча расходясь со службой.
 	local family
 	if ! family="$(remote_map_codec "$set_video_codec")"; then
-		echo "[ОШИБКА] Кодек «${set_video_codec}» удалённой службе неизвестен (ожидаются h264/hevc/av1-энкодеры)." >&2
+		# Выключенный ключ (codec = -libx264) локально означает «энкодер выберет
+		# ffmpeg», а службе нужно семейство: не отправленное поле приняло бы её
+		# умолчание и тихо разошлось бы с локальным результатом. Прежнее сообщение
+		# называло пустой кодек «неизвестным» и причины не объясняло.
+		if [ -z "$set_video_codec" ]; then
+			echo "[ОШИБКА] [video] codec выключен (статус «-»), а удалённой службе нужен явный кодек: включите codec = +libx264, +libx265 или +libsvtav1." >&2
+		else
+			echo "[ОШИБКА] Кодек «${set_video_codec}» удалённой службе неизвестен (ожидаются h264/hevc/av1-энкодеры)." >&2
+		fi
 		return 1
 	fi
 	# Пустой список и отсутствие ключа — разные вещи: первое означает «служба не
@@ -642,8 +666,8 @@ remote_preflight() {
 	# Контейнер выхода — тоже 400 после загрузки. Проверяем только когда список
 	# разобран: молчание службы не повод отказывать.
 	if [ -n "$REMOTE_CAPS_CONTAINERS" ]; then
-		local want="mp4"
-		[ "$output_container_status" = "+" ] && want="$output_container_value"
+		remote_container
+		local want="$REMOTE_CONTAINER"
 		case "$REMOTE_CAPS_CONTAINERS" in
 			*"\"$want\""*) ;;
 			*) echo "[ОШИБКА] Служба не умеет контейнер «${want}» (из [video] container). Служба объявила: $REMOTE_CAPS_CONTAINERS" >&2
@@ -821,12 +845,12 @@ endpoint=$remote_endpoint"
 	fi
 	# Строки разбираются самим bash, а не sed/grep: прежде здесь было пять процессов
 	# на каждую созданную задачу.
-	local line kept="" seen_sig="no" have_job="no"
+	local line kept="" rest="" seen_sig="no" have_job="no"
 	while IFS= read -r line; do
 		case "$line" in
 			sig=*) [ "$seen_sig" = "no" ] && { stored="${line#sig=}"; seen_sig="yes"; } ;;
 		esac
-		case "$line" in "job.${part}="*) have_job="yes" ;; esac
+		case "$line" in "job.${part}="*) have_job="yes" ;; *) rest="$rest$line"$'\n' ;; esac
 		case "$line" in sig=*|job.*) ;; *) kept="$kept$line"$'\n' ;; esac
 	done <<< "$cur"
 	if [ "$stored" != "$sig" ]; then
@@ -837,7 +861,12 @@ endpoint=$remote_endpoint"
 		while [[ $kept == *$'\n' ]]; do kept="${kept%$'\n'}"; done
 		cur="$kept"$'\n'"sig=$sig"
 	elif [ "$have_job" = "yes" ]; then
-		return 0
+		# Запись этой части уже есть, а пишется сюда только идентификатор СОЗДАННОЙ
+		# задачи: значит, прежняя признана негодной (remote_job_usable) и заменяется.
+		# Раньше здесь был выход — sidecar навсегда держал мёртвый идентификатор, и
+		# каждый следующий запуск заново отбрасывал его и создавал задачу-сироту.
+		while [[ $rest == *$'\n' ]]; do rest="${rest%$'\n'}"; done
+		cur="$rest"
 	fi
 	# Одна запись итогового содержимого вместо цепочки «создать → переписать →
 	# дописать»: каждое звено было отдельным окном для обрыва.

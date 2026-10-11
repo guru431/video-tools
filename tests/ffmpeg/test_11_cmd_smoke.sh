@@ -125,6 +125,17 @@ assert_contains "DRY-RUN команда содержит -c:v libx264" "-c:v lib
 assert_contains "keep_aspect: CPU scale+pad с force_divisible_by=2" "scale=1280:720:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=1280:720" "$output"
 assert_contains "итоговая сводка напечатана" "Обработано:" "$output"
 
+# D7. dry_run только печатает команды: корень destination создавался до и вне
+# проверки dry_run, и холостой прогон оставлял каталог назначения на диске.
+build_and_run "set \"folder_destination=$WIN_DST\\not-yet\""
+assert_eq "dry_run без каталога назначения: exit code 0" "0" "$SMOKE_RC"
+assert_contains "dry_run без каталога назначения: команда напечатана" "DRY-RUN" "$SMOKE_OUT"
+if [ -e "$TMP_DIR/dst/not-yet" ]; then
+    fail "dry_run не создал корень destination" "нет dst/not-yet" "создан"
+else
+    pass "dry_run не создал корень destination"
+fi
+
 # ══════════════════════════════════════════════════════════════
 suite "CMD: спецрежимы (dry_run) — parse-безопасность F5/F6/F7/F8"
 # ══════════════════════════════════════════════════════════════

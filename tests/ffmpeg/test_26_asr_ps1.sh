@@ -103,6 +103,20 @@ for ($i = 0; $i -lt $vc.Count; $i++) {
     $ok = Test-AsrConfigValues
     Write-Output ("VC_$i=" + [int](-not $ok))
 }
+# Tuning variables: [int]'abc' threw after the audio was extracted.
+$asr_endpoint = 'https://a:1'; $asr_language = 'ru'; $asr_diarize = 'yes'; $asr_num_speakers = ''
+$ev = ''
+foreach ($n in 'ASR_RETRIES', 'ASR_RETRY_WAIT') {
+    foreach ($v in 'abc', '1.5', '-1', '9999999') {
+        [Environment]::SetEnvironmentVariable($n, $v)
+        $ev += [int](-not (Test-AsrConfigValues))
+        [Environment]::SetEnvironmentVariable($n, $null)
+    }
+}
+$env:ASR_RETRIES = '0'; $env:ASR_RETRY_WAIT = '120'
+$ev += '|' + [int](-not (Test-AsrConfigValues))
+Remove-Item Env:ASR_RETRIES; Remove-Item Env:ASR_RETRY_WAIT
+Write-Output ("VC_ENV=" + $ev)
 $asr_endpoint = ''; $asr_language = 'ru'; $asr_diarize = 'yes'; $asr_num_speakers = ''
 
 $script:AsrApiKeyResolved = $false; $asr_api_key = ''; $asr_api_key_command = 'Write-Output "  cmd-key  "'
@@ -252,6 +266,8 @@ assert_eq "две части — валидная обёртка" "2|1001" "$(ge
 suite "ASR PS1: проверка конфига и ключ из команды"
 _want=(0 1 1 1 1 1 1 1 0 0 1 0)
 for _i in 0 1 2 3 4 5 6 7 8 9 10 11; do assert_eq "случай $_i" "${_want[_i]}" "$(get_field "VC_$_i")"; done
+# Те же восемь значений, что у .sh (по четыре на переменную), затем верные 0 и 120.
+assert_eq "нечисловые ASR_RETRIES / ASR_RETRY_WAIT отвергнуты, целые приняты" "11111111|0" "$(get_field VC_ENV)"
 assert_eq "api_key_command" "True|cmd-key" "$(get_field KEYCMD)"
 
 suite "ASR PS1: выбор адреса и запрос части (подменённый curl)"

@@ -142,8 +142,10 @@ if ([string]::IsNullOrWhiteSpace($folder_destination)) {
 	Pause-Prompt "Нажмите [Enter], чтобы выйти..."
 	exit 1
 }
-# CreateDirectory идемпотентен — предварительный Test-Path не нужен
-New-DirLiteral $folder_destination
+# CreateDirectory идемпотентен — предварительный Test-Path не нужен.
+# D7. Dry-run только печатает команды — корень destination тоже не создаём: холостой
+# прогон оставлял каталог на диске и этим маскировал ошибку в самом пути.
+if ($dry_run -ne "yes") { New-DirLiteral $folder_destination }
 
 # Оба корня приводим к канонической форме СРАЗУ, пока не построен ни один путь: карта
 # коллизий выходов склеивает ключ из $folder_destination, а пофайловая проверка
@@ -1333,14 +1335,28 @@ function Encode-File {
 	# иначе `remote_active = yes` + `[split] length` у тонкого клиента давали
 	# «Длительность неизвестна, разбиение пропущено», и фолбэк был мёртв. Загрузка
 	# одна на файл — блок в цикле по частям её не повторит. Паритет с .sh.
+	# $fileRemote — решение для ФАЙЛА: откат после сбоя ранней загрузки действует на
+	# все его части (цикл по частям берёт отсюда исходное значение $partRemote).
+	$fileRemote = ($remote_active -eq 'yes')
 	if ($remote_active -eq 'yes' -and $dry_run -ne 'yes' -and $fileDuration -le 0 -and $length_coding_status -eq '+') {
 		Log-Msg "INFO" "Длительность неизвестна локально — берём её у службы: $($file.Name)"
 		$script:_remoteUploadName = $file.Name
 		$script:RemoteUploadSidecar = "$manifest.upload"
 		$script:remoteUploadId = Send-RemoteUpload $full_path
 		$script:RemoteUploadSidecar = ''
-		if ($script:remoteUploadId -and $script:RemoteUploadDuration) {
-			$fileDuration = [int]([double]$script:RemoteUploadDuration)
+		if ($script:remoteUploadId) {
+			if ($script:RemoteUploadDuration) { $fileDuration = [int]([double]$script:RemoteUploadDuration) }
+		} elseif (Test-RemoteFallbackAllowed $file.Name "загрузка не удалась") {
+			# Сбой загрузки — отказ службы, а не «длительность неизвестна». Раньше
+			# прогон шёл дальше: цикл по частям грузил файл второй раз и при удаче
+			# отправлял его одной задачей ЦЕЛИКОМ, без разбиения, о котором просил
+			# config.ini. Решает on_failure — как при сбое загрузки внутри цикла.
+			$fileRemote = $false
+		} else {
+			Log-Msg "FAIL" "$($file.Name): загрузка не удалась"
+			$script:countFail++
+			Write-GUIProgress -CurrentFile $file.Name
+			return
 		}
 	}
 
@@ -1577,7 +1593,7 @@ function Encode-File {
 		# ffmpeg, и она обязана провалиться в тот же самый код, что и обычный
 		# локальный путь. Дубль локальной ветки означал бы два разных
 		# «кодирования» из одного config.ini.
-		$partRemote = ($remote_active -eq 'yes')
+		$partRemote = $fileRemote
 		$partDone = $false
 		# Задача прошлой попытки: после падения клиента на ожидании или скачивании
 		# продолжаем её, а не отправляем гигабайты заново. Ключ в sidecar'е несёт

@@ -145,11 +145,23 @@ if [ ! -e "$DST/deep" ]; then pass "dry_run: подпапка destination не �
 # Контроль: настоящий прогон каталог создаёт.
 run_capture
 if [ -d "$DST/deep" ]; then pass "обычный прогон: подпапка создана"; else fail "обычный прогон: подпапка создана" "есть out/deep" "нет"; fi
-rm -rf "$IN/deep" "$DST/deep"
+# Корень destination — то же правило. Он создавался до и вне проверки dry_run:
+# холостой прогон оставлял каталог назначения на диске.
+DST_NEW="$WORK/out-new"
+run_capture 'dry_run="yes"' 'folder_destination="$DST_NEW"'
+assert_contains "dry_run без каталога назначения: команда напечатана" "[DRY-RUN]" "$OUT_TEXT"
+assert_contains "dry_run без каталога назначения: выход назван полным путём" "$DST_NEW/deep/d.mp4" "$OUT_TEXT"
+if [ ! -e "$DST_NEW" ]; then pass "dry_run: корень destination не создан"; else fail "dry_run: корень destination не создан" "нет out-new" "создан"; fi
+run_capture 'folder_destination="$DST_NEW"'
+if [ -f "$DST_NEW/deep/d.mp4" ]; then pass "обычный прогон: корень destination создан"; else fail "обычный прогон: корень destination создан" "есть out-new/deep/d.mp4" "нет"; fi
+rm -rf "$IN/deep" "$DST/deep" "$DST_NEW"
 
 assert_contains "SH: mkdir под guard'ом dry_run"   'if [ "$dry_run" != "yes" ] && [ ! -d "$folder_destination$file_path" ]' "$SH_SRC"
 assert_contains "PS1: New-DirLiteral под guard'ом" 'if ($dry_run -ne "yes") { New-DirLiteral "$folder_destination$file_path" }' "$PS1_SRC"
 assert_contains "CMD: md под guard'ом dry_run"     'if not "%dry_run%"=="yes" if not exist "%folder_destination%!file_path!" md' "$CMD_SRC"
+# Корень destination на PS1 и CMD — прогоном в test_17 и test_11; здесь — сам guard.
+assert_contains "PS1: корень destination под guard'ом" 'if ($dry_run -ne "yes") { New-DirLiteral $folder_destination }' "$PS1_SRC"
+assert_contains "CMD: корень destination под guard'ом" 'if not "%dry_run%"=="yes" if not exist "%folder_destination%\" (' "$CMD_SRC"
 
 # ══════════════════════════════════════════════════════════════
 suite "P5: .ffconv-partial-* не становится входом следующего прогона"

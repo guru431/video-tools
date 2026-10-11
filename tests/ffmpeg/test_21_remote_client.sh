@@ -169,6 +169,14 @@ set_video_codec="mpeg4"
 out="$(remote_preflight 2>&1)"; rc=$?
 assert_eq "неизвестный кодек отвергается" "1" "$rc"
 assert_contains "кодек назван" "mpeg4" "$out"
+# Выключенный ключ (codec = -libx264) даёт пустой кодек: локально это «энкодер
+# выберет ffmpeg», а службе нужно семейство. Сообщение «Кодек «» неизвестен»
+# причины не называло.
+set_video_codec=""
+out="$(remote_preflight 2>&1)"; rc=$?
+assert_eq "выключенный кодек отвергается" "1" "$rc"
+assert_contains "сказано, что кодек выключен" "codec выключен" "$out"
+assert_not_contains "пустой кодек не назван «неизвестным»" "«»" "$out"
 set_video_codec="libx264"
 
 MOCK_CURL_ROUTES="$(routes 'GET /v1/capabilities|401|{"error":"нужен Bearer-ключ"}')"
@@ -242,6 +250,15 @@ assert_contains "контейнер назван" "mov" "$out"
 output_container_status="+"; output_container_value="mkv"
 if remote_preflight >/dev/null 2>&1; then pass "объявленный контейнер принят"
 else fail "объявленный контейнер принят" "код 0" "код 1"; fi
+# Сверяется то же имя, что уедет службе, — после отображения локального пути:
+# `container = +m4v` локально даёт mp4, и отказывать «служба не умеет m4v» нельзя.
+output_container_status="+"; output_container_value="m4v"
+if remote_preflight >/dev/null 2>&1; then pass "m4v сверяется как mp4"
+else fail "m4v сверяется как mp4" "код 0" "код 1"; fi
+output_container_status="+"; output_container_value="wmv"
+out="$(remote_preflight 2>&1)"; rc=$?
+assert_eq "wmv → asf, которого у службы нет → отказ" "1" "$rc"
+assert_contains "назван отображённый контейнер" "«asf»" "$out"
 # Список не разобран — молчание службы не повод отказывать.
 MOCK_CURL_ROUTES="$(routes 'GET /v1/capabilities|200|{"args_version":2,"encoders":{"gpu":["h264_nvenc"]}}')"
 output_container_status="+"; output_container_value="mov"
@@ -676,6 +693,19 @@ assert_eq "новая задача под новой подписью" "job-80" 
 assert_empty "задача прежней подписи удалена" "$(remote_upload_sidecar_read_job "$_rsrc" 2 SIG-B)"
 assert_not_contains "прежний job.2 вычищен" "job-72" "$(cat "$_sidecar")"
 assert_contains "upload_id пережил перезапись" "up-70" "$(cat "$_sidecar")"
+
+# Та же часть под той же подписью: запись ЗАМЕНЯЕТСЯ. Пишется сюда только
+# идентификатор созданной задачи — значит, прежняя признана мёртвой
+# (remote_job_usable). Раньше запись молча не обновлялась: sidecar навсегда держал
+# мёртвый идентификатор, и каждый следующий запуск плодил задачу-сироту.
+remote_upload_sidecar_write_job "$_rsrc" 1 SIG-B job-81
+assert_eq "мёртвая задача части заменена новой" "job-81" "$(remote_upload_sidecar_read_job "$_rsrc" 1 SIG-B)"
+assert_not_contains "прежний идентификатор вычищен" "job-80" "$(cat "$_sidecar")"
+remote_upload_sidecar_write_job "$_rsrc" 2 SIG-B job-82
+remote_upload_sidecar_write_job "$_rsrc" 1 SIG-B job-83
+assert_eq "соседняя часть при замене не задета" "job-82" "$(remote_upload_sidecar_read_job "$_rsrc" 2 SIG-B)"
+assert_eq "на часть — одна запись" "1" "$(grep -c '^job\.1=' "$_sidecar")"
+assert_contains "upload_id пережил замену" "upload_id=up-70" "$(cat "$_sidecar")"
 
 # Файла может не быть (ручная чистка, обрыв между complete и созданием задачи) —
 # запись обязана его создать. Прежняя версия здесь молча выходила, и именно поэтому

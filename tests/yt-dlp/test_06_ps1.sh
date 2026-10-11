@@ -113,12 +113,13 @@ cat > "$tmpcfg" << 'INIEOF'
 url = ${TEST_PROXY_VAR}
 [cookies]
 method = browser
+browser = opera
 [download]
 default_quality = 1080
 default_quality = 360
 [translation]
 enabled = true
-target_lang = ru
+target_lang = de
 timeout_sec = abc
 [subtitles]
 format = badfmt
@@ -178,6 +179,24 @@ Write-Output ("warn_count=" + $script:startupWarnings.Count)
 Write-Output ("warn_subfmt=" + [bool]($script:startupWarnings -match 'format'))
 Write-Output ("warn_timeout=" + [bool]($script:startupWarnings -match 'timeout_sec'))
 Write-Output ("enum_ok=" + (Read-ConfigEnum 'method' 'cookies' 'none' @('none','browser','file')))
+Write-Output ("cfg_translang=" + $cfg_transLang)
+Write-Output ("warn_translang=" + [bool]($script:startupWarnings -match 'target_lang'))
+Write-Output ("cfg_browser=" + $cfg_cookieBrowser)
+
+# Select-ComboValue on a live ComboBox: <selected item>|<items in the list>.
+function Sel([string[]]$Items, [string]$Value) {
+    $c = [System.Windows.Forms.ComboBox]::new(); $c.Items.AddRange($Items)
+    Select-ComboValue $c $Value
+    return ("{0}|{1}" -f $c.SelectedItem, $c.Items.Count)
+}
+$pxItems = @('none', 'https', 'http', 'socks5', 'socks5h', 'socks4', 'socks4a')
+$brItems = @('chrome', 'firefox', 'edge')
+Write-Output ("sel_known=" + (Sel $pxItems 'socks5h'))
+Write-Output ("sel_case=" + (Sel $pxItems 'HTTP'))
+Write-Output ("sel_extra=" + (Sel $pxItems (Split-ProxyUrl 'socks://h.example:1080').Type))
+Write-Output ("sel_browser=" + (Sel $brItems 'opera'))
+Write-Output ("sel_browser_case=" + (Sel $brItems 'Firefox'))
+Write-Output ("sel_empty=" + (Sel $brItems ''))
 
 # Прокси: поля GUI получают РАСКОДИРОВАННЫЕ логин/пароль, Join-ProxyUrl кодирует их
 # обратно — круг замыкается без двойного кодирования (p%2Fss, а не p%252Fss).
@@ -293,12 +312,33 @@ assert_eq "неизвестный [subtitles] format → vtt"     "vtt"   "$(get
 # перевод обрывался бы мгновенно на каждом ролике.
 assert_eq "нечисловой timeout_sec → 900"             "900"   "$(get_field "$out" cfg_timeout)"
 assert_eq "enabled = true распознан как true"        "true"  "$(get_field "$out" cfg_transen)"
-# 4 = два промаха значений (формат, таймаут) + два промаха подстановки [envtest].
-assert_eq "все четыре промаха дали предупреждения"   "4"     "$(get_field "$out" warn_count)"
+# Язык перевода — перечисление (ru, en, kk): «de» молча становился «ru» через
+# default-ветку switch у списка формы, без единого слова.
+assert_eq "неизвестный [translation] target_lang → ru" "ru"  "$(get_field "$out" cfg_translang)"
+assert_eq "предупреждение про target_lang"           "True"  "$(get_field "$out" warn_translang)"
+# 5 = три промаха значений (формат, таймаут, язык) + два промаха подстановки [envtest].
+assert_eq "все пять промахов дали предупреждения"    "5"     "$(get_field "$out" warn_count)"
 assert_eq "предупреждение про формат субтитров"      "True"  "$(get_field "$out" warn_subfmt)"
 assert_eq "предупреждение про timeout_sec"           "True"  "$(get_field "$out" warn_timeout)"
 assert_eq "корректный enum проходит без подмены"     "browser" "$(get_field "$out" enum_ok)"
 assert_eq "корректный bool проходит без подмены"     "true"  "$(get_field "$out" bool_ok)"
+
+suite "PS1 yt-dlp: значение config.ini вне списка формы не подменяется молча"
+# Список выбирал пункт точным совпадением, а промах откатывал на зашитый индекс:
+# схема «socks://» (её принимает разбор прокси и сам yt-dlp) превращалась в https,
+# браузер opera — в chrome. .sh отдаёт оба значения yt-dlp дословно.
+assert_eq "браузер из config.ini читается как есть"    "opera"     "$(get_field "$out" cfg_browser)"
+assert_eq "пункт из списка выбирается"                 "socks5h|7" "$(get_field "$out" sel_known)"
+assert_eq "регистр значения не важен"                  "http|7"    "$(get_field "$out" sel_case)"
+assert_eq "схема socks:// добавлена пунктом, не https" "socks|8"   "$(get_field "$out" sel_extra)"
+assert_eq "браузер вне списка добавлен пунктом"        "opera|4"   "$(get_field "$out" sel_browser)"
+assert_eq "браузер в другом регистре — штатный пункт"  "firefox|3" "$(get_field "$out" sel_browser_case)"
+assert_eq "пустое значение — первый пункт"             "chrome|3"  "$(get_field "$out" sel_empty)"
+assert_contains "схема прокси выбирается через Select-ComboValue" \
+    'Select-ComboValue $comboProxyType $cfg_proxyType' "$src"
+assert_contains "браузер cookies выбирается через Select-ComboValue" \
+    'Select-ComboValue $comboCookieBrowser $cfg_cookieBrowser' "$src"
+assert_not_contains "отката схемы на https больше нет" '$comboProxyType.SelectedIndex = 1' "$src"
 
 suite "PS1 yt-dlp: URL прокси из полей GUI (Join-ProxyUrl)"
 # Логин/пароль вставлялись в URL как есть: '@' '/' ':' '%' в пароле ломали разбор.

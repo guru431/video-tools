@@ -725,7 +725,7 @@ if not "%translate_lang%"=="" (
 
             rem F4: -map 0:s? -map 0:t? + -c:s copy сохраняют субтитры/вложения исходника
             rem (иначе встроенные субтитры исчезают после мержа перевода). ? — необязательный map.
-            rem Трёхбуквенные коды считаем ДО веток: ветка replace тоже их использует.
+            rem Трёхбуквенные коды считаем ДО веток: ветки replace и mix тоже их используют.
             call :iso6392 "%translate_orig_lang%" _lang_orig3
             call :iso6392 "%translate_lang%" _lang_trans3
             if "%translate_mode%"=="dual_track" (
@@ -735,7 +735,7 @@ if not "%translate_lang%"=="" (
                 "!ff_cmd!" -y -i "!video_file!" -i "!trans_file!" -map 0:v -map 1:a -map 0:s? -map 0:t? -c:v copy -c:a !a_codec! -b:a 192k -c:s copy -metadata:s:a:0 language=!_lang_trans3! -metadata:s:a:0 title="AI Translation" -metadata:s:a:0 handler_name="AI Translation" "!output_file!" 2>nul
             )
             if "%translate_mode%"=="mix" (
-                "!ff_cmd!" -y -i "!video_file!" -i "!trans_file!" -filter_complex "[0:a]volume=!translate_orig_vol![a0];[1:a]volume=!translate_trans_vol![a1];[a0][a1]amix=inputs=2:duration=longest:normalize=0[aout]" -map 0:v -map "[aout]" -map 0:s? -map 0:t? -c:v copy -c:a !a_codec! -b:a 192k -c:s copy "!output_file!" 2>nul
+                "!ff_cmd!" -y -i "!video_file!" -i "!trans_file!" -filter_complex "[0:a]volume=!translate_orig_vol![a0];[1:a]volume=!translate_trans_vol![a1];[a0][a1]amix=inputs=2:duration=longest:normalize=0[aout]" -map 0:v -map "[aout]" -map 0:s? -map 0:t? -c:v copy -c:a !a_codec! -b:a 192k -c:s copy -metadata:s:a:0 language=!_lang_trans3! -metadata:s:a:0 title="AI Translation" -metadata:s:a:0 handler_name="AI Translation" "!output_file!" 2>nul
             )
 
             set "ff_rc=!errorlevel!"

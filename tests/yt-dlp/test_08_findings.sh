@@ -164,8 +164,23 @@ for m in dual_track replace mix; do
     if grep -qF -- "-map 0:s?" "$FF_LOG" 2>/dev/null; then pass "$m: -map 0:s? (субтитры сохранены)"; else fail "$m: -map 0:s?" "есть" "нет в argv ffmpeg"; fi
     if grep -qF -- "-c:s copy" "$FF_LOG" 2>/dev/null; then pass "$m: -c:s copy"; else fail "$m: -c:s copy" "есть" "нет"; fi
     if grep -qF -- "-map 0:t?" "$FF_LOG" 2>/dev/null; then pass "$m: -map 0:t? (вложения)"; else fail "$m: -map 0:t?" "есть" "нет"; fi
+    # Дорожка перевода несёт язык и имя во ВСЕХ режимах. В mix выход amix метаданных
+    # не наследует: без явных -metadata смешанная дорожка приезжала безымянной и без
+    # языкового тега, хотя это тот же продукт мержа перевода, что в replace.
+    if grep -qF -- "language=rus" "$FF_LOG" 2>/dev/null; then pass "$m: язык дорожки перевода (rus)"; else fail "$m: язык дорожки перевода" "language=rus" "$(cat "$FF_LOG" 2>/dev/null)"; fi
+    if grep -qF -- "handler_name=AI Translation" "$FF_LOG" 2>/dev/null; then pass "$m: имя дорожки перевода (handler_name)"; else fail "$m: имя дорожки перевода" "handler_name=AI Translation" "$(cat "$FF_LOG" 2>/dev/null)"; fi
 done
 rm -rf "$WORK"
+
+# ══════════════════════════════════════════════════════════════
+suite "SH: Ctrl+C до первой регистрации временного пути — чистый выход 130"
+# ══════════════════════════════════════════════════════════════
+# Реестр путей пуст, пока не начат перевод. bash 3.2 (системный на macOS) под
+# `set -u` считает раскрытие ПУСТОГО массива "${arr[@]}" обращением к незаданной
+# переменной: trap умирал с «unbound variable» вместо exit 130. На bash 4.4+ форма
+# без guard'а работает, поэтому ловит это macOS-линия CI.
+( source "$SH_SCRIPT" >/dev/null 2>&1 </dev/null; _cleanup_on_int ) >/dev/null 2>&1
+assert_eq "trap при пустом реестре выходит с кодом 130" "130" "$?"
 
 # ══════════════════════════════════════════════════════════════
 suite "F13 (SH): перевод берёт путь из манифеста yt-dlp, а не самый свежий файл"
@@ -567,5 +582,12 @@ assert_not_contains "CMD: нет захардкоженного -metadata:s:a:1 
 
 assert_contains     "SH: индекс перевода — переменная"          '-c:a:$orig_a_count'   "$SH_SRC"
 assert_not_contains "SH: нет захардкоженного -c:a:1 "           '-c:a:1 '              "$SH_SRC"
+
+# Режим mix: дорожка amix помечается так же, как в replace (SH — прогоном выше,
+# CMD — сквозным прогоном в test_15). GUI-ветку не исполнить без окна — source-scan.
+assert_eq "PS1: язык дорожки a:0 ставится в replace И в mix" "2" \
+    "$(grep -cF '"-metadata:s:a:0", "language=$transLang3"' "$PS1_SCRIPT")"
+assert_eq "PS1: имя дорожки a:0 ставится в replace И в mix" "2" \
+    "$(grep -cF '"-metadata:s:a:0", "handler_name=AI Translation"' "$PS1_SCRIPT")"
 
 summary

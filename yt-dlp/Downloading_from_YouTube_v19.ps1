@@ -149,6 +149,19 @@ function Read-ConfigBool {
     return $Default
 }
 
+# Пункт списка формы по значению config.ini, без учёта регистра. Значение, которого
+# в списке нет, добавляется пунктом: откат на зашитый индекс молча менял смысл
+# (схема socks:// → https, браузер opera → chrome), а .sh отдаёт такие значения
+# yt-dlp дословно. Пустое значение — первый пункт.
+function Select-ComboValue {
+    param($Combo, [string]$Value)
+    if (-not $Value) { $Combo.SelectedIndex = 0; return }
+    for ($i = 0; $i -lt $Combo.Items.Count; $i++) {
+        if ([string]$Combo.Items[$i] -eq $Value) { $Combo.SelectedIndex = $i; return }
+    }
+    $Combo.SelectedIndex = $Combo.Items.Add($Value)
+}
+
 # ── Загрузка настроек ─────────────────────────────────────────────────────
 # $script:startupWarnings заведён выше, до разбора config.ini.
 $cfg_proxy_raw = Read-Config "url" "proxy" ""
@@ -245,7 +258,7 @@ $cfg_cookieMethod  = Read-ConfigEnum "method"      "cookies"  "none" @("none", "
 $cfg_cookieBrowser = Read-Config "browser"         "cookies"  "chrome"
 $cfg_cookieFile    = Read-Config "file"            "cookies"  "youtube_cookies.txt"
 $cfg_transEnabled  = Read-ConfigBool "enabled"     "translation" "false"
-$cfg_transLang     = Read-Config "target_lang"     "translation" "ru"
+$cfg_transLang     = Read-ConfigEnum "target_lang" "translation" "ru" @("ru", "en", "kk")
 $cfg_transVoice    = Read-ConfigEnum "voice_style" "translation" "live" @("live", "tts")
 $cfg_transMode     = Read-ConfigEnum "mode"        "translation" "mix" @("dual_track", "mix", "replace")
 # Паритет с .sh: архив загрузок и громкости/язык для AI-перевода — из config.
@@ -437,7 +450,10 @@ function Limit-OutputTemplate {
     # Прочие поля — консервативные оценки; неизвестное поле считаем длинным.
     foreach ($m in [regex]::Matches($Template, $fieldRe)) {
         $field = $m.Value
-        $name  = $field.Substring(2, $field.IndexOf(')') - 2)
+        # Внутренняя часть ('|значение по умолчанию', ',альтернативы', '.ключи') в имя
+        # не входит: иначе 'title|Без имени' не узнавалось как title и шло в бюджет
+        # дважды — как прочее поле и как title. Паритет с .sh.
+        $name  = ($field.Substring(2, $field.IndexOf(')') - 2) -split '[|,.]', 2)[0]
         if ($name -in @('title', 'playlist', 'uploader', 'channel')) { continue }
         $lim = [regex]::Match($field, '\)\.(\d+)')
         if ($lim.Success) { $used += [int]$lim.Groups[1].Value; continue }
@@ -1031,8 +1047,7 @@ $comboProxyType.Items.AddRange(@("нет", "https", "http", "socks5", "socks5h",
 if ([string]::IsNullOrWhiteSpace($cfg_proxy_raw) -or [string]::IsNullOrWhiteSpace($cfg_proxyHost)) {
     $comboProxyType.SelectedIndex = 0
 } else {
-    $comboProxyType.SelectedItem = $cfg_proxyType
-    if ($comboProxyType.SelectedIndex -lt 0) { $comboProxyType.SelectedIndex = 1 }
+    Select-ComboValue $comboProxyType $cfg_proxyType
 }
 $_fc.Add($comboProxyType)
 
@@ -1114,8 +1129,7 @@ $comboCookieBrowser.Location      = [System.Drawing.Point]::new($xPos, $yPos)
 $comboCookieBrowser.Size          = [System.Drawing.Size]::new(120, 25)
 $comboCookieBrowser.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
 $comboCookieBrowser.Items.AddRange(@("chrome", "firefox", "edge"))
-$browserIdx = switch ($cfg_cookieBrowser) { "firefox" { 1 } "edge" { 2 } default { 0 } }
-$comboCookieBrowser.SelectedIndex = $browserIdx
+Select-ComboValue $comboCookieBrowser $cfg_cookieBrowser
 $comboCookieBrowser.Visible       = ($comboCookies.SelectedIndex -eq 1)
 $_fc.Add($comboCookieBrowser)
 
@@ -1997,7 +2011,10 @@ $btnStart.Add_Click({
                                     "mix"        { @("-y", "-i", $latestVideo.FullName, "-i", $transFile.FullName,
                                                      "-filter_complex", "[0:a]volume=$cfg_transOrigVol[a0];[1:a]volume=$cfg_transTransVol[a1];[a0][a1]amix=inputs=2:duration=longest:normalize=0[aout]",
                                                      "-map", "0:v", "-map", "[aout]", "-map", "0:s?", "-map", "0:t?",
-                                                     "-c:v", "copy", "-c:a", $mergeACodec, "-b:a", "192k", "-c:s", "copy", $outputFile) }
+                                                     "-c:v", "copy", "-c:a", $mergeACodec, "-b:a", "192k", "-c:s", "copy",
+                                                     "-metadata:s:a:0", "language=$transLang3",
+                                                     "-metadata:s:a:0", "title=AI Translation",
+                                                     "-metadata:s:a:0", "handler_name=AI Translation", $outputFile) }
                                 }
                                 & $ffmpegBin @ffArgs 2>&1 | Out-Null
                                 if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $outputFile)) {

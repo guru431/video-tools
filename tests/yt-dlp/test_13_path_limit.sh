@@ -108,6 +108,14 @@ else
     out=$(limit_output_template 'C:\dl' '%(title|x).50U.%(ext)s' "$WIN_LIMIT")
     assert_eq "пользовательский лимит альтернативной формы не раздут" \
         '%(title|x).50U.%(ext)s' "$out"
+    # Альтернативная форма считается в бюджете ОДИН раз. Раньше имя «title|x» не
+    # узнавалось как title: поле получало оценку «прочего» (свой лимит либо 30) и
+    # сверх неё шло в бюджет ещё раз как title/uploader — на той же базе, где обычная
+    # форма ужимает title до 91, эта обрезала всё до минимумов 25/15/10.
+    out=$(limit_output_template "$BASE45" \
+        '%(uploader,channel)s\%(playlist)s\%(playlist_index)03d - %(title|x).100U.%(ext)s' "$WIN_LIMIT")
+    assert_eq "альтернативная форма: тот же бюджет, что у обычной" \
+        '%(uploader,channel).30s\%(playlist).45s\%(playlist_index)03d - %(title|x).91U.%(ext)s' "$out"
     # playlist_index не должен приниматься за playlist: граница после имени поля —
     # ')' , '|' , ',' или '.', и '_' в неё не входит.
     out=$(limit_output_template 'C:\dl' '%(playlist_index)03d - %(title)s.%(ext)s' "$WIN_LIMIT")
@@ -259,6 +267,7 @@ Write-Output ("idem="   + ((Limit-OutputTemplate $base45 $once $WIN) -eq $once))
 Write-Output ("altdef=" + (Limit-OutputTemplate 'C:\dl' '%(title|no-name)s.%(ext)s' $WIN))
 Write-Output ("altlist="+ (Limit-OutputTemplate 'C:\dl' '%(uploader,channel)s\%(title)s.%(ext)s' $WIN))
 Write-Output ("altuser="+ (Limit-OutputTemplate 'C:\dl' '%(title|x).50U.%(ext)s' $WIN))
+Write-Output ("altbudget=" + (Limit-OutputTemplate $base45 '%(uploader,channel)s\%(playlist)s\%(playlist_index)03d - %(title|x).100U.%(ext)s' $WIN))
 Write-Output ("plidx="  + (Limit-OutputTemplate 'C:\dl' '%(playlist_index)03d - %(title)s.%(ext)s' $WIN))
 # Без третьего аргумента production обязан взять те же 259 — иначе GUI считает не то.
 Write-Output ("default="+ ((Limit-OutputTemplate $base45 $tplPl) -eq $once))
@@ -286,6 +295,9 @@ PS1EOF
         '%(uploader,channel).30s\%(title).100s.%(ext)s' "$(get_field "$ps_out" altlist)"
     assert_eq "PS1 пользовательский лимит альтернативной формы = SH" \
         '%(title|x).50U.%(ext)s' "$(get_field "$ps_out" altuser)"
+    assert_eq "PS1 альтернативная форма: тот же бюджет, что у обычной = SH" \
+        '%(uploader,channel).30s\%(playlist).45s\%(playlist_index)03d - %(title|x).91U.%(ext)s' \
+        "$(get_field "$ps_out" altbudget)"
     assert_contains "PS1 playlist_index не получил лимит playlist" \
         '%(playlist_index)03d' "$(get_field "$ps_out" plidx)"
 fi

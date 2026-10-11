@@ -188,7 +188,9 @@ YTDLP_TMP_PATHS=()
 _register_tmp_path() { [ -n "${1:-}" ] && YTDLP_TMP_PATHS+=("$1"); }
 _cleanup_on_int() {
     local p
-    for p in "${YTDLP_TMP_PATHS[@]}"; do
+    # Форма с `+`: Ctrl+C до первой регистрации застаёт массив пустым, а bash 3.2
+    # под `set -u` считает раскрытие пустого массива незаданной переменной.
+    for p in ${YTDLP_TMP_PATHS[@]+"${YTDLP_TMP_PATHS[@]}"}; do
         [ -n "$p" ] && rm -rf "$p" 2>/dev/null
     done
     exit 130
@@ -760,6 +762,11 @@ limit_output_template() {
     # Прочие поля — консервативные оценки; неизвестное поле считаем длинным.
     for field in ${fields[@]+"${fields[@]}"}; do
         name=${field%%)*}; name=${name#%(}
+        # Внутренняя часть ('|значение по умолчанию', ',альтернативы', '.ключи') в имя
+        # не входит: «title|Без имени» не узнавалось как title, получало оценку
+        # прочего поля и шло в бюджет второй раз — title/playlist/uploader резались
+        # сильнее, чем требует путь.
+        name=${name%%[|,.]*}
         case "$name" in
             title|playlist|uploader|channel) continue ;;   # считаются отдельно ниже
         esac
@@ -1149,7 +1156,8 @@ translate_audio() {
     _register_tmp_path "$merge_err"
     # Трёхбуквенные коды и handler_name: в mp4 per-stream `title` не пишется вовсе,
     # а имя дорожки плееры (VLC, mpv) берут из handler_name. Без него обе дорожки
-    # dual_track оставались безымянными в контейнере по умолчанию.
+    # dual_track оставались безымянными в контейнере по умолчанию. В mix метки
+    # ставятся так же, как в replace: выход amix метаданных входа не наследует.
     local orig_lang3 target_lang3
     orig_lang3="$(iso639_2 "$orig_lang")"
     target_lang3="$(iso639_2 "$target_lang")"
@@ -1179,6 +1187,8 @@ translate_audio() {
                 -filter_complex "[0:a]volume=${orig_vol}[a0];[1:a]volume=${trans_vol}[a1];[a0][a1]amix=inputs=2:duration=longest:normalize=0[aout]" \
                 -map 0:v -map "[aout]" -map 0:s? -map 0:t? \
                 -c:v copy -c:a "$a_codec" -b:a 192k -c:s copy \
+                -metadata:s:a:0 language="$target_lang3" -metadata:s:a:0 title="AI Translation" \
+                -metadata:s:a:0 handler_name="AI Translation" \
                 "$output_file" 2>"$merge_err"
             ;;
     esac

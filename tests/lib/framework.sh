@@ -102,8 +102,9 @@ pass() {
 fail() {
     _tally F
     echo -e "  ${RED}✗${NC} $1"
-    [ -n "${2:-}" ] && echo -e "    ${YELLOW}Ожидалось:${NC} $2"
-    [ -n "${3:-}" ] && echo -e "    ${YELLOW}Получено: ${NC} $3"
+    # Данные — через %s: echo -e превращал «\v» Windows-пути в управляющий символ.
+    [ -n "${2:-}" ] && printf "    ${YELLOW}Ожидалось:${NC} %s\n" "$2"
+    [ -n "${3:-}" ] && printf "    ${YELLOW}Получено: ${NC} %s\n" "$3"
     return 0
 }
 

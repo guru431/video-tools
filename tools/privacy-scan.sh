@@ -86,7 +86,10 @@ while IFS= read -r f; do
     is_excluded "$f" && continue
     [ -f "$f" ] || continue
 
-    ip_hits=$(grep -nE "$ip_re" "$f" 2>/dev/null || true)
+    # -I: бинарник неизвестного типа пропускается. Без него grep < 3.5 (Git Bash)
+    # печатал в stdout «Binary file … matches» — ложный провал без номера строки, —
+    # а grep ≥ 3.5 писал то же в stderr и молча шёл дальше: исход зависел от версии.
+    ip_hits=$(grep -nIE "$ip_re" "$f" 2>/dev/null || true)
     if [ -n "$ip_hits" ]; then
         echo "PRIVACY: приватный IPv4 (RFC1918) в $f:"
         printf '%s\n' "$ip_hits" | sed 's/^/  /'
@@ -98,7 +101,7 @@ while IFS= read -r f; do
     # git@host — часть SSH-clone URL, а не e-mail: в README такой адрес появится
     # при первой же инструкции по клонированию, и барьер начал бы ругаться на
     # документацию. Ложные срабатывания приучают обходить проверку целиком.
-    mail_hits=$(grep -noE "$email_re" "$f" 2>/dev/null \
+    mail_hits=$(grep -noIE "$email_re" "$f" 2>/dev/null \
         | grep -viE 'example\.(com|org|net)' \
         | grep -viE '(user:pass|username:password)@' \
         | grep -viE '(^|[^A-Za-z0-9._%+-])git@' || true)

@@ -101,6 +101,16 @@ assert_not_contains "example.com e-mail не флагуется" "PRIVACY" "$OUT
 assert_contains "чистый (example.com) → exit 0" "EXIT=0" "$OUT"
 rm -rf "$R"
 
+# Фильтр example-доменов идёт по СОВПАДЕНИЯМ (grep -o), а не по строкам: настоящий
+# адрес рядом с плейсхолдером не выбрасывается вместе с ним. Ревью 2026-10-17
+# предполагало обратное — ассерт держит верное поведение от «упрощения» до -n.
+R=$(new_repo)
+printf 'contact admin@example.com or write to john.doe@real-domain.tld\n' > "$R/notes.txt"
+OUT=$(run_scan "$R")
+assert_contains "реальный e-mail в строке с example.com → найден" "john.doe@real-domain.tld" "$OUT"
+assert_not_contains "плейсхолдер из той же строки не назван" "admin@example.com" "$OUT"
+rm -rf "$R"
+
 # ══════════════════════════════════════════════════════════════
 suite "privacy-scan: чистый репозиторий проходит"
 # ══════════════════════════════════════════════════════════════
@@ -146,6 +156,19 @@ printf 'git clone git@github.com:user/repo.git\n' > "$R/README.md"
 OUT=$(run_scan "$R")
 assert_not_contains "git@github.com не флагуется как e-mail" "PRIVACY: e-mail" "$OUT"
 assert_contains "SSH-clone URL → exit 0" "EXIT=0" "$OUT"
+rm -rf "$R"
+
+# ══════════════════════════════════════════════════════════════
+suite "privacy-scan: бинарный файл неизвестного типа не валит скан"
+# ══════════════════════════════════════════════════════════════
+# GNU grep < 3.5 (Git Bash) печатает «Binary file … matches» в stdout, и сканер
+# падал с этой строкой вместо номера строки; grep ≥ 3.5 пишет её в stderr и файл
+# молча пропускает. -I делает исход одним на всех платформах: бинарник пропущен.
+R=$(new_repo)
+printf 'abc\000\001\002 10.1.2.3 \000zz' > "$R/fixture.bin"
+OUT=$(run_scan "$R")
+assert_not_contains "бинарник не даёт «Binary file … matches»" "Binary file" "$OUT"
+assert_contains "бинарник с байтами IP → exit 0" "EXIT=0" "$OUT"
 rm -rf "$R"
 
 # ══════════════════════════════════════════════════════════════

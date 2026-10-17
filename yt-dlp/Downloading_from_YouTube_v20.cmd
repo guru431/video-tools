@@ -87,8 +87,12 @@ set "quality="
 set /p "quality=Выберите номер: "
 if not defined quality set "quality=3"
 :: Whitelist допустимых номеров качества (защита от инъекции в if %quality%==N)
+rem Сам whitelist — только через восклицательные знаки: процентное раскрытие идёт ДО
+rem разбора строки, и ввод с кавычкой (x"=="x" echo X, затем амперсанд и rem)
+rem закрывал кавычки сравнения и исполнял команду прямо здесь. То же у всех
+rem whitelist ниже; после них значение — одна из цифр списка.
 set "_ok="
-for %%v in (0 1 2 3 4 5 6 91 92) do if "%quality%"=="%%v" set "_ok=1"
+for %%v in (0 1 2 3 4 5 6 91 92) do if "!quality!"=="%%v" set "_ok=1"
 if not defined _ok set "quality=3"
 
 :: ── Cookies ──────────────────────────────────────────────────────────────
@@ -105,7 +109,7 @@ set /p "cookie_choice=Выберите номер: "
 if not defined cookie_choice set "cookie_choice=0"
 :: Whitelist: отбрасываем всё, кроме допустимых номеров (защита от &|) в вводе)
 set "_ok="
-for %%v in (0 1 2 3 4) do if "%cookie_choice%"=="%%v" set "_ok=1"
+for %%v in (0 1 2 3 4) do if "!cookie_choice!"=="%%v" set "_ok=1"
 if not defined _ok set "cookie_choice=0"
 
 if "%cookie_choice%"=="1" set "cookie_arg=--cookies-from-browser chrome"
@@ -202,7 +206,7 @@ set /p "translate_choice=Выберите номер: "
 if not defined translate_choice set "translate_choice=0"
 :: Whitelist допустимых номеров перевода
 set "_ok="
-for %%v in (0 1 2 3 4) do if "%translate_choice%"=="%%v" set "_ok=1"
+for %%v in (0 1 2 3 4) do if "!translate_choice!"=="%%v" set "_ok=1"
 if not defined _ok set "translate_choice=0"
 
 set "translate_lang="
@@ -279,7 +283,7 @@ set /p "fmt=Выберите номер: "
 if not defined fmt set "fmt=7"
 :: Whitelist допустимых пресетов формата (далее значение идёт в if %fmt%==N)
 set "_ok="
-for %%v in (0 1 2 3 4 5 6 7) do if "%fmt%"=="%%v" set "_ok=1"
+for %%v in (0 1 2 3 4 5 6 7) do if "!fmt!"=="%%v" set "_ok=1"
 if not defined _ok set "fmt=7"
 
 :: auto для YouTube = avc1_best
@@ -421,7 +425,7 @@ set /p "audiofmt_choice=Выберите номер: "
 if not defined audiofmt_choice set "audiofmt_choice=0"
 :: Whitelist допустимых номеров аудио-формата
 set "_ok="
-for %%v in (0 1 2 3) do if "%audiofmt_choice%"=="%%v" set "_ok=1"
+for %%v in (0 1 2 3) do if "!audiofmt_choice!"=="%%v" set "_ok=1"
 if not defined _ok set "audiofmt_choice=0"
 
 if "%quality%"=="0" (
@@ -442,7 +446,7 @@ set /p "sb_choice=Выберите номер: "
 if not defined sb_choice set "sb_choice=0"
 :: Whitelist допустимых номеров SponsorBlock
 set "_ok="
-for %%v in (0 1 2) do if "%sb_choice%"=="%%v" set "_ok=1"
+for %%v in (0 1 2) do if "!sb_choice!"=="%%v" set "_ok=1"
 if not defined _ok set "sb_choice=0"
 
 if "%sb_choice%"=="1" set "sb_arg=--sponsorblock-mark all"
@@ -460,7 +464,7 @@ set /p "subsvid_choice=Выберите номер: "
 if not defined subsvid_choice set "subsvid_choice=0"
 :: Whitelist допустимых номеров субтитров с видео
 set "_ok="
-for %%v in (0 1 2) do if "%subsvid_choice%"=="%%v" set "_ok=1"
+for %%v in (0 1 2) do if "!subsvid_choice!"=="%%v" set "_ok=1"
 if not defined _ok set "subsvid_choice=0"
 
 if "%subsvid_choice%"=="1" set "subsvid_arg=--write-subs --write-auto-subs --sub-langs ru"

@@ -151,4 +151,31 @@ else
     skip "Поведенческая проверка :read_vol" "cmd недоступен"
 fi
 
+# ══════════════════════════════════════════════════════════════
+suite "Y5 (SH): --no-playlist/--yes-playlist перекрывают [download] playlist"
+# ══════════════════════════════════════════════════════════════
+# Подстановка флага стояла в load_config, а parse_args, который его задаёт, идёт
+# ПОСЛЕ load_config: флаг не действовал никогда, и --no-playlist на ссылке с
+# &list=RD… качал бесконечный авто-микс по playlist-шаблону.
+YT_SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v20.sh"
+CFG=$(mktemp_suffix /tmp/test_yt12c_ .ini)
+printf '%s\n' "[download]" "use_archive = false" "playlist = auto" > "$CFG"
+LIST_URL="https://www.youtube.com/watch?v=abc&list=RDabc"
+dry_cmd() {
+    YTDLP_BIN="$TESTS_DIR/mocks/yt-dlp" bash "$YT_SH" --config "$CFG" --dry-run "$@" 2>&1 \
+        | grep '\[DRY-RUN\]'
+}
+out=$(dry_cmd --no-playlist "$LIST_URL")
+assert_contains     "--no-playlist уходит в yt-dlp"          "--no-playlist"   "$out"
+assert_not_contains "--no-playlist: одиночный шаблон"        "playlist_index"  "$out"
+out=$(dry_cmd --yes-playlist "$LIST_URL")
+assert_contains     "--yes-playlist уходит в yt-dlp"         "--yes-playlist"  "$out"
+printf '%s\n' "[download]" "use_archive = false" "playlist = single" > "$CFG"
+out=$(dry_cmd --yes-playlist "$LIST_URL")
+assert_contains     "CLI перекрывает playlist = single"      "--yes-playlist"  "$out"
+assert_not_contains "CLI перекрывает: --no-playlist не идёт" "--no-playlist"   "$out"
+out=$(dry_cmd "$LIST_URL")
+assert_contains     "без флага действует config.ini"         "--no-playlist"   "$out"
+rm -f "$CFG"
+
 summary

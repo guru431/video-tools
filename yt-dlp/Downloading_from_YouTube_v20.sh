@@ -1563,8 +1563,6 @@ load_config() {
     SUBS_WITH_VIDEO="$ENUM_VALUE"
     config_enum "[download] playlist" "$PLAYLIST_MODE" "auto" auto single full
     PLAYLIST_MODE="$ENUM_VALUE"
-    # CLI перекрывает config.ini — как и все прочие флаги.
-    [ -n "${PLAYLIST_MODE_CLI:-}" ] && PLAYLIST_MODE="$PLAYLIST_MODE_CLI"
 
     # Перевод
     read_config "enabled" "translation" "false" raw
@@ -1662,6 +1660,7 @@ parse_args() {
     TRANSLATE_VOICE_CLI=""
     SPEED_PROFILE_CLI=""
     LIMIT_RATE_CLI=""
+    PLAYLIST_MODE_CLI=""
     URL=""
 
     while [ $# -gt 0 ]; do
@@ -1787,6 +1786,8 @@ parse_args() {
     [ -n "$TRANSLATE_VOICE_CLI" ] && TRANSLATE_VOICE="$TRANSLATE_VOICE_CLI"
     [ -n "$SPEED_PROFILE_CLI" ] && SPEED_PROFILE="$SPEED_PROFILE_CLI"
     [ -n "$LIMIT_RATE_CLI" ] && LIMIT_RATE="$LIMIT_RATE_CLI"
+    # Здесь, а не в load_config: он выполняется ДО parse_args, и флаг не действовал.
+    [ -n "$PLAYLIST_MODE_CLI" ] && PLAYLIST_MODE="$PLAYLIST_MODE_CLI"
 
     # Сформировать cookie args (заполняет global COOKIE_ARGS_ARR)
     build_cookie_args "$COOKIE_METHOD" "$COOKIE_FILE_PATH" "$COOKIE_BROWSER"

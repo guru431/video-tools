@@ -9,6 +9,10 @@ rem Первый setlocal - чтобы SCRIPT_DIR не утекал в вызв�
 setlocal
 set "SCRIPT_DIR=%~dp0"
 setlocal enabledelayedexpansion
+rem Символ двойной кавычки — для сравнений в :strip_quotes и :strip_inline_comment.
+rem Экранировать её в литерале нечем: обратная косая в cmd не экранирует, и "\""
+rem было четырьмя символами, с которыми первый символ значения не совпадал никогда.
+set "_dq=""
 
 :: ============================================================
 :: FFmpeg Converter — Конфигурация (CMD / Windows)
@@ -105,14 +109,21 @@ for /f "usebackq tokens=* delims=" %%L in ("!CONFIG_FILE!") do (
 			rem Парсинг key = value
 			for /f "tokens=1,* delims==" %%K in ("!_line!") do (
 				set "_key=%%K"
-				set "_val=%%~L"
+				rem %%L, а не %%~L: тильда снимала кавычки только у значения без пробела
+				rem после "=" и раньше среза " #" — кавычки снимает :strip_quotes.
+				set "_val=%%L"
+				rem Строка без "=" целиком уходит в %%K. Она не присваивается (как в SH/PS1):
+				rem раньше ключ получал пустое значение вместо умолчания и считался
+				rem встреченным — строка «dry_run = yes» ниже уже игнорировалась.
+				if "!_key!"=="!_line!" set "_key="
 				rem Убрать пробелы/табы из ключа (ведущие + хвостовые)
 				for /f "tokens=* delims=	 " %%T in ("!_key!") do set "_key=%%T"
 				call :trim_key
+				rem Убрать ведущие пробелы/табы — ДО среза комментария: значение должно
+				rem начинаться с кавычки, если она есть, и «key = # x» даёт «# x», как в SH/PS1.
+				for /f "tokens=* delims=	 " %%T in ("!_val!") do set "_val=%%T"
 				rem Инлайн-комментарий режем только по " #" (см. :strip_inline_comment).
 				call :strip_inline_comment
-				rem Убрать ведущие пробелы/табы и trailing
-				for /f "tokens=* delims=	 " %%T in ("!_val!") do set "_val=%%T"
 				call :trim_val
 				rem Подстановка ${ENV_VAR} из окружения (паритет с yt-dlp/SH/PS1)
 				call :expand_env
@@ -129,9 +140,10 @@ for /f "usebackq tokens=* delims=" %%L in ("!CONFIG_FILE!") do (
 goto :start_coding
 
 :strip_quotes
+rem Одна пара кавычек и только у значения от двух символов — как в SH и PS1.
 if not defined _val exit /b
-if "!_val:~0,1!"=="\"" if "!_val:~-1!"=="\"" set "_val=!_val:~1,-1!"
-if not defined _val exit /b
+if "!_val:~1!"=="" exit /b
+if "!_val:~0,1!"=="!_dq!" if "!_val:~-1!"=="!_dq!" set "_val=!_val:~1,-1!" & exit /b
 if "!_val:~0,1!"=="'" if "!_val:~-1!"=="'" set "_val=!_val:~1,-1!"
 exit /b
 
@@ -160,9 +172,22 @@ exit /b
 :: хвоста завершает искомую подстроку, и `a # x=y` превращалось в `ay==y`.
 :: Длина считается двоичным поиском последнего индекса — без goto и без
 :: сравнения символов в кавычках (кавычка в хвосте сломала бы if).
+:: " #" внутри ведущего значения в кавычках — часть значения: «Копировать как путь»
+:: для папки «C:\video #1» даёт "C:\video #1", и срез оставлял "C:\video. Поиск
+:: идёт в хвосте после закрывающей кавычки; хвост — суффикс значения, поэтому
+:: длина ниже отрезается от конца всего значения, как и прежде.
 if not defined _val exit /b
-set "_sic_tail=!_val:* #=!"
-if "!_sic_tail!"=="!_val!" exit /b
+set "_sic_base=!_val!"
+set "_sic_rest=!_val:~1!"
+if not defined _sic_rest goto :_sic_find
+if "!_val:~0,1!"=="!_dq!" set "_sic_after=!_sic_rest:*"=!"
+if "!_val:~0,1!"=="!_dq!" if not "!_sic_after!"=="!_sic_rest!" set "_sic_base=!_sic_after!"
+if "!_val:~0,1!"=="'" set "_sic_after=!_sic_rest:*'=!"
+if "!_val:~0,1!"=="'" if not "!_sic_after!"=="!_sic_rest!" set "_sic_base=!_sic_after!"
+:_sic_find
+if not defined _sic_base exit /b
+set "_sic_tail=!_sic_base:* #=!"
+if "!_sic_tail!"=="!_sic_base!" exit /b
 set "_sic_s=#!_sic_tail!"
 set "_sic_n=2"
 for %%P in (4096 2048 1024 512 256 128 64 32 16 8 4 2 1) do (
@@ -232,6 +257,7 @@ rem ПЕРВОЕ вхождение ключа — контракт всех п�
 rem ContainsKey-guard). Здесь каждое присваивание перезаписывало переменную, то
 rem есть побеждало ПОСЛЕДНЕЕ: один config.ini с дублем `codec` давал libx264 в
 rem SH/PS1 и libx265 в CMD — молча, что прямо запрещено правилом паритета.
+if not defined _key exit /b
 set "_seen_name=_seen_!_section!_!_key!"
 if defined !_seen_name! exit /b
 set "!_seen_name!=1"

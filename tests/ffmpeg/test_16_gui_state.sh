@@ -440,4 +440,10 @@ assert_contains "git-сборка с датой — не сравниваетс�
 assert_contains "ffmpeg не найден — предлагаем скачать"              "V7=update"  "$_ver_out"
 assert_contains "не версия в ответе сервера — не сравнивается"       "V8=unknown" "$_ver_out"
 
+suite "GUI: выключенные «Потоки ffmpeg» уходят со значением поля"
+# Как :to_flag в CMD и остальные поля GUI: `threads = -4` из CLI даёт :-:4, а GUI
+# отдавал :-:1 — в воркер приезжало разное из одного config.ini.
+assert_contains "выключенные потоки — значение поля" 'else { ":-:$_threadsVal" }' "$gui_text"
+assert_not_contains "нет зашитого :-:1"              'else { ":-:1" }'            "$gui_text"
+
 summary

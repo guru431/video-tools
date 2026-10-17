@@ -268,6 +268,60 @@ for bad in 0 -1 abc 150; do
     assert_contains "atempo '$bad' → REJECTED (F15)" "af=REJECTED" "$result"
 done
 
+# Целая часть с ведущим нулём: set /a читал её восьмеричной. 08 — «Invalid number»
+# (скрыт 2>nul), _bmilli не задавался, и `if !_bmilli! leq 0` ронял весь батч
+# «leq was unexpected»; 010 молча становилось 8. SH и PS1 читают десятичное.
+result=$(atempo_cmd "08.0")
+assert_contains "atempo 08.0 → как 8.0"   "af=atempo=2.0,atempo=2.0,atempo=2.000" "$result"
+assert_not_contains "atempo 08.0 → батч не падает" "unexpected" "$result"
+result=$(atempo_cmd "010.0")
+assert_contains "atempo 010.0 → как 10.0, а не 8" "af=atempo=2.0,atempo=2.0,atempo=2.0,atempo=1.250" "$result"
+# Переполнение 32-бит в set /a — тот же незаданный _bmilli: отказ, а не крах.
+result=$(atempo_cmd "99999999999.0")
+assert_contains "atempo 99999999999.0 → REJECTED" "af=REJECTED" "$result"
+assert_not_contains "переполнение → батч не падает" "unexpected" "$result"
+
+# ══════════════════════════════════════════════════════════════
+suite "CMD: :check_hms — значение не исполняется как команда"
+# ══════════════════════════════════════════════════════════════
+# Проверяемое значение шло в `echo %~2| findstr` процентным раскрытием: левую
+# сторону конвейера cmd разбирает как командную строку, и «01-00-00&команда» из
+# config.ini исполняло команду до проверки. Вызов — как в production.
+CHECK_HMS_SRC=$(sed -n '/^:check_hms/,/^exit \/b 0/p' "$CMD_SCRIPT" | tr -d '\r')
+[ -n "$CHECK_HMS_SRC" ] || fail "CMD: подпрограмма :check_hms найдена в production-файле" "найдена" "не найдена"
+hms_cmd() {
+    local body
+    body=$(printf '%s\n' \
+        "set \"_v=$1\"" \
+        "call :check_hms \"[split] start\" \"!_v!\"" \
+        "if errorlevel 1 (echo hms=REJECTED) else (echo hms=OK)" \
+        "goto :done_hms" \
+        "$CHECK_HMS_SRC" \
+        ":done_hms" | sed 's/$/\r/')
+    run_cmd "$body"
+}
+# Исполнение видно только по побочному эффекту: вывод вставки уходил в findstr.
+# Форма с !…! уязвима так же — дочерний cmd конвейера разбирает строку заново.
+INJ_DIR=$(mktemp -d /tmp/test_cmd_inj_XXXXXX)
+INJ_W=$(cygpath -w "$INJ_DIR" 2>/dev/null || printf '%s' "$INJ_DIR")
+result=$(hms_cmd "01-00-00&md $INJ_W\\HMS")
+if [ -e "$INJ_DIR/HMS" ]; then fail "вставка из значения не исполнилась" "нет $INJ_DIR/HMS" "каталог создан"
+else pass "вставка из значения не исполнилась"; fi
+assert_contains "значение со вставкой отвергнуто" "hms=REJECTED" "$result"
+assert_contains "корректная метка принята" "hms=OK" "$(hms_cmd "01-00-00")"
+assert_contains "одна цифра в поле принята" "hms=OK" "$(hms_cmd "1-0-5")"
+for bad in "1:00:00" "100-00-00" "01--00" "-01-00-00" "01-00-00-" "01-00" "01-a0-00" ""; do
+    assert_contains "'$bad' отвергнуто" "hms=REJECTED" "$(hms_cmd "$bad")"
+done
+result=$(atempo_cmd "1.0&md $INJ_W\\ATEMPO")
+if [ -e "$INJ_DIR/ATEMPO" ]; then fail ":build_atempo: вставка не исполнилась" "нет $INJ_DIR/ATEMPO" "каталог создан"
+else pass ":build_atempo: вставка не исполнилась"; fi
+assert_contains ":build_atempo: значение со вставкой отвергнуто" "af=REJECTED" "$result"
+for bad in "1.2.3" ".5" "5." "1,5"; do
+    assert_contains "atempo '$bad' → REJECTED" "af=REJECTED" "$(atempo_cmd "$bad")"
+done
+rm -rf "$INJ_DIR"
+
 # ══════════════════════════════════════════════════════════════
 suite "F25 CMD: потолок битрейта из видеопотока (:kbps_from_line)"
 # ══════════════════════════════════════════════════════════════

@@ -273,11 +273,18 @@ if "%audio_only%"=="yes" (
 	rem Hwdownload: если в цепочке есть CPU-фильтр на GPU-кадрах — скачиваем кадры
 	rem в системную память — иначе ffmpeg: "filter not supported on hardware frames".
 	rem Per-element (паритет с .sh/.ps1): hwdownload нужен при наличии CPU-фильтра —
-	rem transpose= или plain scale=. findstr "scale=" НЕ матчит "scale_cuda=" (между
-	rem scale и '=' стоит _cuda), а scale_cuda=/scale_qsv=/setpts= — GPU-safe.
+	rem transpose= или plain scale=, а scale_cuda=/scale_qsv=/setpts= — GPU-safe.
+	rem Поиск — в самой оболочке, без «echo … | findstr»: дочерний cmd конвейера
+	rem разбирал цепочку заново, и «&» из [video] rotation/resolution исполнялся.
+	rem Обычный for бьёт цепочку по «,» и «=»: имя фильтра — отдельный токен, и
+	rem «scale» не совпадает со «scale_cuda».
 	if "!use_hw_accel!"=="yes" if defined vf_chain (
-		echo !vf_chain! | findstr /i "transpose= scale=" >nul
-		if not errorlevel 1 set "vf_chain=hwdownload,format=nv12,!vf_chain!"
+		set "_cpu_vf="
+		for %%e in (!vf_chain!) do (
+			if /i "%%e"=="transpose" set "_cpu_vf=1"
+			if /i "%%e"=="scale" set "_cpu_vf=1"
+		)
+		if defined _cpu_vf set "vf_chain=hwdownload,format=nv12,!vf_chain!"
 	)
 	rem Формирование codec-строки
 	if defined set_video_codec (set "set_video_codec_arg=-c:v !set_video_codec!") else (set "set_video_codec_arg=")
@@ -510,8 +517,11 @@ if not "%merge_files%"=="yes" if not "%extract_audio_copy%"=="yes" if not "%crea
 
 rem --- Основная логика ---
 if "%merge_files%"=="yes" (
-	rem F10. Имя выхода — по сортированному списку (паритет с .sh sort -z), а не по порядку обхода FS.
-	for /f "delims=" %%f in ('powershell -NoProfile -Command "$e=$env:FFCONV_EXTS.Split(','); Get-ChildItem -LiteralPath $env:FFCONV_SRC -Recurse -File ^| Where-Object { $e -contains $_.Extension.TrimStart('.') -and -not $_.Name.StartsWith('.ffconv-partial-') } ^| Sort-Object FullName ^| Select-Object -First 1 -ExpandProperty Name" 2^>nul') do set "fname=%%f"
+	rem F10. Имя выхода — первый файл в порядке склейки: код символа полного пути с
+	rem "/" вместо "\" (паритет с LC_ALL=C sort -z в .sh и Get-MergeOrder в .ps1).
+	rem Конвейер PowerShell стоит ВНУТРИ двойных кавычек, и каретка перед "|" там —
+	rem литерал: PowerShell получал "^|", падал, и merge всегда отвечал «Нет файлов».
+	for /f "delims=" %%f in ('powershell -NoProfile -Command "$e=$env:FFCONV_EXTS.Split(','); $f=@(Get-ChildItem -LiteralPath $env:FFCONV_SRC -Recurse -File | Where-Object { $e -contains $_.Extension.TrimStart('.') -and -not $_.Name.StartsWith('.ffconv-partial-') }); if ($f.Count) { $k=[string[]]@($f | ForEach-Object { $_.FullName.Replace('\','/') }); [Array]::Sort([Array]$k, [Array]$f, [System.Collections.IComparer][StringComparer]::Ordinal); $f[0].Name }" 2^>nul') do set "fname=%%f"
 	if not defined fname (
 		rem Два разных случая, и раньше они путались: без PowerShell имя цели вычислить
 		rem нечем, а печаталось «Нет файлов для объединения» — прямая ложь о состоянии FS.
@@ -544,7 +554,7 @@ if "%merge_files%"=="yes" (
 			rem паритет с -type f в SH) и недобитые .ffconv-partial-* прошлого прогона.
 			set "FFCONV_CONCAT=!full_path!"
 			set "FFCONV_CONCAT_U16=!full_path!.u16"
-			powershell -NoProfile "[System.IO.File]::WriteAllLines($env:FFCONV_CONCAT, @((Get-Content -Encoding unicode -LiteralPath $env:FFCONV_CONCAT_U16) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) -and -not ([System.IO.Path]::GetFileName($_)).StartsWith('.ffconv-partial-') } | Sort-Object | ForEach-Object { 'file ''' + ($_ -replace '''','''\''''') + '''' }))"
+			powershell -NoProfile "$l=@((Get-Content -Encoding unicode -LiteralPath $env:FFCONV_CONCAT_U16) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) -and -not ([System.IO.Path]::GetFileName($_)).StartsWith('.ffconv-partial-') }); $k=[string[]]@($l | ForEach-Object { $_.Replace('\','/') }); [Array]::Sort([Array]$k, [Array]$l, [System.Collections.IComparer][StringComparer]::Ordinal); [System.IO.File]::WriteAllLines($env:FFCONV_CONCAT, @($l | ForEach-Object { 'file ''' + ($_ -replace '''','''\''''') + '''' }))"
 			rem Мержим в соседний temp, а не сразу поверх цели. Прежний вызов шёл без -y на
 			rem существующий файл: ffmpeg спрашивал «File exists. Overwrite? [y/N]» и висел,
 			rem ожидая stdin, которого в batch/GUI нет. А упавший мерж оставлял partial под
@@ -665,7 +675,9 @@ rem а goto из тела for обрывал бы перечисление фа�
 		if "%extract_audio_copy%"=="yes" (
 			set "audio_ext=mka"
 			set "audio_line="
-			for /f "delims=" %%c in ('""!ffmpeg!" -i "!full_path!" 2^>^&1 ^| find "Audio:""') do if not defined audio_line set "audio_line=%%c"
+			rem findstr, а не find: опция Git «Unix tools from the Command Prompt» ставит
+			rem MSYS find в PATH, и тот искал ФАЙЛ «Audio:» — кодек не находился, выход .mka.
+			for /f "delims=" %%c in ('""!ffmpeg!" -i "!full_path!" 2^>^&1 ^| findstr /c:"Audio:""') do if not defined audio_line set "audio_line=%%c"
 			if not "!audio_line!"=="" (
 				if not "!audio_line:Audio: aac=!"=="!audio_line!" set "audio_ext=m4a"
 				if not "!audio_line:Audio: mp3=!"=="!audio_line!" set "audio_ext=mp3"
@@ -820,6 +832,10 @@ rem а goto из тела for обрывал бы перечисление фа�
 				) else (
 					echo [WARN] Удаление битого файла: !_existing_out!& call :log_msg "WARN" "Удаление битого файла: !_existing_out!"
 					del "!_existing_out!"
+					rem Кодируем, даже если del не смог (только чтение, файл открыт в плеере):
+					rem ворота «выхода нет» ниже остались бы закрыты, и битый файл молча шёл
+					rem в «пропущено». Как в SH/PS1: провал покажет публикация (move /y).
+					set "_do_encode=1"
 				)
 			)
 		)
@@ -1026,7 +1042,8 @@ rem а goto из тела for обрывал бы перечисление фа�
 										rem Базовый guard (см. блок hwdownload выше) уже мог добавить hwdownload,
 										rem если в цепочке есть CPU-фильтр (поворот/setpts) — второй hwdownload роняет ffmpeg.
 										set "_sub_hwdl="
-										if defined current_vf (echo !current_vf! | findstr /i hwdownload >nul && set "_sub_hwdl=1")
+										rem Подстрокой, а не «echo … | findstr»: конвейер исполнял «&» из цепочки.
+										if defined current_vf if not "!current_vf:hwdownload=!"=="!current_vf!" set "_sub_hwdl=1"
 										if "!use_hw_accel!"=="yes" if not "!_sub_hwdl!"=="1" (
 											if defined current_vf (set "current_vf=!current_vf!,hwdownload,format=nv12") else (set "current_vf=hwdownload,format=nv12")
 										)
@@ -1237,11 +1254,27 @@ rem Прежний [0-9][0-9]* принимал любое число цифр: 
 rem отвергался с явной ошибкой, а CMD кодировал файл с -ss 3600000 и именем
 rem "(part.1)", отчитываясь «Обработано: 1». findstr не умеет {1,2}, поэтому
 rem перечисляем обе формы явно.
-echo %~2| findstr /r /c:"^[0-9][0-9]*-[0-9][0-9]*-[0-9][0-9]*$" >nul
-if not errorlevel 1 echo %~2| findstr /r /c:"^[0-9][0-9]-[0-9][0-9]-[0-9][0-9]$" /c:"^[0-9]-[0-9][0-9]-[0-9][0-9]$" /c:"^[0-9][0-9]-[0-9]-[0-9][0-9]$" /c:"^[0-9][0-9]-[0-9][0-9]-[0-9]$" /c:"^[0-9]-[0-9]-[0-9][0-9]$" /c:"^[0-9]-[0-9][0-9]-[0-9]$" /c:"^[0-9][0-9]-[0-9]-[0-9]$" /c:"^[0-9]-[0-9]-[0-9]$" >nul
-if errorlevel 1 (
+rem Проверка — в самой оболочке, без «echo … | findstr»: левую сторону конвейера
+rem дочерний cmd разбирает заново, и «01-00-00&команда» из config.ini исполняла
+rem команду при ЛЮБОМ раскрытии, %~2 или !…! (измерено: вывод вставки уходил в
+rem findstr, и значение ещё и проходило проверку). Без цифр должно остаться ровно
+rem "--", поля непусты и не длиннее двух знаков. "if defined" на каждом шаге: замена
+rem в неопределённой переменной даёт не пусто, а текст вида "2=".
+set "_chv=%~2"
+set "_chbad="
+set "_chs=!_chv!"
+for %%d in (0 1 2 3 4 5 6 7 8 9) do if defined _chs set "_chs=!_chs:%%d=!"
+if not "!_chs!"=="--" set "_chbad=1"
+if not defined _chbad if "!_chv:~0,1!"=="-" set "_chbad=1"
+if not defined _chbad if "!_chv:~-1!"=="-" set "_chbad=1"
+if not defined _chbad if not "!_chv:--=!"=="!_chv!" set "_chbad=1"
+if not defined _chbad for /f "tokens=1-3 delims=-" %%a in ("!_chv!") do for %%f in (%%a %%b %%c) do (
+	set "_chf=%%f"
+	if not "!_chf:~2!"=="" set "_chbad=1"
+)
+if defined _chbad (
 	echo.
-	echo [ОШИБКА] %~1: ожидается чч-мм-сс ^(например 00-01-30^), получено: "%~2"
+	echo [ОШИБКА] %~1: ожидается чч-мм-сс ^(например 00-01-30^), получено: "!_chv!"
 	echo.
 	exit /b 1
 )
@@ -1255,10 +1288,20 @@ rem Знак и нечисло отсекаем ДО арифметики. set /
 rem `playback_speed = +-0.5` давал _bmilli=500 — CMD принимал скорость, которую
 rem SH и PS1 отвергают с явной ошибкой (и при этом молча не ставил ни setpts,
 rem ни atempo, отчитываясь успехом).
-echo !_spd!| findstr /r /c:"^[0-9][0-9]*$" /c:"^[0-9][0-9]*\.[0-9][0-9]*$" >nul
-if errorlevel 1 exit /b 1
+rem Форма — в самой оболочке, не «echo … | findstr» (см. :check_hms): «1.0&команда»
+rem исполнялась дочерним cmd конвейера и проходила проверку. Без цифр остаётся
+rem пусто или одна точка, и точка не первая и не последняя.
+if not defined _spd exit /b 1
+set "_sps=!_spd!"
+for %%d in (0 1 2 3 4 5 6 7 8 9) do if defined _sps set "_sps=!_sps:%%d=!"
+if defined _sps if not "!_sps!"=="." exit /b 1
+if "!_spd:~0,1!"=="." exit /b 1
+if "!_spd:~-1!"=="." exit /b 1
 for /f "tokens=1,2 delims=." %%a in ("%_spd%") do (set "_bi=%%a" & set "_bf=%%b")
 if not defined _bf set "_bf=0"
+rem Ведущие нули целой части снимаем: set /a читает их восьмеричными — «08» давало
+rem 0 и отказ, «010» молча становилось 8. Сплошные нули for /f не трогает ("00" = 0).
+for /f "tokens=* delims=0" %%z in ("!_bi!") do set "_bi=%%z"
 rem Дробную часть нормализуем до 3 знаков (milli). Префикс "1" + вычет 1000 убирает
 rem октальную трактовку ведущих нулей в set /a (например "050" -> 50, а не ошибка).
 set "_bf3=!_bf!000"

@@ -11,7 +11,10 @@
 #   F7 — overwrite_existing=yes перекодирует готовый файл, иначе пропускает;
 #   F8 — предпусковая проверка совместимости webm + кодек субтитров meta по контейнеру;
 #   D2 — overwrite_existing=yes убирает выходы прошлого прогона по manifest после успеха
-#        всех частей, при провале не трогает (SH/PS1/CMD).
+#        всех частей, при провале не трогает (SH/PS1/CMD); неудаляемый битый выход в CMD
+#        перекодируется, а не засчитывается в «пропущено»;
+#   F10 — порядок merge один на трёх платформах (код символа пути с '/');
+#   фрагмент start+length по тишине — конец у паузы около start+length (SH/PS1).
 # Использует mock ffmpeg (touch выходов); фейковые входы — реальный ffmpeg не нужен.
 # ============================================================
 
@@ -487,6 +490,61 @@ fi
 rm -f "$IN/odd.mp4" "$DST"/odd*.mp4
 
 # ══════════════════════════════════════════════════════════════
+suite "Фрагмент start+length по тишине: конец — у паузы около start+length"
+# ══════════════════════════════════════════════════════════════
+# Включённый start — один фрагмент [start, start+length] на всех платформах. Длину
+# ему давал length_silent[0] — первая часть разбиения ОТ НУЛЯ: конец притягивался к
+# паузе у length, а не у start+length. Файл 60 с, start 30, length 20, центры пауз 26
+# и 48: было -t 26 (пауза 26 у отметки 20), верно -t 18 (пауза 48 у конца 50).
+: > "$IN/frag.mp4"
+frag_t() {  # $1 — паузы мока; печатает -ss/-t строки кодирования
+    (
+        export PATH="$MOCKS_DIR:$PATH"; export MOCK_FFMPEG_ENCODERS=""; export MOCK_FFMPEG_LOG="$FFMPEG_LOG"
+        export MOCK_FFMPEG_DURATION="00:01:00.00"; export MOCK_FFMPEG_SILENCE="$1"
+        rm -f "$FFMPEG_LOG"
+        default_vars
+        start_coding=":+:00-00-30"; length_coding=":+:00-00-20"; split_by_silence="yes"
+        source "$SCRIPT" >/dev/null 2>&1
+    ) < /dev/null
+    grep -F -- "-c:v libx264" "$FFMPEG_LOG" 2>/dev/null | grep -oE -- '-(ss|t) [0-9]+' | tr '\n' ' '
+}
+assert_eq "SH: конец фрагмента притянут к паузе 48" "-ss 30 -t 18 " "$(frag_t "24:28 47:49")"
+rm -f "$DST"/frag*.mp4
+# Паузы у конца нет (26 — до начала фрагмента): номинальная длина.
+assert_eq "SH: нет паузы у конца — номинальные 20 с" "-ss 30 -t 20 " "$(frag_t "24:28")"
+rm -f "$DST"/frag*.mp4
+if [ -z "$_ps_ok" ] || [ -z "$_ps_bin" ]; then
+    skip "PS1: конец фрагмента у паузы около start+length" "нужен Windows PowerShell (мок ffmpeg — .cmd)"
+else
+    _ps_log="$WORK/mock_ps.log"; rm -f "$_ps_log"
+    MOCK_FFMPEG_ENCODERS="" MOCK_FFMPEG_LOG="$(cygpath -w "$_ps_log")" \
+    MOCK_FFMPEG_DURATION="00:01:00.00" MOCK_FFMPEG_SILENCE="24:28,47:49" \
+    "$_ps_bin" -NoProfile -NonInteractive -Command "
+\$ErrorActionPreference='Continue'
+\$folder_sources=(Get-Item -LiteralPath '$(cygpath -w "$IN")').FullName + [IO.Path]::DirectorySeparatorChar
+\$folder_destination=(Get-Item -LiteralPath '$(cygpath -w "$DST")').FullName + [IO.Path]::DirectorySeparatorChar
+\$ffmpeg='$(cygpath -w "$MOCKS_DIR/ffmpeg.cmd")'; \$ffprobe=\$ffmpeg
+\$audio_codec=':+:aac'; \$audio_number_channels=':-:2'; \$audio_bitrate=':-:128'
+\$audio_sampling_rate=':-:44100'; \$audio_normalize=':-:loudnorm'
+\$video_codec=':+:libx264'; \$video_resolution=':-:1280x720'; \$video_bitrate=':-:2000'
+\$video_number_frames=':-:25'; \$video_rotation=':-:2'; \$video_subtitles=':-:burn'
+\$video_quality=':+:23'; \$keep_aspect_ratio=':+:yes'; \$output_container=':+:mp4'
+\$multithreads=':-:4'; \$parallel_files=':-:2'
+\$hw_accel=':-:nvidia'; \$gpu_preset=':-:p5'; \$gpu_tune=':-:hq'; \$gpu_rc=':-:vbr'
+\$playback_speed=':-:1.0'; \$start_coding=':+:00-00-30'; \$length_coding=':+:00-00-20'
+\$split_by_silence='yes'; \$silence_duration='2.0'; \$silence_threshold='-30dB'
+\$save_old_extension='no'; \$format_files_in='mp4'
+\$subtitles_style=''; \$dry_run='no'; \$enable_log='no'; \$log_file=''
+\$audio_only='no'; \$merge_files='no'; \$create_frame='no'
+\$copy_codecs='no'; \$extract_audio_copy='no'; \$overwrite_existing='yes'
+. '$(cygpath -w "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1")'
+" >/dev/null 2>&1 < /dev/null
+    PS_FT=$(grep -F -- "-c:v libx264" "$_ps_log" 2>/dev/null | grep -oE -- '-(ss|t) [0-9]+' | tr '\n' ' ')
+    assert_eq "PS1: конец фрагмента притянут к паузе 48" "-ss 30 -t 18 " "$PS_FT"
+fi
+rm -f "$IN/frag.mp4" "$DST"/frag*.mp4
+
+# ══════════════════════════════════════════════════════════════
 suite "F26: имя temp сохраняет расширение (иначе ffmpeg не выводит muxer)"
 # ══════════════════════════════════════════════════════════════
 # Суть: temp назывался `.movie.mp4.partial` — расширение стало `.partial`. Режимы
@@ -658,6 +716,9 @@ assert_not_contains "PS1: merge не пишет прямо в цель"         
 assert_contains     "CMD: merge с -nostdin -y"                  '-nostdin -strict -2 -f concat -safe 0 -i "!full_path!" -c copy -map 0 -y "!_merge_tmp!"' "$CMD_SRC2"
 assert_contains     "CMD: merge валидирует до подмены цели"     '-i "!_merge_tmp!" -f null -'       "$CMD_SRC2"
 assert_contains     "CMD: merge подменяет цель переименованием" 'move /y "!_merge_tmp!" "!_merge_target!"' "$CMD_SRC2"
+
+# --- silencedetect кодирует в null, то есть опрашивает stdin: -nostdin, как в SH ---
+assert_contains     "PS1: silencedetect с -nostdin"             '& $ffmpeg -nostdin -i $full_path -nostats -af "silencedetect=' "$PS1_SRC2"
 
 # --- Ни одна платформа не должна вернуться к суффиксному .partial ---
 # Это и есть тот дефект, что ломал muxer: расширением становилось `.partial`.
@@ -1139,6 +1200,20 @@ CSEOF
         d2_part_check "CMD" fail "$D2_OUT" win
         d2_cmd "$W_IN" "$W_DST" 'set "start_coding=:+:00-00-10"'
         d2_part_check "CMD" ok "$D2_OUT" win
+        # Битый выход, который не удаляется (только чтение; так же — открытый в плеере):
+        # del печатал ошибку, ворота «выхода нет» оставались закрыты, и битый файл
+        # молча засчитывался в «пропущено». SH и PS1 после удаления кодируют всегда —
+        # провал виден на публикации. Признак — вызов кодирования в логе мока.
+        RO_SRC="$WORK/rosrc"; RO_DST="$WORK/rodst"; mkdir -p "$RO_SRC" "$RO_DST"
+        : > "$RO_SRC/ro.mp4"; printf 'BROKEN' > "$RO_DST/ro.mp4"
+        cmd //c "attrib +r $(cygpath -w "$RO_DST/ro.mp4")" >/dev/null 2>&1
+        RO_LOG="$WORK/ro_mock.log"; rm -f "$RO_LOG"
+        d2_cmd "$(cygpath -w "$RO_SRC")" "$(cygpath -w "$RO_DST")" \
+            $'set "overwrite_existing=no"\nset "MOCK_FFMPEG_BROKEN=1"\nset "MOCK_FFMPEG_LOG='"$(cygpath -w "$RO_LOG")"'"'
+        if grep -qF -- "-c:v libx264" "$RO_LOG" 2>/dev/null; then pass "CMD: неудаляемый битый выход перекодируется, а не пропускается"
+        else fail "CMD: неудаляемый битый выход перекодируется, а не пропускается" "вызов кодирования" "нет; вывод: $(printf '%s' "$D2_OUT" | tr '\n' '|')"; fi
+        cmd //c "attrib -r $(cygpath -w "$RO_DST/ro.mp4")" >/dev/null 2>&1
+        rm -rf "$RO_SRC" "$RO_DST" "$RO_LOG"
         # S15. Manifest с LF-концами (так его пишет .sh): findstr /x строку state=complete
         # с одним LF не находил, и законченный manifest для CMD не был законченным никогда.
         # Обесцененный (settings=old) — хвост прошлого прогона убирается.
@@ -1210,6 +1285,136 @@ CSEOF
     fi
 fi
 rm -rf "$D2_IP" "$D2_OTHER" "$IN/ov.mp4" "$DST"/ov* "$DST/.ov.ffconv"
+
+# ══════════════════════════════════════════════════════════════
+suite "F10: порядок объединения один на трёх платформах"
+# ══════════════════════════════════════════════════════════════
+# Порядок склейки — по коду символа ПОЛНОГО пути с '/' вместо '\'. Раньше .sh брал
+# sort -z в локали пользователя, а PS1 и CMD — культурный Sort-Object: B2.mp4 и a1.mp4,
+# каталоги clips\ и clips2\ склеивались в разном порядке на разных машинах. Прогоны
+# настоящие, мок ffmpeg на `-f concat` копирует concat-список в выход — по нему
+# и читается порядок.
+M10="$WORK/m10"
+mkdir -p "$M10/in/clips" "$M10/in/clips2" "$M10/in/Clips3" "$M10/sh" "$M10/ps" "$M10/cmd"
+for _f in a1 B2 a-3 a_4 clips/x clips2/y Clips3/z; do printf 'v' > "$M10/in/$_f.mp4"; done
+# Имя цели — первый файл того же порядка.
+M10_WANT="B2.mp4 | B2.mp4 Clips3/z.mp4 a-3.mp4 a1.mp4 a_4.mp4 clips/x.mp4 clips2/y.mp4"
+# «имя результата | порядок склейки» единственного выхода в каталоге $1.
+merge_order() {
+    local line out="" res
+    for res in "$1"/*.mp4; do break; done
+    [ -f "$res" ] || { printf 'нет результата в %s' "$1"; return; }
+    while IFS= read -r line; do
+        line="${line%$'\r'}"; line="${line#file \'}"; line="${line%\'}"
+        line="${line//\\//}"; line="${line##*/in/}"
+        out="${out:+$out }$line"
+    done < "$res"
+    printf '%s | %s' "${res##*/}" "$out"
+}
+
+cat > "$M10/ffmpeg_sh" <<'MOCKEOF'
+#!/bin/bash
+prev=""; list=""
+for a in "$@"; do [ "$prev" = "-i" ] && list="$a"; prev="$a"; done
+case " $* " in *" -f concat "*) cp "$list" "${!#}" ;; esac
+exit 0
+MOCKEOF
+chmod +x "$M10/ffmpeg_sh"
+# Локаль с «человеческой» сортировкой: прежний `sort -z` давал в ней a1 раньше B2.
+run_capture 'export LC_ALL=en_US.UTF-8' "folder_sources=\"$M10/in\"" "folder_destination=\"$M10/sh\"" \
+    "ffmpeg=\"$M10/ffmpeg_sh\"" 'merge_files="yes"' 'format_files_in="mp4"'
+assert_eq "SH: порядок склейки ordinal" "$M10_WANT" "$(merge_order "$M10/sh")"
+
+_win=0; case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) _win=1 ;; esac
+if [ "$_win" = 1 ] && command -v powershell >/dev/null 2>&1; then
+    cat > "$M10/mock.cs" <<'CSEOF'
+using System; using System.IO;
+class M { static int Main(string[] a) {
+    int f = Array.IndexOf(a, "concat");
+    if (f > 0 && a[f - 1] == "-f") { int i = Array.IndexOf(a, "-i", f); File.Copy(a[i + 1], a[a.Length - 1], true); }
+    return 0; } }
+CSEOF
+    powershell -NoProfile -Command "Add-Type -TypeDefinition (Get-Content -Raw -LiteralPath '$(cygpath -w "$M10/mock.cs")') -OutputAssembly '$(cygpath -w "$M10/ffmpeg.exe")' -OutputType ConsoleApplication" >/dev/null 2>&1
+fi
+if [ -f "$M10/ffmpeg.exe" ]; then
+    w_in=$(cygpath -w "$M10/in"); w_ff=$(cygpath -w "$M10/ffmpeg.exe")
+    powershell -NoProfile -NonInteractive -Command "
+\$ErrorActionPreference='Continue'
+\$folder_sources=(Get-Item -LiteralPath '$w_in').FullName
+\$folder_destination=(Get-Item -LiteralPath '$(cygpath -w "$M10/ps")').FullName
+\$ffmpeg='$w_ff'; \$ffprobe='$w_ff'
+\$audio_codec=':+:aac'; \$audio_number_channels=':-:2'; \$audio_bitrate=':-:128'
+\$audio_sampling_rate=':-:44100'; \$audio_normalize=':-:loudnorm'
+\$video_codec=':+:libx264'; \$video_resolution=':-:1280x720'; \$video_bitrate=':-:2000'
+\$video_number_frames=':-:25'; \$video_rotation=':-:2'; \$video_subtitles=':-:burn'
+\$video_quality=':+:23'; \$keep_aspect_ratio=':+:yes'; \$output_container=':+:mp4'
+\$multithreads=':-:4'; \$parallel_files=':-:2'
+\$hw_accel=':-:nvidia'; \$gpu_preset=':-:p5'; \$gpu_tune=':-:hq'; \$gpu_rc=':-:vbr'
+\$playback_speed=':-:1.0'; \$start_coding=':-:01-00-00'; \$length_coding=':-:00-05-00'
+\$split_by_silence='no'; \$silence_duration='2.0'; \$silence_threshold='-30dB'
+\$save_old_extension='no'; \$format_files_in='mp4'
+\$subtitles_style=''; \$dry_run='no'; \$enable_log='no'; \$log_file=''
+\$audio_only='no'; \$merge_files='yes'; \$create_frame='no'
+\$copy_codecs='no'; \$extract_audio_copy='no'; \$overwrite_existing='yes'
+. '$(cygpath -w "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1")'
+" < /dev/null >/dev/null 2>&1
+    assert_eq "PS1: порядок склейки ordinal" "$M10_WANT" "$(merge_order "$M10/ps")"
+
+    cat > "$M10/run.cmd" <<CMDEOF
+@echo off
+chcp 65001 >nul 2>&1
+set "ffmpeg=$w_ff"
+set "folder_sources=$w_in"
+set "folder_destination=$(cygpath -w "$M10/cmd")"
+set "audio_only=no"
+set "merge_files=yes"
+set "create_frame=no"
+set "copy_codecs=no"
+set "extract_audio_copy=no"
+set "overwrite_existing=yes"
+set "audio_codec=:+:aac"
+set "audio_number_channels=:+:2"
+set "audio_bitrate=:+:128"
+set "audio_sampling_rate=:+:48000"
+set "audio_normalize=:-:loudnorm"
+set "video_codec=:+:libx264"
+set "video_resolution=:-:1280x720"
+set "video_bitrate=:-:3000"
+set "video_number_frames=:-:30"
+set "video_rotation=:-:2"
+set "video_subtitles=:-:burn"
+set "video_quality=:-:23"
+set "keep_aspect_ratio=:+:yes"
+set "output_container=:+:mp4"
+set "multithreads=:+:4"
+set "parallel_files=:-:2"
+set "hw_accel=:-:intel"
+set "gpu_preset=:-:p5"
+set "gpu_tune=:-:hq"
+set "gpu_rc=:-:vbr"
+set "playback_speed=:-:1.0"
+set "start_coding=:-:01-00-00"
+set "length_coding=:-:00-05-00"
+set "split_by_silence=no"
+set "silence_duration=2.0"
+set "silence_threshold=-30dB"
+set "save_old_extension=no"
+set "format_files_in=mp4"
+set "subtitles_style="
+set "dry_run=no"
+set "enable_log=no"
+set "log_file=ffmpeg_convert.log"
+call "$(cygpath -w "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.cmd")"
+exit /b %ERRORLEVEL%
+CMDEOF
+    sed -i 's/$/\r/' "$M10/run.cmd"
+    M10_CMD_OUT=$(cmd //c "$(cygpath -w "$M10/run.cmd")" < /dev/null 2>&1)
+    M10_GOT=$(merge_order "$M10/cmd")
+    [ "$M10_GOT" = "$M10_WANT" ] || printf '%s\n' "$M10_CMD_OUT" | tail -15
+    assert_eq "CMD: порядок склейки ordinal" "$M10_WANT" "$M10_GOT"
+else
+    skip "PS1/CMD: порядок склейки" "нет Windows PowerShell или не собрался мок ffmpeg.exe"
+fi
 
 # ── Cleanup ───────────────────────────────────────────────────
 rm -rf "$WORK"

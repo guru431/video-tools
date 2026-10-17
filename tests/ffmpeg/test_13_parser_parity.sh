@@ -85,6 +85,11 @@ bad_name = ${MY-VAR}/x
 digit_name = ${1ABC}/y
 amp_ref = ${MY_AMP_VAR}/z
 Mixed_Case = mc
+quoted_hash = "C:/video #1" # комментарий
+quoted_hash_sq = 'a #b.log'
+quoted_tail = "x" y # z
+no_eq
+no_eq = after
 EOCONFIG
 
 CFG_WIN=$(cygpath -w "$CONFIG_FILE" 2>/dev/null || echo "$CONFIG_FILE")
@@ -107,7 +112,8 @@ export MY_AMP_VAR="a=1&b=2"
 # PS1 брал '\$\{(\w+)\}' и ${1ABC} подставлял, а SH оставлял как есть.
 # mixed_case: ключ `Mixed_Case` в файле — SH сравнивает через =~ под nocasematch,
 # и bash применяет эту опцию и к =~ (ревью 2026-09-26 утверждало обратное).
-KEYS=(embed_eq inline_cmt hash_val spaced var_ref quoted_dq quoted_sq dup_key bad_name digit_name amp_ref mixed_case)
+KEYS=(embed_eq inline_cmt hash_val spaced var_ref quoted_dq quoted_sq dup_key bad_name digit_name amp_ref mixed_case
+      quoted_hash quoted_hash_sq quoted_tail no_eq)
 
 # ══════════════════════════════════════════════════════════════
 suite "Кросс-парсерный паритет: SH read_config vs PS1 Read-Config"
@@ -152,6 +158,14 @@ assert_eq "digit_name: \${1ABC} остаётся литералом"   '${1ABC}/
 assert_contains "недопустимое имя → WARN" "недопустимое имя" "$(read_config bad_name tricky '' 2>&1 >/dev/null)"
 assert_eq "amp_ref: '&' в значении переменной не трогается" "a=1&b=2/z" "$(read_config amp_ref tricky '')"
 assert_eq "mixed_case: ключ другого регистра найден" "mc" "$(read_config mixed_case tricky '')"
+# " #" внутри ведущих кавычек — часть значения: «Копировать как путь» для папки
+# «video #1» даёт "C:/video #1", и срез до снятия кавычек оставлял "C:/video.
+assert_eq "quoted_hash: ' #' в кавычках сохранён, комментарий после — срезан" "C:/video #1" "$(read_config quoted_hash tricky '')"
+assert_eq "quoted_hash_sq: то же в одинарных кавычках" "a #b.log" "$(read_config quoted_hash_sq tricky '')"
+# Хвост после закрывающей кавычки — обычный текст: кавычки не снимаются, комментарий режется.
+assert_eq "quoted_tail: текст после кавычек остаётся как есть" '"x" y' "$(read_config quoted_tail tricky '')"
+# Строка без '=' не присваивает и не «занимает» ключ: действует следующая.
+assert_eq "no_eq: строка без '=' пропущена" "after" "$(read_config no_eq tricky '')"
 # patsub_replacement выключается только на время разбора и возвращается как был.
 if shopt -q patsub_replacement 2>/dev/null; then
     pass "patsub_replacement после read_config восстановлен"
@@ -167,6 +181,37 @@ unset MY_PARITY_VAR
 assert_eq "var_ref: незаданная \${VAR} → пусто, не литерал" "/sub" "$(read_config var_ref tricky '' 2>/dev/null)"
 assert_contains "var_ref: незаданная \${VAR} → WARN" "MY_PARITY_VAR не задана" "$(read_config var_ref tricky '' 2>&1 >/dev/null)"
 export MY_PARITY_VAR="parity-val-42"
+
+# ══════════════════════════════════════════════════════════════
+suite "GUI-ридер: Remove-ConfigComment тот же, что в CLI"
+# ══════════════════════════════════════════════════════════════
+# У GUI свой разбор config.ini. Обе функции берутся из НАСТОЯЩИХ исходников
+# разбором AST и гоняются на одних входах — копий в тесте нет.
+if [ "$HAVE_PS1" = true ]; then
+    _rcc_ps=$(mktemp_suffix "${TMPDIR:-/tmp}/rcc_" .ps1)
+    cat > "$_rcc_ps" <<'PSEOF'
+param([string]$Cli, [string]$Gui)
+function Get-Fn([string]$File) {
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($File, [ref]$null, [ref]$null)
+    $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Remove-ConfigComment' }, $true)
+}
+$inputs = @('"C:/video #1" # c', "'a #b.log'", '"x" y # z', 'value # c', 'my#file', '"open #x')
+foreach ($side in @(@('CLI', $Cli), @('GUI', $Gui))) {
+    $fn = Get-Fn $side[1]
+    if (-not $fn) { Write-Output "$($side[0])=NOFUNC"; continue }
+    . ([scriptblock]::Create($fn.Extent.Text))
+    Write-Output ("{0}={1}" -f $side[0], (($inputs | ForEach-Object { Remove-ConfigComment $_ }) -join '|'))
+}
+PSEOF
+    _rcc_out=$($PS_CMD -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$_rcc_ps")" \
+        -Cli "$RUN_PS1_WIN" -Gui "$(cygpath -w "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v20.ps1")" 2>&1 | tr -d '\r')
+    rm -f "$_rcc_ps"
+    _rcc_want='"C:/video #1"|'"'a #b.log'"'|"x" y|value|my#file|"open'
+    assert_contains "CLI: комментарий вне кавычек" "CLI=$_rcc_want" "$_rcc_out"
+    assert_contains "GUI: тот же результат"        "GUI=$_rcc_want" "$_rcc_out"
+else
+    skip "GUI-ридер: Remove-ConfigComment" "PowerShell не найден"
+fi
 
 # ══════════════════════════════════════════════════════════════
 suite "F28: относительный log_file резолвится от папки скрипта"

@@ -659,8 +659,20 @@ $format_files_in_list = Get-ChildItem -LiteralPath $folder_sources -Recurse -Fil
 # регистронезависимое (Windows). dest == source (in-place) вложенностью НЕ считается —
 # там файлы это источники, а коллизию «выход==вход» снимает пофайловая проверка ниже.
 $_sep = [System.IO.Path]::DirectorySeparatorChar
-$canon_sources     = [System.IO.Path]::GetFullPath($folder_sources).TrimEnd('\','/')
-$canon_destination = [System.IO.Path]::GetFullPath($folder_destination).TrimEnd('\','/')
+# --- Канонизация пути для сравнения input/output ---
+# GetFullPath разворачивает '..' и приводит разделители; файл существовать не обязан.
+# Относительный путь сначала разворачивается по $PWD (см. New-DirLiteral): в dry_run
+# destination не создан, Resolve-RootPath его не резолвит, и голый GetFullPath брал
+# process CWD — сверка «выход == вход» и карта коллизий считали не тот каталог,
+# в который настоящий прогон пишет.
+function Get-CanonPath {
+	param([string]$Path)
+	try { return [System.IO.Path]::GetFullPath(
+		$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)) } catch {}
+	try { return [System.IO.Path]::GetFullPath($Path) } catch { return $Path }
+}
+$canon_sources     = (Get-CanonPath $folder_sources).TrimEnd('\','/')
+$canon_destination = (Get-CanonPath $folder_destination).TrimEnd('\','/')
 $dest_inside_source = $canon_destination.StartsWith($canon_sources + $_sep, [System.StringComparison]::OrdinalIgnoreCase)
 if ($dest_inside_source) {
 	$format_files_in_list = $format_files_in_list | Where-Object {
@@ -677,13 +689,6 @@ $script:countSkip   = 0
 $script:totalInBytes  = 0
 $script:totalOutBytes = 0
 $script:startTimeAll  = Get-Date
-
-# --- Канонизация пути для сравнения input/output ---
-# GetFullPath разворачивает '..' и приводит разделители; файл существовать не обязан.
-function Get-CanonPath {
-	param([string]$Path)
-	try { return [System.IO.Path]::GetFullPath($Path) } catch { return $Path }
-}
 
 function Get-FileSize {
 	param([string]$Path)
@@ -1375,7 +1380,7 @@ function Encode-File {
 
 		if ($split_by_silence -eq "yes") {
 			Write-Host "`nЖдите! Идёт поиск пауз в файле:`n$full_path`n"
-			$search_silence = & $ffmpeg -i $full_path -nostats -af "silencedetect=n=${silence_threshold}:d=${silence_duration}" -f null - 2>&1
+			$search_silence = & $ffmpeg -nostdin -i $full_path -nostats -af "silencedetect=n=${silence_threshold}:d=${silence_duration}" -f null - 2>&1
 			$split_points = @()
 			$silence_start_val = $null
 			foreach ($line in $search_silence) {
@@ -1462,7 +1467,25 @@ function Encode-File {
 		}
 	}
 
-	if ($start_coding_status -eq "+") { $num = @($start_coding_value) }
+	if ($start_coding_status -eq "+") {
+		$num = @($start_coding_value)
+		# Фрагмент [start, start+length]. $length_silent_values выше посчитан для
+		# разбиения ОТ НУЛЯ, и фрагмент получал длину его первой части: конец
+		# притягивался к паузе у length, а не у start+length. Притяжка та же, что в
+		# .sh (порог — половина длины), но к концу самого фрагмента; паузы рядом нет —
+		# номинальная длина (-t length).
+		if ($split_by_silence -eq "yes" -and $length_coding_status -eq "+") {
+			$length_silent_values = @{}
+			$f_end = $start_coding_value + $length_coding_value
+			$f_best = 999999; $f_len = $null
+			foreach ($p in @($split_points)) {
+				if ($p -le $start_coding_value) { continue }
+				$d = [Math]::Abs($p - $f_end)
+				if ($d -lt $f_best) { $f_best = $d; $f_len = $p - $start_coding_value }
+			}
+			if ($null -ne $f_len -and $f_best -le [int][Math]::Floor($length_coding_value / 2)) { $length_silent_values[0] = $f_len }
+		}
+	}
 
 	# Готовые выходы копим, чтобы записать manifest одной транзакцией после цикла.
 	# $script:, а не локальные: публикацию результата ведёт Publish-EncodedResult,
@@ -1982,6 +2005,21 @@ if ($env:FFCONV_REMOTE_SELFTEST -eq '1') {
 	exit $_stRc
 }
 
+# F10. Порядок объединения — по коду символа (ordinal) полного пути, где '\' заменён
+# на '/': ровно `LC_ALL=C sort -z` в .sh и оба однострочника .cmd. Sort-Object
+# сравнивает с учётом культуры и без регистра — a1 раньше B2, — а разделитель '\'
+# (0x5C) стоит после цифр и заглавных, '/' (0x2F) — до: clips\ и clips2\
+# склеивались в другом порядке, чем в .sh, даже при байтовой сортировке.
+function Get-MergeOrder {
+	param($Files)
+	$items = @($Files)
+	$keys = [string[]]@($items | ForEach-Object { $_.FullName.Replace('\', '/') })
+	# Приведения обязательны: без них PowerShell берёт обобщённый Sort<TKey,TValue>,
+	# молча копирует $items в типизированный массив и сортирует КОПИЮ.
+	[Array]::Sort([Array]$keys, [Array]$items, [System.Collections.IComparer][StringComparer]::Ordinal)
+	return ,$items
+}
+
 # --- Основная логика ---
 if ($asr_active -eq 'yes') {
 	Invoke-AsrRun $format_files_in_list
@@ -1990,7 +2028,7 @@ if ($asr_active -eq 'yes') {
 		Log-Msg "WARN" "Нет файлов для объединения в $folder_sources"
 		$script:countSkip++
 	} else {
-	$_mergeSorted = $format_files_in_list | Sort-Object FullName  # F10: паритет с .sh sort -z
+	$_mergeSorted = Get-MergeOrder $format_files_in_list
 		$fname = $_mergeSorted[0].Name
 	if ($overwrite_existing -ne "yes" -and (Test-Path -LiteralPath "$folder_destination\$fname")) {
 		# Цель существует, а перезапись выключена — это ПРОПУСК, и он обязан быть

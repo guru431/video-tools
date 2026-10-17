@@ -31,6 +31,17 @@ function Remove-ConfigQuotes {
 	return $v
 }
 
+# Инлайн-комментарий. " #" внутри ведущего значения в кавычках — часть значения:
+# «Копировать как путь» для папки «C:\video #1» даёт "C:\video #1", и срез до
+# Remove-ConfigQuotes оставлял "C:\video. Паритет с read_config в .sh и
+# :strip_inline_comment в .cmd: комментарий ищется после закрывающей кавычки.
+function Remove-ConfigComment {
+	param([string]$Value)
+	$m = [regex]::Match($Value, '^("[^"]*"|''[^'']*'')')
+	if ($m.Success) { return $m.Value + ($Value.Substring($m.Length) -replace '\s+#.*', '') }
+	return ($Value -replace '\s+#.*', '')
+}
+
 # Подстановка ${ENV_VAR} — тот же алгоритм, что у read_config в .sh и :expand_env
 # в .cmd: первое вхождение за итерацию, имя обязано быть идентификатором
 # [A-Za-z_][A-Za-z0-9_]*, иначе WARN и значение остаётся как есть. Прежний
@@ -72,7 +83,7 @@ function Read-Config {
 					continue
 				}
 				if ($curSection -and $line -match '^([^=]+?)\s*=\s*(.*)') {
-					$val = $Matches[2] -replace '\s+#.*', ''
+					$val = Remove-ConfigComment $Matches[2]
 					# Подстановка ${ENV_VAR} из окружения (паритет с yt-dlp). Не задана → пусто + WARN.
 					# Кроме секции [remote]: там TRANSCODE_URL/TRANSCODE_API_KEY не заданы у
 					# всех, кто удалённым бэкендом не пользуется (а он выключен по умолчанию).

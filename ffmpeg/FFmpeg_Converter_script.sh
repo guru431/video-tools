@@ -1562,7 +1562,25 @@ encode_file() {
 		fi
 	fi
 
-	if [ "$start_coding_status" = "+" ]; then num=("$start_coding_value"); fi
+	if [ "$start_coding_status" = "+" ]; then
+		num=("$start_coding_value")
+		# Фрагмент [start, start+length]. length_silent выше посчитан для разбиения ОТ
+		# НУЛЯ, и фрагмент получал длину его первой части: конец притягивался к паузе
+		# у length, а не у start+length. Притяжка та же (порог — половина длины), но
+		# к концу самого фрагмента; паузы рядом нет — номинальная длина (-t length).
+		if [ "$split_by_silence" = "yes" ] && [ "$length_coding_status" = "+" ]; then
+			length_silent=()
+			local f_end=$((start_coding_value + length_coding_value)) f_best=999999 f_len="" p d
+			if [ ${#split_points[@]} -gt 0 ]; then
+				for p in "${split_points[@]}"; do
+					(( p > start_coding_value )) || continue
+					d=$((p - f_end)); if (( d < 0 )); then d=$(( -d )); fi
+					if (( d < f_best )); then f_best=$d; f_len=$((p - start_coding_value)); fi
+				done
+			fi
+			if [ -n "$f_len" ] && (( f_best <= length_coding_value/2 )); then length_silent[0]=$f_len; fi
+		fi
+	fi
 
 	# Готовые выходы («<байты>|<путь>») копим, чтобы записать manifest одной
 	# транзакцией после цикла; размер источника — с первой удавшейся части.
@@ -1992,12 +2010,15 @@ encode_file() {
 # молча выдать другой порядок склейки.
 # Проба — при первом вызове, а не на загрузке: sort_null нужен только merge, а
 # проба стоила процессов каждому прогону.
+# F10. Порядок склейки — по коду символа (LC_ALL=C) в ОБЕИХ ветках: в локали
+# пользователя `sort -z` ставил a1 раньше B2, и порядок зависел от машины. Тот же
+# порядок дают Get-MergeOrder в .ps1 и оба однострочника .cmd (там '\' → '/').
 sort_null() {
 	if [ -z "${_sort_z_ok:-}" ]; then
 		if printf 'a\0' | sort -z >/dev/null 2>&1; then _sort_z_ok="yes"; else _sort_z_ok="no"; fi
 	fi
 	if [ "$_sort_z_ok" = "yes" ]; then
-		sort -z
+		LC_ALL=C sort -z
 	else
 		[ -n "${_sort_z_warned:-}" ] || log_msg "WARN" "sort без -z (не GNU): порядок объединения не гарантирован для имён с переводом строки"
 		_sort_z_warned=1

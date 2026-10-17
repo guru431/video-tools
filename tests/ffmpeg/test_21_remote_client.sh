@@ -638,6 +638,19 @@ assert_contains     "у скачивания есть предел застоя"
 _out="$(remote_fetch job-7 "$_dst" "клип")"
 assert_contains "фаза названа" "скачивание" "$_out"
 rm -f "$_dst"
+# Обрыв на скачивании (самая долгая сетевая фаза) называет причину словами curl, как
+# remote_http: stderr уходил в /dev/null, и «Обрыв связи» не отличал DNS от застоя.
+_fcurl="$(mktemp "${TMPDIR:-/tmp}/fake_curl_XXXXXX")"
+printf '%s\n' '#!/bin/bash' 'cat >/dev/null' \
+    'echo "curl: (28) Operation too slow. Less than 1 bytes/sec transferred the last 600 seconds" >&2' \
+    'exit 28' > "$_fcurl"
+chmod +x "$_fcurl"
+_out="$(CURL_BIN="$_fcurl" remote_fetch job-7 "$_dst" "клип" 2>&1)"; rc=$?
+assert_eq "обрыв скачивания — отказ" "1" "$rc"
+assert_contains "обрыв назван" "Обрыв связи при скачивании результата" "$_out"
+assert_contains "причина curl в сообщении" "Operation too slow" "$_out"
+if [ -e "$_dst" ]; then fail "недокачанный результат удалён" "нет файла" "$_dst"; else pass "недокачанный результат удалён"; fi
+rm -f "$_fcurl"
 
 suite "remote: отмена освобождает карту"
 : > "$MOCK_CURL_LOG"

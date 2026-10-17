@@ -79,6 +79,16 @@ function Remove-ConfigQuotes {
     return $v
 }
 
+# Инлайн-комментарий: " #" внутри ведущего значения в кавычках — часть значения
+# ("C:\video #1"). Паритет с Remove-ConfigComment в CLI, read_config в .sh и
+# :strip_inline_comment в .cmd.
+function Remove-ConfigComment {
+    param([string]$Value)
+    $m = [regex]::Match($Value, '^("[^"]*"|''[^'']*'')')
+    if ($m.Success) { return $m.Value + ($Value.Substring($m.Length) -replace '\s+#.*', '') }
+    return ($Value -replace '\s+#.*', '')
+}
+
 # Подстановка ${ENV_VAR} — алгоритм read_config из .sh, :expand_env из .cmd и
 # Expand-ConfigEnv из CLI-PS1: имя обязано быть идентификатором, иначе WARN и
 # значение остаётся как есть; не более 32 подстановок. Предупреждения КОПЯТСЯ и
@@ -118,7 +128,7 @@ if (Test-Path -LiteralPath $configFile) {
             continue
         }
         if ($curSection -and $line -match '^([^=]+?)\s*=\s*(.*)') {
-            $val = $Matches[2] -replace '\s+#.*', ''
+            $val = Remove-ConfigComment $Matches[2]
             # Подстановка ${ENV_VAR} из окружения (паритет с yt-dlp/CLI). Не задана → пусто + WARN.
             # Кроме секции [remote]: там TRANSCODE_URL/TRANSCODE_API_KEY не заданы у всех,
             # кто удалённым бэкендом не пользуется, и WARN сыпался бы при каждом старте GUI.
@@ -1688,7 +1698,9 @@ $buttonRun.Add_Click({
     $script:create_frame        = if ($checkCreateFrames.Checked) { "yes" } else { "no" }
     $script:copy_codecs         = if ($checkCopyCodecs.Checked)  { "yes" } else { "no" }
     $_threadsVal = if ($textThreads.Text -match '^[0-9]+$') { $textThreads.Text } else { '4' }
-    $script:multithreads        = if ($checkMultithreads.Checked) { ":+:$_threadsVal" } else { ":-:1" }
+    # Выключенное — со значением поля, как остальные поля и :to_flag в CMD: воркер при
+    # статусе «-» всё равно берёт 1 поток, но в него уходит то же, что из CLI.
+    $script:multithreads        = if ($checkMultithreads.Checked) { ":+:$_threadsVal" } else { ":-:$_threadsVal" }
     # parallel_files=$($_cfg_parallel.value) игнорируется — параллельная обработка есть
     # только в .sh. Значение из config.ini передаём как есть, чтобы воркер напечатал
     # то же предупреждение, что и CLI-PS1.

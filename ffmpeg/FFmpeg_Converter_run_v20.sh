@@ -71,10 +71,20 @@ read_config() {
 
 		if $in_section && [[ "$line" =~ ^${key}[[:space:]]*=[[:space:]]*(.*) ]]; then
 			local value="${BASH_REMATCH[1]}"
+			# " #" внутри ведущего значения в кавычках — часть значения: «Копировать
+			# как путь» для папки «C:\video #1» даёт "C:\video #1", и срез оставлял
+			# "C:\video. Комментарий ищется только после закрывающей кавычки.
+			local _qhead="" _q
+			case "$value" in
+				'"'*'"'*|"'"*"'"*)
+					_q="${value:0:1}"; value="${value:1}"
+					_qhead="${_q}${value%%"$_q"*}${_q}"; value="${value#*"$_q"}" ;;
+			esac
 			if [[ "$value" == *" #"* ]]; then
 				value="${value%% #*}"
 				value="${value%"${value##*[![:space:]]}"}"
 			fi
+			value="${_qhead}${value}"
 			# Подстановка ${ENV_VAR} из окружения (паритет с yt-dlp). Не задана → пусто + WARN.
 			# Кроме секции [remote]: там TRANSCODE_URL/TRANSCODE_API_KEY не заданы у
 			# всех, кто удалённым бэкендом не пользуется (а он выключен по умолчанию),

@@ -274,9 +274,9 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 | `test_10_cmd` | CMD-скрипт |
 | `test_11_cmd_smoke` | CMD: smoke-тест |
 | `test_12_cmd_run_parser` | CMD: парсер run-конфига |
-| `test_13_parser_parity` | Кросс-парсерный паритет SH/PS1 read_config |
+| `test_13_parser_parity` | Кросс-парсерный паритет SH/PS1 read_config (кавычки, ` #` внутри кавычек, строка без `=`; GUI-ридер) |
 | `test_14_audio_only_codec` | audio_only: контейнер/кодек из `[audio] codec` |
-| `test_15_findings` | Фиксы аудита: dry-run спецрежимов, маркер кадров, overwrite (и очистка прошлых частей по manifest), коллизии |
+| `test_15_findings` | Фиксы аудита: dry-run спецрежимов, маркер кадров, overwrite (и очистка прошлых частей по manifest), коллизии, порядок merge и фрагмент по тишине на трёх платформах |
 | `test_16_gui_state` | GUI: воркер сообщает честный исход батча (success/failed/cancelled) |
 | `test_17_literal_paths` | PS1: пути с `[ ]` в именах (литеральные, без wildcard-глоббинга) |
 | `test_18_findings_audit` | Фиксы аудита: dry-run+overwrite не удаляет выход, merge in-place отклоняется, проверка финального rename, silence-настройки в signature |
@@ -307,7 +307,7 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 | `test_09_speed_profile` | `[network]`: профили скорости/устойчивости, паритет SH↔PS1 |
 | `test_10_archive_skip_parity` | Archive-skip: batch (SH) и GUI (PS1) не выдают пропуск за загрузку; код 101 (`--break-on-reject`) в режиме каналов — не ошибка |
 | `test_11_findings_f4_f15` | Фиксы аудита F4/F6/F8/F9/F11/F13/F14/F15 (rename, dry-run+translate, vot exit code, ffprobe для dual_track, GUID-манифест, host-детект, схема URL, регистронезависимый config); грамматика времени обрезки SH/CMD |
-| `test_12_findings_cli` | `$qi` до манифеста, preflight AI-перевода, URL-валидация и громкости mix в CMD |
+| `test_12_findings_cli` | `$qi` до манифеста, preflight AI-перевода, URL-валидация и громкости mix в CMD, `--no-playlist`/`--yes-playlist` в SH |
 | `test_13_path_limit` | Лимит длины пути (MAX_PATH): бюджет от базовой папки, одинаковый результат в SH/PS1/CMD |
 | `test_14_stop_and_window` | «Остановить» снимает дерево процессов; свёрнутое окно не трогаем |
 | `test_15_cmd_smoke` | Сквозной прогон интерактивного `.cmd` целиком: меню, argv дочерних процессов, коды возврата (моки — настоящие EXE) |
@@ -325,7 +325,7 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 | `test_ytdlp_preset_parity` | Паритет таблиц форматов yt-dlp SH ↔ PS1 |
 | `test_build_strip` | Комментарии не попадают в собранный EXE: сборка зовёт вырезание, вырезание не трогает код и строки |
 | `test_pre_commit_hook` | pre-commit на реальном temp-репо: блок секрета, разрешение удаления утечки |
-| `test_privacy_scan` | privacy-scan на реальном temp-репо: RFC1918 IP / e-mail, файлы с пробелами и кириллицей, `*.example`; сломанный барьер падает, а не рапортует «чисто» |
+| `test_privacy_scan` | privacy-scan на реальном temp-репо: RFC1918 IP / e-mail, файлы с пробелами и кириллицей, `*.example`, бинарники; сломанный барьер падает, а не рапортует «чисто» |
 | `test_docs_links` | Ссылки и пути в документации ведут на существующие файлы; имена EXE в CI ↔ файлы на диске |
 
 Подробное описание: [tests/TESTING.md](tests/TESTING.md)

@@ -1356,8 +1356,17 @@ remote_wait() {
 # жаловались не на отсутствие процентов, а на то, что минуты «ничего не
 # происходит» неотличимы от зависания.
 remote_fetch() {
-	local jid="$1" dst="$2" label="${3:-$2}" curl_bin="${CURL_BIN:-curl}" code
+	local jid="$1" dst="$2" label="${3:-$2}" curl_bin="${CURL_BIN:-curl}" code err why
 	show_progress_bar 0 "$label" "скачивание"
+	# stderr curl'а — в файл, как в remote_http: «обрыв» без причины (DNS, TLS, отказ
+	# прокси, застой 600 с) на самой долгой сетевой фазе — диагноз, по которому
+	# нечего искать.
+	err="$(mktemp "${TMPDIR:-/tmp}/ffconv_curlerr_XXXXXX")" || {
+		printf "\n"
+		echo "[ОШИБКА] Не удалось создать временный файл для вывода curl." >&2
+		return 1
+	}
+	remote_tmp_add "$err"
 	# --connect-timeout — как у остальных запросов: зависший connect держал клиента
 	# до таймаута ОС и мешал отмене из trap'а. --max-time здесь нет намеренно: тело
 	# может быть гигабайтами, и любой общий потолок обрывал бы честное скачивание.
@@ -1369,11 +1378,14 @@ remote_fetch() {
 		--connect-timeout "${REMOTE_CONNECT_TIMEOUT:-10}" \
 		--speed-limit 1 --speed-time 600 \
 		-o "$dst" -w '%{http_code}' \
-		"${remote_endpoint}/jobs/${jid}/result" 2>/dev/null)" || {
+		"${remote_endpoint}/jobs/${jid}/result" 2>"$err")" || {
+		why="$(head -3 "$err" | tr '\n' ' ')"
+		remote_tmp_rm "$err"
 		printf "\n"
-		echo "[ОШИБКА] Обрыв связи при скачивании результата." >&2
+		echo "[ОШИБКА] Обрыв связи при скачивании результата.${why:+ $why}" >&2
 		rm -f "$dst"; return 1
 	}
+	remote_tmp_rm "$err"
 	REMOTE_HTTP_CODE="$code"
 	if [ "$code" != "200" ]; then
 		printf "\n"

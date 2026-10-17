@@ -163,6 +163,29 @@ assert_contains "extract_audio: файл со скобками в пути об�
 assert_not_contains "extract_audio: ошибок пути нет" "не найден" "$OUT"
 
 # ══════════════════════════════════════════════════════════════
+suite "Относительный destination в dry_run канонизируется по \$PWD, а не по process CWD"
+# ══════════════════════════════════════════════════════════════
+# В dry_run destination не создаётся, Resolve-Path на нём падает, и путь остаётся
+# относительным. Голый [IO.Path]::GetFullPath берёт process CWD, который в PowerShell
+# расходится с $PWD: здесь он указывает на каталог, где 'sub' — это сам источник, и
+# сверка «выход == вход» ложно отклоняла файл, хотя настоящий прогон создал бы
+# 'sub' под $PWD (New-DirLiteral) и писал бы туда.
+mkdir -p "$WORK/proc/sub" "$WORK/ps"
+: > "$WORK/proc/sub/a.mp4"
+w_proc=$(cygpath -w "$WORK/proc"); w_ps=$(cygpath -w "$WORK/ps")
+OUT=$(run_worker "\$folder_sources=(Get-Item -LiteralPath '$w_proc\\sub').FullName
+\$folder_destination='sub'; \$format_files_in='mp4'
+Set-Location -LiteralPath '$w_ps'; [Environment]::CurrentDirectory='$w_proc'")
+# Маркер ASCII: вывод powershell здесь в кодовой странице консоли, кириллица не сверить.
+assert_not_contains "относительный destination не принят за источник ([FAIL] in==out)" "[FAIL]" "$OUT"
+assert_contains "файл запланирован к кодированию" "[DRY-RUN]" "$OUT"
+if [ -e "$WORK/ps/sub" ] || [ -e "$WORK/proc/sub/sub" ]; then
+    fail "dry-run не создал относительный destination" "нет каталога 'sub'" "создан"
+else
+    pass "dry-run не создал относительный destination"
+fi
+
+# ══════════════════════════════════════════════════════════════
 suite "F1: анти-регресс — позиционный -Path не вернулся"
 # ══════════════════════════════════════════════════════════════
 # Статическая проверка: пара «-LiteralPath + Where-Object» легко откатывается

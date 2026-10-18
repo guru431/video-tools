@@ -110,6 +110,8 @@ suite "Сообщение о провале печатает данные бук
 # «Ожидалось»/«Получено» шли через echo -e: Windows-путь D:\vsc\video печатался
 # как «D:<VT>sc<VT>ideo», и разбор провала начинался с ложного следа.
 # Счётчик подменён на /dev/null: этот провал — данные проверки, а не её итог.
+# TESTS_RESULT_FILE читает fail() из framework.sh — shellcheck этого не видит.
+# shellcheck disable=SC2034
 _fail_out=$(TESTS_RESULT_FILE=/dev/null; fail "зонд" 'C:\vsc\x' 'D:\vsc\video\n')
 assert_contains "ожидаемое печатается буквально" 'C:\vsc\x'       "$_fail_out"
 assert_contains "полученное печатается буквально" 'D:\vsc\video\n' "$_fail_out"

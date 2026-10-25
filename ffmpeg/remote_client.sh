@@ -598,6 +598,13 @@ remote_preflight() {
 		echo "[ОШИБКА] [remote] enabled = yes, но ключ службы пуст. Задайте [remote] api_key (или api_key_command) в config.ini, либо переменную окружения TRANSCODE_API_KEY." >&2
 		return 1
 	fi
+	# Ключ уходит строкой curl-конфига, а экранирование там — только \ и ". Перевод
+	# строки (бывает в переменной окружения) начал бы новую директиву конфига.
+	case "$remote_api_key" in
+		*[[:cntrl:]]*)
+			echo "[ОШИБКА] [remote] ключ службы содержит управляющие символы (перевод строки, табуляцию) — проверьте api_key или переменную TRANSCODE_API_KEY." >&2
+			return 1 ;;
+	esac
 	if ! command -v "${CURL_BIN:-curl}" >/dev/null 2>&1; then
 		echo "[ОШИБКА] Для удалённого бэкенда нужен curl, но он не найден." >&2
 		return 1
@@ -828,20 +835,26 @@ remote_upload_sidecar_read_job() {
 }
 
 remote_upload_sidecar_write_job() {
-	local f="$REMOTE_UPLOAD_SIDECAR" src="$1" part="${2:-1}" sig="${3:-}" jid="$4" stored=""
+	local f="$REMOTE_UPLOAD_SIDECAR" src="$1" part="${2:-1}" sig="${3:-}" jid="$4" uid="${5:-}" stored=""
 	[ -n "$f" ] && [ -n "$jid" ] || return 0
 	# Файла может не быть (ручная чистка, обрыв между complete и созданием задачи):
 	# создаём с отпечатком. Прежняя версия в этом случае молча выходила, а после
 	# успешного complete файла как раз НЕ БЫЛО — sidecar удалялся там же, — поэтому
 	# идентификатор задачи не попадал в него НИ РАЗУ и фича не работала вовсе.
+	#
+	# Идентификатор загрузки ($5) передаёт вызывающий, и с ним — complete=yes: задача
+	# создаётся только по подтверждённой загрузке. С пустым upload_id следующий запуск,
+	# нашедший задачу мёртвой, отправлял исходник заново целиком. Глобальный
+	# REMOTE_UPLOAD_ID не годится: к этому моменту в нём может быть id файла субтитров.
 	local cur=""
 	if [ -f "$f" ]; then
 		cur="$(cat "$f" 2>/dev/null)"
 	else
-		cur="upload_id=
+		cur="upload_id=$uid
 size=$(file_size "$src")
 mtime=$(remote_file_mtime "$src")
 endpoint=$remote_endpoint"
+		[ -n "$uid" ] && cur="$cur"$'\n'"complete=yes"
 	fi
 	# Строки разбираются самим bash, а не sed/grep: прежде здесь было пять процессов
 	# на каждую созданную задачу.

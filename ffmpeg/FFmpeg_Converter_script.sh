@@ -1079,14 +1079,16 @@ show_progress_bar() {
 #               регистра), по одному на строку, как `grep -o | sed`;
 #   MI_DUR    — первое чч:мм:сс среди строк «Duration:», где оно есть;
 #   MI_ACODEC — кодек из последнего «Audio: <имя>» первой строки с «Audio:»; если
-#               такого вхождения с учётом регистра нет — вся строка (как у sed).
+#               такого вхождения с учётом регистра нет — вся строка (как у sed);
+#   MI_SUBS   — число строк «Stream #…Subtitle:» (дорожки субтитров источника).
 parse_media_info() {
 	local line rest ncm="no" vline="" cline="" aline="" n=0
 	local re_v='([0-9]+) kb/s' re_c='bitrate: ([0-9]*)' re_d='[0-9]+:[0-9]+:[0-9]+' re_a='^[a-z0-9_]*'
-	MI_VBR=""; MI_CBR=""; MI_DUR=""; MI_ACODEC=""
+	MI_VBR=""; MI_CBR=""; MI_DUR=""; MI_ACODEC=""; MI_SUBS=0
 	shopt -q nocasematch && ncm="yes"
 	shopt -s nocasematch
 	while IFS= read -r line; do
+		[[ $line == *"Stream #"*"Subtitle:"* ]] && MI_SUBS=$((MI_SUBS + 1))
 		[ -z "$vline" ] && [[ $line == *"Stream #"*"Video:"* ]] && vline="$line"
 		[ -z "$cline" ] && [[ $line == *"bitrate:"* ]] && cline="$line"
 		[ -z "$aline" ] && [[ $line == *"Audio:"* ]] && aline="$line"
@@ -1362,7 +1364,7 @@ encode_file() {
 	# (видео + аудио + overhead). Настройка обещает не повышать исходный видеобитрейт,
 	# а сравнивала с завышенным числом и потому всё равно его повышала.
 	parse_media_info "$ffmpeg_info"
-	local src_video_bitrate="$MI_VBR"
+	local src_video_bitrate="$MI_VBR" src_sub_streams="$MI_SUBS"
 
 	# Часть контейнеров (MKV/WebM) per-stream битрейт не сообщает. Тогда откатываемся
 	# на битрейт контейнера — это верхняя оценка, а не битрейт видео, поэтому говорим
@@ -1671,7 +1673,10 @@ encode_file() {
 							fi
 						fi
 						if [ "$video_subtitles_value" = "meta" ]; then
-							subtitles_params=(-i "$sub_file" -c:s "$sub_meta_codec" -metadata:s:s:0 language=rus)
+							# -map 0 кладёт субтитры источника ПЕРВЫМИ, sidecar идёт за ними:
+							# его номер среди выходных субтитров — их число. С s:s:0 метка
+							# rus ложилась на первую встроенную дорожку, а не на добавленную.
+							subtitles_params=(-i "$sub_file" -c:s "$sub_meta_codec" "-metadata:s:s:${src_sub_streams:-0}" language=rus)
 							convert_settings="$convert_settings -map 0 -map 1"
 						fi
 						sub_found=1
@@ -1839,7 +1844,7 @@ encode_file() {
 				r_job="$r_job_saved"
 			elif remote_submit "$remote_upload_id" "$r_op" "$r_params" "${remote_sub_id:-}"; then
 				r_job="$REMOTE_JOB_ID"
-				remote_upload_sidecar_write_job "$full_path" "$c" "$file_sig" "$r_job"
+				remote_upload_sidecar_write_job "$full_path" "$c" "$file_sig" "$r_job" "${remote_upload_id:-}"
 			fi
 			REMOTE_UPLOAD_SIDECAR=""
 			if [ -n "$r_job" ]; then

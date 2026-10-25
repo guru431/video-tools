@@ -322,6 +322,14 @@ remote_api_key_command="printf ''"
 out="$(remote_preflight 2>&1)"; rc=$?
 assert_eq "пустой вывод команды — отказ" "1" "$rc"
 remote_api_key_command=""
+# Ключ из переменной окружения с переводом строки: строка curl-конфига на stdin
+# разломилась бы, и хвост ключа стал бы отдельной директивой curl.
+: > "$MOCK_CURL_LOG"
+remote_api_key=$'test-key\noutput = "/tmp/x"'
+out="$(remote_preflight 2>&1)"; rc=$?
+assert_eq "ключ с переводом строки — отказ" "1" "$rc"
+assert_contains "причина названа" "управляющие символы" "$out"
+assert_eq "до службы запрос не дошёл" "" "$(cat "$MOCK_CURL_LOG")"
 remote_api_key="test-key"
 
 # ══════════════════════════════════════════════════════════════
@@ -724,9 +732,14 @@ assert_contains "upload_id пережил замену" "upload_id=up-70" "$(cat
 # запись обязана его создать. Прежняя версия здесь молча выходила, и именно поэтому
 # идентификатор задачи не попадал в sidecar НИ РАЗУ.
 rm -f "$_sidecar"
-remote_upload_sidecar_write_job "$_rsrc" 1 SIG-C job-90
+remote_upload_sidecar_write_job "$_rsrc" 1 SIG-C job-90 up-91
 assert_file_exists "sidecar создан при записи задачи" "$_sidecar"
 assert_eq "задача читается из созданного sidecar" "job-90" "$(remote_upload_sidecar_read_job "$_rsrc" 1 SIG-C)"
+# Созданный sidecar несёт и загрузку: при мёртвой задаче следующий запуск берёт
+# принятый исходник (upload_id + complete=yes), а не отправляет его заново.
+assert_eq "созданный sidecar помнит upload_id" "up-91" "$(remote_upload_sidecar_read "$_rsrc")"
+remote_upload_sidecar_completed && _rc=0 || _rc=1
+assert_eq "созданный sidecar помечен complete=yes" "0" "$_rc"
 
 # Запись — через соседний .new и mv. Прямая `> "$f"` сперва усекала sidecar, и
 # обрыв между усечением и записью стоил полной повторной загрузки. Сорванная

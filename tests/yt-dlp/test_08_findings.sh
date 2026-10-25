@@ -369,6 +369,9 @@ suite "F20 (SH): регистр хоста не меняет platform detection"
     assert_eq "YOUTUBE.COM.evil.tld → other"       "other"   "$(detect_platform 'https://YOUTUBE.COM.evil.tld/x')"
     # Регистр пути/query не трогаем — нормализуется только host.
     assert_eq "путь в верхнем регистре → youtube"  "youtube" "$(detect_platform 'https://youtube.com/WATCH?V=AbC')"
+    # Ссылка без схемы (yt-dlp её принимает): хост — до первого '/', не вся строка.
+    assert_eq "без схемы youtube.com/watch → youtube" "youtube" "$(detect_platform 'youtube.com/watch?v=a')"
+    assert_eq "без схемы www.youtu.be/x → youtube"    "youtube" "$(detect_platform 'www.youtu.be/x')"
 ) 2>/dev/null
 
 # ══════════════════════════════════════════════════════════════

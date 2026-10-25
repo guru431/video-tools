@@ -678,14 +678,21 @@ rem а goto из тела for обрывал бы перечисление фа�
 			rem findstr, а не find: опция Git «Unix tools from the Command Prompt» ставит
 			rem MSYS find в PATH, и тот искал ФАЙЛ «Audio:» — кодек не находился, выход .mka.
 			for /f "delims=" %%c in ('""!ffmpeg!" -i "!full_path!" 2^>^&1 ^| findstr /c:"Audio:""') do if not defined audio_line set "audio_line=%%c"
+			rem Кодек - первое слово после "Audio: ", как в parse_media_info .sh и в .ps1.
+			rem Подстрочный поиск "Audio: aac" принимал и aac_latm (DVB .ts): CMD писал .m4a
+			rem там, где SH/PS1 пишут .mka.
+			set "_acodec="
 			if not "!audio_line!"=="" (
-				if not "!audio_line:Audio: aac=!"=="!audio_line!" set "audio_ext=m4a"
-				if not "!audio_line:Audio: mp3=!"=="!audio_line!" set "audio_ext=mp3"
-				if not "!audio_line:Audio: opus=!"=="!audio_line!" set "audio_ext=opus"
-				if not "!audio_line:Audio: vorbis=!"=="!audio_line!" set "audio_ext=ogg"
-				if not "!audio_line:Audio: flac=!"=="!audio_line!" set "audio_ext=flac"
-				if not "!audio_line:Audio: pcm_=!"=="!audio_line!" set "audio_ext=wav"
+				set "_acodec=!audio_line:*Audio: =!"
+				if "!_acodec!"=="!audio_line!" set "_acodec="
 			)
+			if defined _acodec for /f "tokens=1 delims=,( " %%t in ("!_acodec!") do set "_acodec=%%t"
+			if "!_acodec!"=="aac" set "audio_ext=m4a"
+			if "!_acodec!"=="mp3" set "audio_ext=mp3"
+			if "!_acodec!"=="opus" set "audio_ext=opus"
+			if "!_acodec!"=="vorbis" set "audio_ext=ogg"
+			if "!_acodec!"=="flac" set "audio_ext=flac"
+			if defined _acodec if "!_acodec:~0,4!"=="pcm_" set "audio_ext=wav"
 			set "out_audio=%folder_destination%!file_path!!file_name!.!audio_ext!"
 			rem F12 для extract. Расширение выхода выбирается по кодеку ИСХОДНИКА, поэтому
 			rem при in-place (destination == source) вход song.m4a/song.mp3/song.ogg/song.flac
@@ -740,18 +747,36 @@ rem а goto из тела for обрывал бы перечисление фа�
 				if "%dry_run%"=="yes" (
 					echo [DRY-RUN] "!ffmpeg!" -hide_banner -nostdin -strict -2 -i "!full_path!" -r 1/1 "!frame_dir!\!file_name!_%%05d.png"
 				) else (
-					if exist "!frame_dir!\" rd /s /q "!frame_dir!"
-					md "!frame_dir!"
-					echo [INFO] Извлечение кадров: !full_path!& call :log_msg "INFO" "Извлечение кадров: !full_path!"
-					"!ffmpeg!" -hide_banner -nostdin -strict -2 -i "!full_path!" -r 1/1 "!frame_dir!\!file_name!_%%05d.png"
-					if errorlevel 1 (
-						echo [FAIL] !full_path!& call :log_msg "FAIL" "!full_path!"
-						if exist "!frame_dir!\" rd /s /q "!frame_dir!"
+					rem Частичный каталог прошлого прогона удаляем, но ТОЛЬКО если он наш (маркер
+					rem начала или завершения внутри; пустой безопасен). Раньше сносился ЛЮБОЙ
+					rem каталог с именем стема: при in-place clip.mp4 рядом с пользовательским
+					rem clip\ тот вычищался без единого сообщения. Паритет с .sh/.ps1.
+					set "_fd_busy="
+					if exist "!frame_dir!\.frames_partial" (
+						rd /s /q "!frame_dir!"
+					) else if exist "!frame_done!" (
+						rd /s /q "!frame_dir!"
+					) else if exist "!frame_dir!\" (
+						for /f "delims=" %%e in ('dir /b /a "!frame_dir!" 2^>nul ^<nul') do set "_fd_busy=1"
+					)
+					if defined _fd_busy (
+						echo [FAIL] !file_name!: каталог кадров занят посторонними файлами: !frame_dir!& call :log_msg "FAIL" "!file_name!: каталог кадров занят посторонними файлами: !frame_dir!"
 						set /a "total_fail+=1"
 					) else (
-						type nul > "!frame_done!"
-						echo [OK] Кадры: !full_path!& call :log_msg "OK" "Кадры: !full_path!"
-						set /a "total_ok+=1"
+						md "!frame_dir!" 2>nul
+						type nul > "!frame_dir!\.frames_partial"
+						echo [INFO] Извлечение кадров: !full_path!& call :log_msg "INFO" "Извлечение кадров: !full_path!"
+						"!ffmpeg!" -hide_banner -nostdin -strict -2 -i "!full_path!" -r 1/1 "!frame_dir!\!file_name!_%%05d.png"
+						if errorlevel 1 (
+							echo [FAIL] !full_path!& call :log_msg "FAIL" "!full_path!"
+							if exist "!frame_dir!\" rd /s /q "!frame_dir!"
+							set /a "total_fail+=1"
+						) else (
+							del "!frame_dir!\.frames_partial" 2>nul
+							type nul > "!frame_done!"
+							echo [OK] Кадры: !full_path!& call :log_msg "OK" "Кадры: !full_path!"
+							set /a "total_ok+=1"
+						)
 					)
 				)
 			)
@@ -867,6 +892,10 @@ rem а goto из тела for обрывал бы перечисление фа�
 				rem ffmpeg печатает metadata в stderr → перенаправляем в файл, stdout → nul.
 				set "_ff_info_tmp=%temp%\ffinfo_!random!!random!.txt"
 				"!ffmpeg!" -nostdin -i "!full_path!" 1>nul 2>"!_ff_info_tmp!"
+				rem Дорожки субтитров источника: при meta sidecar идёт за ними (-map 0 -map 1),
+				rem и метка языка ставится на его номер, а не на первую встроенную дорожку.
+				set "_src_subs=0"
+				if "!video_subtitles_value!"=="meta" for /f %%s in ('findstr /i /r /c:"Stream #.*Subtitle:" "!_ff_info_tmp!" ^<nul') do set /a "_src_subs+=1"
 				rem E4. Получение битрейта.
 				rem Берём подстроку после "bitrate: " и первый токен — число кб/с; надёжнее
 				rem позиционного tokens=6, который ломался при смене формата строки. Если ffmpeg
@@ -1054,7 +1083,7 @@ rem а goto из тела for обрывал бы перечисление фа�
 										)
 									)
 									if "!video_subtitles_value!"=="meta" (
-										set "subtitles_params=-i "!sub_file!" -c:s !sub_meta_codec! -metadata:s:s:0 language=rus"
+										set "subtitles_params=-i "!sub_file!" -c:s !sub_meta_codec! -metadata:s:s:!_src_subs! language=rus"
 										set "convert_settings=!convert_settings! -map 0 -map 1"
 									)
 									set "sub_found=1"

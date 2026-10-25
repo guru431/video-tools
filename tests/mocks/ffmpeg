@@ -12,6 +12,7 @@
 #                                       silence_start/silence_end (секунды)
 #   MOCK_FFMPEG_NO_AUDIO=1     — в выводе -i нет строки Stream … Audio
 #   MOCK_FFMPEG_ERR="текст"    — первой строкой stderr (как ошибка ffmpeg с -v error)
+#   MOCK_FFMPEG_SUBS=N         — в выводе -i N дорожек «Stream … Subtitle»
 # ============================================================
 
 LOG_FILE="${MOCK_FFMPEG_LOG:-/tmp/mock_ffmpeg_calls.txt}"
@@ -70,12 +71,14 @@ if [[ "$*" == *" -i "* ]] || [[ "$*" == "-i "* ]]; then
     # каждый вызов -i заметен в общем времени набора.
     ASTREAM="    Stream #0:1(und): Audio: ${AUDIO_CODEC}, 48000 Hz, stereo, fltp, 192 kb/s"
     [ "${MOCK_FFMPEG_NO_AUDIO:-0}" = "1" ] && ASTREAM=""
+    SSTREAMS=()
+    for ((_s=0; _s<${MOCK_FFMPEG_SUBS:-0}; _s++)); do SSTREAMS+=("    Stream #0:$((_s + 2))(eng): Subtitle: subrip"); done
     printf '%s\n' "ffmpeg version 6.0 (mock)" \
         "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'input.mp4':" \
         "  Metadata:" \
         "    encoder         : Lavf58.76.100" \
         "  Duration: ${DURATION}, start: 0.000000, bitrate: ${BITRATE} kb/s" \
-        "${VSTREAM}" ${ASTREAM:+"$ASTREAM"} >&2
+        "${VSTREAM}" ${ASTREAM:+"$ASTREAM"} ${SSTREAMS[@]+"${SSTREAMS[@]}"} >&2
 fi
 
 # Имитация silencedetect: синтетические silence_start/silence_end в stderr
@@ -137,6 +140,7 @@ for arg in "$@"; do
     for o in "${SKIP_OPTS[@]}"; do
         if [ "$arg" = "$o" ]; then is_opt_value=1; break; fi
     done
+    case "$arg" in -metadata:*) is_opt_value=1 ;; esac
     if [ "$is_opt_value" = "0" ] && [[ "$arg" != -* ]]; then
         LAST_ARG="$arg"
     fi

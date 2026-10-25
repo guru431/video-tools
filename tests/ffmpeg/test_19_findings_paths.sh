@@ -220,10 +220,10 @@ assert_contains "GUI: чекбокс overwrite существует"        '$ch
 assert_contains "GUI: overwrite берётся из чекбокса"       'if ($checkOverwrite.Checked)   { "yes" } else { "no" }' "$GUI_SRC"
 assert_contains "GUI: начальное значение из config.ini"    '$checkOverwrite.Checked = ($_cfg_overwrite_existing -eq "yes")' "$GUI_SRC"
 
-# P9. Гард от регресса: валидация CRF обязана отсекать и отрицательные значения.
-# `-notmatch '^\d+$'` уже даёт true на "-5" — тест закрепляет это поведение, чтобы
-# «упрощение» условия до -match/[int]-сравнения не открыло дыру снова.
-assert_contains "GUI: CRF валидируется regex-ом только из цифр" "\$textVideoQuality.Text  -notmatch '^\\d+\$'" "$GUI_SRC"
+# P9. Гард от регресса: валидация CRF обязана отсекать и отрицательные значения, и
+# числа вне 0-51 — шаблоном, без [int]-каста (на 20 цифрах он бросал исключение).
+# Шаблон прогоняется по значениям в test_16_gui_state.sh.
+assert_contains "GUI: CRF валидируется шаблоном 0-51" "\$textVideoQuality.Text    -notmatch '^0*([0-9]|[1-4][0-9]|5[01])\\z'" "$GUI_SRC"
 
 # ── Cleanup ───────────────────────────────────────────────────
 rm -rf "$WORK"

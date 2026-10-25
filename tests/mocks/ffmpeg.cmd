@@ -16,6 +16,7 @@ rem   MOCK_FFMPEG_AUDIO_CODEC   — кодек в строке Stream ... Audio 
 rem   MOCK_FFMPEG_SILENCE       — пары silence_start/silence_end через запятую,
 rem                               например "10:20,40:50" (для silencedetect)
 rem   MOCK_FFMPEG_ERR           — первой строкой stderr (как ошибка ffmpeg с -v error)
+rem   MOCK_FFMPEG_SUBS          — число дорожек Stream ... Subtitle в баннере
 rem ============================================================
 setlocal enabledelayedexpansion
 
@@ -64,6 +65,7 @@ rem ПОТОКА. Короткая строка без "kb/s" делала пу�
 rem недостижимым для тестов: скрипт всегда уходил в fallback на битрейт контейнера.
 echo     Stream #0:0(und): Video: h264 ^(High^) ^(avc1 / 0x31637661^), yuv420p^(tv, bt709^), 1920x1080 [SAR 1:1 DAR 16:9], %MOCK_FFMPEG_VIDEO_BITRATE% kb/s, 30 fps, 30 tbr, 90k tbn ^(default^)>&2
 echo     Stream #0:1(und): Audio: %MOCK_FFMPEG_AUDIO_CODEC% ^(LC^) ^(mp4a / 0x6134706D^), 48000 Hz, stereo, fltp, 128 kb/s ^(default^)>&2
+if defined MOCK_FFMPEG_SUBS for /l %%s in (1,1,%MOCK_FFMPEG_SUBS%) do >&2 echo     Stream #0:%%s^(eng^): Subtitle: subrip
 
 rem silencedetect: пары «начало:конец» через запятую в MOCK_FFMPEG_SILENCE.
 rem Перенаправление в stderr стоит ПЕРЕД echo. Прежний хвост "silence_duration: 5"

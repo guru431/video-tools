@@ -446,4 +446,20 @@ suite "GUI: выключенные «Потоки ffmpeg» уходят со з�
 assert_contains "выключенные потоки — значение поля" 'else { ":-:$_threadsVal" }' "$gui_text"
 assert_not_contains "нет зашитого :-:1"              'else { ":-:1" }'            "$gui_text"
 
+suite "GUI: проба версии ffmpeg не ждёт поток без потолка"
+# После неудачного Kill голый .Result ждал конца потока вечно и морозил UI — ровно то,
+# от чего стоит таймаут WaitForExit(5000). Паритет с Test-GpuEncoder (Wait(1000)).
+assert_contains "версия читается только после Wait(1000)" 'if ($vOutTask.Wait(1000)) { $versionOut = $vOutTask.Result }' "$gui_text"
+assert_not_contains "нет голого .Result"                  'try { $versionOut = $vOutTask.Result } catch {}' "$gui_text"
+
+suite "GUI: поле CRF/CQ — шаблон 0–51, без [int]-каста"
+# [int] на 20 цифрах бросал OverflowException: вместо «Качество (CRF/CQ) должно быть
+# целым 0-51» пользователь видел общее «Ошибка подготовки запуска». Шаблон берётся
+# из настоящего исходника GUI и прогоняется по значениям.
+_crf_line=$(printf '%s\n' "$gui_text" | grep -F '$textVideoQuality.Text    -notmatch')
+_q="'"; _crf_re="${_crf_line#*-notmatch $_q}"; _crf_re="${_crf_re%%$_q*}"
+assert_not_contains "каста [int] у поля CRF нет" '[int]$textVideoQuality.Text' "$gui_text"
+_crf_out=$("$PS_CMD" -NoProfile -NonInteractive -Command "\$re='$_crf_re'; ('-5','52','99999999999999999999','5 1','','0','007','23','51' | ForEach-Object { if (\$_ -notmatch \$re) { 'bad' } else { 'ok' } }) -join ','" 2>&1 | tr -d '\r')
+assert_eq "отказ: -5, 52, 20 цифр, пробел, пусто; приём: 0, 007, 23, 51" "bad,bad,bad,bad,bad,ok,ok,ok,ok" "$_crf_out"
+
 summary

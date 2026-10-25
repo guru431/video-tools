@@ -436,6 +436,13 @@ asr_preflight() {
 		echo "[ОШИБКА] [asr] ключ не задан: api_key, api_key_command или \${ASR_API_KEY}." >&2
 		return 1
 	fi
+	# Ключ уходит строкой curl-конфига, а экранирование там — только \ и ". Перевод
+	# строки (бывает в переменной окружения) начал бы новую директиву конфига.
+	case "$asr_api_key" in
+		*[[:cntrl:]]*)
+			echo "[ОШИБКА] [asr] ключ содержит управляющие символы (перевод строки, табуляцию) — проверьте api_key или \${ASR_API_KEY}." >&2
+			return 1 ;;
+	esac
 	ASR_RUN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ffconv_asr.XXXXXXXX")" || {
 		echo "[ОШИБКА] Не удалось создать временный каталог для распознавания." >&2
 		ASR_RUN_DIR=""
@@ -718,14 +725,16 @@ asr_file() {
 
 	# Два входа одного прогона не делят один выход: movie.avi и movie.mp4 оба дают
 	# movie.txt, и второй затёр бы первый (или «пропустил» бы его как готовый).
-	lower_ascii "$out_txt"
+	# Ключ — collision_key конвертера: регистр опускается только там, где его не
+	# различает ФС. Безусловный нижний регистр давал на Linux ложный конфликт X.txt/x.txt.
+	collision_key "$out_txt"
 	case "$ASR_CLAIMED" in
-		*$'\n'"$LOWER_ASCII"$'\n'*)
+		*$'\n'"$COLLISION_KEY"$'\n'*)
 			log_msg "FAIL" "$name: конфликт выходов — «${stem}.txt» уже занят другим входом (включите save_old_extension = yes либо разнесите файлы)"
 			put_result "fail"
 			return 0 ;;
 	esac
-	ASR_CLAIMED="$ASR_CLAIMED$LOWER_ASCII"$'\n'
+	ASR_CLAIMED="$ASR_CLAIMED$COLLISION_KEY"$'\n'
 
 	if [ "$overwrite_existing" != "yes" ] && [ -f "$out_txt" ]; then
 		log_msg "SKIP" "$name: расшифровка уже есть (${stem}.txt)"

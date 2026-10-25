@@ -150,6 +150,30 @@ run_batch "" >/dev/null
 assert_contains "batch передаёт --print-to-file after_move:filepath" \
     "--print-to-file after_move:filepath" "$(cat "$WORK/mock.log")"
 
+# ══════════════════════════════════════════════════════════════
+suite "SH batch: yt-dlp не съедает строки channels.txt через stdin"
+# ══════════════════════════════════════════════════════════════
+# Цикл читал channels.txt со stdin, и yt-dlp наследовал его же: запрос ввода
+# (пароль хранилища браузера) дочитывал файл, и следующие каналы молча пропадали.
+# Мок с MOCK_YTDLP_READ_STDIN=1 читает stdin до конца — как такой запрос.
+_calls=$(
+    exec < /dev/null
+    export PATH="$TESTS_DIR/mocks:$PATH"
+    export MOCK_YTDLP_LOG="$WORK/stdin.log" MOCK_YTDLP_READ_STDIN=1 MOCK_YTDLP_OUTFILE=""
+    : > "$WORK/stdin.log"
+    YTDLP="$TESTS_DIR/mocks/yt-dlp"; CHANNELS_FILE="$WORK/channels3.txt"; BASE_DIR="$WORK/out"
+    USE_ARCHIVE="false"; DRY_RUN="false"; QUALITY="720"; FORMAT_PRESET="auto"; AUDIO_FORMAT="best"
+    OUTPUT_TEMPLATE='%(title)s.%(ext)s'; PLAYLIST_TEMPLATE='%(playlist)s/%(title)s.%(ext)s'
+    SUB_LANG="ru"; SUB_FORMAT="vtt"; SUBS_WITH_VIDEO="off"; CONTINUE_ON_ERROR="true"
+    SPONSORBLOCK="off"; PROXY_URL=""; SPEED_PROFILE="normal"; LIMIT_RATE=""; COOKIE_ARGS_ARR=()
+    COUNT_OK=0; COUNT_FAIL=0; COUNT_SKIP=0
+    printf 'tech|one|videos\ntech|two|videos\ntech|three|videos\n' > "$CHANNELS_FILE"
+    download_batch "false" >/dev/null 2>&1
+    grep -c '/@' "$WORK/stdin.log"
+)
+assert_eq "все три канала дошли до yt-dlp" "3" "$_calls"
+assert_contains "третий канал не потерян" "@three/videos" "$(cat "$WORK/stdin.log")"
+
 # Временный манифест не должен оставаться после прогона.
 # tr — BSD wc (macOS) выравнивает счётчик пробелами слева, сравнение строк ломается.
 _leftover=$(find /tmp -maxdepth 1 -name 'ytdlp_batch_manifest_*' 2>/dev/null | wc -l | tr -d '[:space:]')

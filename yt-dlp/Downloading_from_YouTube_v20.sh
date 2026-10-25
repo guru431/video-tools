@@ -1238,8 +1238,14 @@ download_batch() {
     #   • лишнее поле («a|b|c|d») попадало в mode вместе с разделителем;
     #   • handle с ведущим '@' давал '@@handle' в URL — канал не находился.
     # Trim делаем parameter expansion'ом: sed-fork на строку в Git Bash дорог.
+    #
+    # Файл читается через fd 3, а не через stdin цикла: иначе stdin yt-dlp — это
+    # остаток channels.txt, и любой запрос ввода (пароль хранилища браузера,
+    # подтверждение) молча съедал следующие строки — каналы пропадали из прогона,
+    # а введённое попадало в разбор строк. Ребёнку fd 3 закрываем (3<&-), stdin
+    # остаётся пользовательским: на настоящий запрос можно ответить.
     local raw_line
-    while IFS= read -r raw_line || [ -n "$raw_line" ]; do
+    while IFS= read -r raw_line <&3 || [ -n "$raw_line" ]; do
         raw_line="${raw_line%$'\r'}"
         raw_line="${raw_line#"${raw_line%%[![:space:]]*}"}"
         raw_line="${raw_line%"${raw_line##*[![:space:]]}"}"
@@ -1391,7 +1397,7 @@ download_batch() {
         log_info "Команда: ${cmd[*]}"
 
         local ch_rc=0
-        "${env_prefix[@]+"${env_prefix[@]}"}" "${cmd[@]}" || ch_rc=$?
+        "${env_prefix[@]+"${env_prefix[@]}"}" "${cmd[@]}" 3<&- || ch_rc=$?
         # Код 101 — штатный конец обхода, а не ошибка: так yt-dlp завершается на
         # любом DownloadCancelled (_real_main: `except DownloadCancelled: return 101`),
         # в том числе когда --break-on-reject дошёл до первого ролика старше
@@ -1415,7 +1421,7 @@ download_batch() {
             COUNT_FAIL=$((COUNT_FAIL + 1))
         fi
         [ -n "$ch_manifest" ] && rm -f "$ch_manifest"
-    done < "$CHANNELS_FILE"
+    done 3< "$CHANNELS_FILE"
 }
 
 # ── Итоговая сводка ───────────────────────────────────────────────────────

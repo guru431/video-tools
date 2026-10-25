@@ -62,6 +62,10 @@ $asr_enabled = 'yes'; $asr_endpoint = 'https://asr.example:30010'; $asr_api_key 
 $asr_api_key_command = ''; $asr_pinned_pubkey = ''; $asr_language = 'ru'; $asr_diarize = 'yes'; $asr_num_speakers = ''
 # Conversion settings that used to stop the run before the first file, though ASR does not use them.
 if ($env:ASR_T_BADCONV) { $start_coding = ':+:1:00:00'; $length_coding = ':+:00-00-00'; $playback_speed = ':+:0'; $output_container = ':+:webm' }
+# Linux pwsh: case-sensitive file system ($IsLinux is undefined in Windows PowerShell 5.1).
+if ($env:ASR_T_LINUX) { $IsLinux = $true }
+# A key with a line feed (from ${ASR_API_KEY}): refused before the first request.
+if ($env:ASR_T_CTLKEY) { $asr_api_key = "k1`noutput = x" }
 . $Module
 # The network: limits from the fixture; transcription answers with ASR_T_CODE.
 # A pressed Stop (GUI cancel file) is honoured like the real Invoke-AsrCurl does.
@@ -143,6 +147,23 @@ assert_contains "коллизия — одна ошибка" "Ошибки:     
 assert_eq "коллизия — код 1" "1" "$RUN_RC"
 assert_contains "конфликт назван" "конфликт выходов" "$RUN_OUT"
 posts; assert_eq "отправлен только первый" "1" "$POSTS"
+# Регистр — как у карты коллизий конвертера: на Windows X.txt и x.txt один файл,
+# на Linux — два разных, и конфликта нет.
+reset_dirs; : > "$IN/X.mp4"; : > "$IN/x.mkv"
+run_ps 200
+assert_contains "Windows: X.txt и x.txt — конфликт" "конфликт выходов" "$RUN_OUT"
+reset_dirs; : > "$IN/X.mp4"; : > "$IN/x.mkv"
+ASR_T_LINUX=1 run_ps 200
+assert_not_contains "Linux: X.txt и x.txt — не конфликт" "конфликт выходов" "$RUN_OUT"
+
+# ══════════════════════════════════════════════════════════════
+suite "ASR PS1: ключ с переводом строки — отказ до первого запроса"
+# ══════════════════════════════════════════════════════════════
+reset_dirs; : > "$IN/a.mp4"
+ASR_T_CTLKEY=1 run_ps 200
+assert_eq "код 1" "1" "$RUN_RC"
+assert_contains "причина названа" "ключ содержит управляющие символы" "$RUN_OUT"
+assert_empty "сервер не опрашивался" "$(cat "$WORK/curl.log" 2>/dev/null)"
 
 # ══════════════════════════════════════════════════════════════
 suite "ASR PS1: 400 — провален файл, прогон продолжается"
@@ -252,6 +273,29 @@ printf '[folders]\nsource = %s\n' "$(_w "$WORK/no-such-dir")" > "$WORK/cli/confi
 _rc=$?
 assert_eq "источник не найден — код 1" "1" "$_rc"
 assert_contains "причина напечатана" "Папка источника не найдена" "$(tr -d '\r' < "$WORK/cli.raw")"
+
+# Флаги — как у run_v20.sh. Опечатка (--remoteselftest) раньше молча запускала полный
+# прогон вместо самопроверки, а --doctor и --help не существовали вовсе.
+_cli() { "$PS_BIN" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(_w "$WORK/cli/FFmpeg_Converter_run_v20.ps1")" "$@" > "$WORK/cli.raw" 2>&1 < /dev/null; _rc=$?; _co="$(tr -d '\r' < "$WORK/cli.raw")"; }
+_cli --remoteselftest
+assert_eq "неизвестный аргумент — код 1" "1" "$_rc"
+assert_contains "неизвестный аргумент назван" "Неизвестный аргумент: --remoteselftest (см. --help)" "$_co"
+assert_not_contains "прогон не запускался" "Папка источника не найдена" "$_co"
+_cli --help
+assert_eq "--help — код 0" "0" "$_rc"
+assert_contains "--help — оба флага" "[--remote-selftest] [--doctor]" "$_co"
+_cli --doctor
+assert_contains "--doctor — отчёт" "Проверка окружения (ffmpeg)" "$_co"
+assert_contains "--doctor — источник без каталога назван" "каталога НЕТ" "$_co"
+assert_not_contains "--doctor — прогон не запускался" "Папка источника не найдена" "$_co"
+# Без ffmpeg (ни рядом, ни в PATH) — код 1: конвертация невозможна. В PATH — только
+# каталог PowerShell (ffmpeg бывает и в System32), сам он — по абсолютному пути.
+_ps_abs="$(command -v "$PS_BIN")"
+PATH="/c/Windows/System32/WindowsPowerShell/v1.0" "$_ps_abs" -NoProfile -NonInteractive -ExecutionPolicy Bypass \
+    -File "$(_w "$WORK/cli/FFmpeg_Converter_run_v20.ps1")" --doctor > "$WORK/cli.raw" 2>&1 < /dev/null
+_rc=$?; _co="$(tr -d '\r' < "$WORK/cli.raw")"
+assert_eq "--doctor без ffmpeg — код 1" "1" "$_rc"
+assert_contains "--doctor без ffmpeg — сказано, что не работает" "КОНВЕРТАЦИЯ НЕВОЗМОЖНА" "$_co"
 
 # Воркера рядом нет: причина, код 1 и пауза только при интерактивном stdin (как у
 # ранних отказов воркера; Pause-Prompt живёт в ненайденном файле). Без -NonInteractive:

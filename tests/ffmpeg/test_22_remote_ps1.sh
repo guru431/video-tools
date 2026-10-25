@@ -177,6 +177,7 @@ assert_eq "версия сборщика = 2" "2" "$(run_ps "\$script:RemoteClie
 _harness="$(mktemp_suffix "${TMPDIR:-/tmp}/remote_pf_" .ps1)"
 cat > "$_harness" <<'PSEOF'
 param([string]$Module)
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 . $Module
 $script:capsBody = ''
 function Invoke-RemoteHttp {
@@ -217,6 +218,10 @@ $output_container_value = 'mp4'
 $set_video_codec = ''
 [void](Invoke-RemotePreflight 6>$null)
 Write-Output ("NOCODEC=" + $script:RemotePreflightError)
+$set_video_codec = 'libx264'
+# Ключ с переводом строки (из переменной окружения) — отказ до первого запроса.
+$remote_api_key = "k`nx"
+Write-Output ("CTLKEY=" + [bool](Invoke-RemotePreflight 6>$null) + '|' + $script:RemotePreflightError)
 PSEOF
 _out="$("$PS_BIN" -NoProfile -NonInteractive -File "$_harness" -Module "$MODULE" 2>&1 | tr -d '\r')"
 _f() { printf '%s\n' "$_out" | grep "^${1}=" | sed "s/^${1}=//"; }
@@ -233,6 +238,7 @@ assert_eq "m4v сверяется как mp4"                     "True" "$(_f M
 assert_contains "wmv → asf: назван отображённый контейнер" "asf" "$(_f WMVERR)"
 assert_contains "выключенный кодек: названо, что включить" "+libx264" "$(_f NOCODEC)"
 assert_not_contains "выключенный кодек — не «неизвестный»" "h264/hevc/av1" "$(_f NOCODEC)"
+assert_contains "ключ с переводом строки — отказ с причиной" "False|[remote] ключ службы содержит управляющие символы" "$(_f CTLKEY)"
 rm -f "$_harness"
 
 # ══════════════════════════════════════════════════════════════
@@ -459,9 +465,10 @@ Write-Output ("REPL2=" + (Read-RemoteUploadSidecarJob -Source \$src -Part 1 -Sig
 	@(\$scLines | Where-Object { \$_ -like 'job.1=*' }).Count + '|' + [bool](\$scLines -contains 'upload_id=up-70'))
 # Файла может не быть — запись обязана его создать.
 Remove-Item -LiteralPath \$script:RemoteUploadSidecar -Force
-Write-RemoteUploadSidecarJob -Source \$src -Part 1 -Signature 'SIG-C' -JobId 'job-90'
+Write-RemoteUploadSidecarJob -Source \$src -Part 1 -Signature 'SIG-C' -JobId 'job-90' -UploadId 'up-91'
 Write-Output ("CREATED=" + (Test-Path -LiteralPath \$script:RemoteUploadSidecar))
 Write-Output ("AFTER=" + (Read-RemoteUploadSidecarJob -Source \$src -Part 1 -Signature 'SIG-C'))
+Write-Output ("CUID=" + (Read-RemoteUploadSidecar -Source \$src -Size \$it.Length) + '|' + (Test-RemoteUploadSidecarCompleted))
 # Запись — через соседний .tmp и File.Replace: WriteAllLines/AppendAllText прямо в
 # целевой файл сперва его усекали, и обрыв стоил полной повторной загрузки.
 # Сорванная запись (место .tmp занято каталогом) обязана оставить sidecar целым.
@@ -521,6 +528,8 @@ assert_eq "мёртвая задача части заменена новой" "
 assert_eq "замена: своя часть, соседняя, одна запись, upload_id" "job-83|job-82|1|True" "$(_f REPL2)"
 assert_eq "sidecar создан при записи задачи"  "True"   "$(_f CREATED)"
 assert_eq "задача читается из созданного"     "job-90" "$(_f AFTER)"
+# При мёртвой задаче следующий запуск берёт принятый исходник, а не шлёт его заново.
+assert_eq "созданный sidecar: upload_id и complete=yes" "up-91|True" "$(_f CUID)"
 assert_eq "сорванная запись не тронула sidecar" "True"  "$(_f INTACT)"
 assert_eq "complete=yes дописан"              "True"   "$(_f MARKED)"
 assert_eq "задача пережила пометку complete"  "True"   "$(_f JOBKEPT)"

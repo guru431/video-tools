@@ -387,12 +387,16 @@ function Invoke-RemoteHttp {
 	} catch [System.Net.WebException] {
 		$code = 0
 		$text = ''
-		if ($_.Exception.Response) {
-			$code = [int]$_.Exception.Response.StatusCode
+		$errResp = $_.Exception.Response
+		if ($errResp) {
+			$code = [int]$errResp.StatusCode
 			try {
-				$sr = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
+				$sr = New-Object System.IO.StreamReader($errResp.GetResponseStream())
 				$text = $sr.ReadToEnd(); $sr.Dispose()
 			} catch {}
+			# Закрываем и тогда, когда тело не прочиталось: опрос многочасовой задачи —
+			# тысячи запросов, и каждый незакрытый ответ 502/429 держал соединение до GC.
+			try { $errResp.Close() } catch {}
 		}
 		return [pscustomobject]@{ Code = $code; Body = $text }
 	} catch {
@@ -442,6 +446,12 @@ function Invoke-RemotePreflight {
 	if (-not (Resolve-RemoteApiKey)) { return $false }
 	if (-not $remote_api_key) {
 		Write-RemotePreflightError "[remote] enabled = yes, но ключ службы пуст. Задайте [remote] api_key (или api_key_command) в config.ini, либо переменную окружения TRANSCODE_API_KEY."
+		return $false
+	}
+	# Паритет с .sh: там ключ уходит строкой curl-конфига, и перевод строки начал бы
+	# новую директиву; здесь Headers.Add бросил бы на первом же запросе невнятно.
+	if ($remote_api_key -match '[\x00-\x1f\x7f]') {
+		Write-RemotePreflightError "[remote] ключ службы содержит управляющие символы (перевод строки, табуляцию) — проверьте api_key или переменную TRANSCODE_API_KEY."
 		return $false
 	}
 	# Версия API живёт В АДРЕСЕ: клиент собирает "<endpoint>/capabilities", а
@@ -636,7 +646,7 @@ function Read-RemoteUploadSidecarJob {
 }
 
 function Write-RemoteUploadSidecarJob {
-	param([string]$Source, [int]$Part = 1, [string]$Signature = '', [string]$JobId)
+	param([string]$Source, [int]$Part = 1, [string]$Signature = '', [string]$JobId, [string]$UploadId = '')
 	$f = $script:RemoteUploadSidecar
 	if (-not $f -or -not $JobId) { return }
 	try {
@@ -645,6 +655,9 @@ function Write-RemoteUploadSidecarJob {
 		# выходила, а после успешного complete файла как раз НЕ БЫЛО — sidecar
 		# удалялся там же, — поэтому идентификатор задачи не попадал в него НИ РАЗУ
 		# и фича не работала вовсе.
+		# Идентификатор загрузки передаёт вызывающий, и с ним — complete=yes: задача
+		# создаётся только по подтверждённой загрузке. С пустым upload_id следующий
+		# запуск, нашедший задачу мёртвой, отправлял исходник заново целиком. Паритет с .sh.
 		if (Test-Path -LiteralPath $f) {
 			$lines = @([System.IO.File]::ReadAllLines($f))
 		} else {
@@ -654,7 +667,8 @@ function Write-RemoteUploadSidecarJob {
 				$sz = $it.Length
 				$mt = "$([int64]($it.LastWriteTimeUtc - [datetime]'1970-01-01').TotalSeconds)"
 			} catch {}
-			$lines = @("upload_id=", "size=$sz", "mtime=$mt", "endpoint=$remote_endpoint")
+			$lines = @("upload_id=$UploadId", "size=$sz", "mtime=$mt", "endpoint=$remote_endpoint")
+			if ($UploadId) { $lines += 'complete=yes' }
 		}
 		$stored = ''
 		foreach ($l in $lines) { if ($l -like 'sig=*') { $stored = $l.Substring(4); break } }

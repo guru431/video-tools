@@ -27,11 +27,12 @@ function Write-ExeChecksum {
         $h = (Get-FileHash -Algorithm SHA256 -LiteralPath $ExePath).Hash
         # Перевод строки — только LF. Set-Content на Windows дописал бы CRLF, и для
         # `sha256sum -c` на Linux CR становится частью имени файла: проверка падает с
-        # «No such file or directory» на верной сумме.
+        # «No such file or directory» на верной сумме. Кодировка — UTF-8 без BOM:
+        # ASCII заменял бы не-ASCII буквы имени на «?», и sha256sum не нашёл бы файл.
         [System.IO.File]::WriteAllText(
             "$ExePath.sha256",
             ("{0}  {1}`n" -f $h, (Split-Path $ExePath -Leaf)),
-            (New-Object System.Text.ASCIIEncoding))
+            (New-Object System.Text.UTF8Encoding $false))
         Write-Host "SHA256: $h"
     }
 }

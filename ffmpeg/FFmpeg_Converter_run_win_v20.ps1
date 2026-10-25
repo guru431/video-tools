@@ -1572,15 +1572,9 @@ $buttonDoctor.Add_Click({
     }
 
     if ($chkRemote.Checked) {
-        # Именно curl.exe, а не `curl`: в Windows PowerShell 5.1 это АЛИАС на
-        # Invoke-WebRequest, и он резолвится раньше исполняемого файла. Отчёт
-        # печатал «curl: есть» (Source — путь к модулю) на машине, где curl.exe нет
-        # вовсе, то есть диагностика врала ровно в том случае, ради которого её
-        # открывают. -CommandType Application отсекает алиасы и функции.
-        $curl = $null
-        try { $curl = (Get-Command curl.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source } catch {}
-        if ($curl) { $lines += "curl:    есть — $curl" }
-        else       { $lines += "curl:    НЕТ — удалённый бэкенд не работает вовсе." }
+        # Строки curl здесь нет: воркер GUI ходит в службу и считает sha256 средствами
+        # .NET (remote_client.ps1), и «curl: НЕТ — удалённый бэкенд не работает» было
+        # неправдой. curl.exe нужен только распознаванию речи — проверка ниже.
         $ep = $txtRemoteEndpoint.Text.Trim()
         if (-not $ep) {
             $lines += "Адрес:   НЕ ЗАДАН — заполните поле адреса службы."
@@ -1594,6 +1588,10 @@ $buttonDoctor.Add_Click({
     }
 
     if ($chkAsr.Checked) {
+        # Именно curl.exe, а не `curl`: в Windows PowerShell 5.1 это АЛИАС на
+        # Invoke-WebRequest, и он резолвится раньше исполняемого файла. Отчёт
+        # печатал «curl: есть» (Source — путь к модулю) на машине, где curl.exe нет
+        # вовсе. -CommandType Application отсекает алиасы и функции.
         $curl = $null
         try { $curl = (Get-Command curl.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source } catch {}
         if ($curl) { $lines += "curl:    есть — $curl" }
@@ -1782,7 +1780,7 @@ $buttonRun.Add_Click({
     elseif ($checkAudioSampleRate.Checked -and $textAudioSampleRate.Text -notmatch '^\d+$')            { $numErr = "Частота дискретизации должна быть целым числом (Гц)" }
     elseif ($checkFrameRate.Checked       -and $textFrameRate.Text       -notmatch '^\d+(\.\d+)?$')    { $numErr = "Кадры/с должны быть числом" }
     elseif ($checkVideoBitrate.Checked    -and $textVideoBitrate.Text    -notmatch '^\d+$')            { $numErr = "Видео битрейт должен быть целым числом (кбит/с)" }
-    elseif ($checkVideoQuality.Checked    -and (($textVideoQuality.Text  -notmatch '^\d+$') -or ([int]$textVideoQuality.Text -gt 51))) { $numErr = "Качество (CRF/CQ) должно быть целым 0-51" }
+    elseif ($checkVideoQuality.Checked    -and $textVideoQuality.Text    -notmatch '^0*([0-9]|[1-4][0-9]|5[01])\z') { $numErr = "Качество (CRF/CQ) должно быть целым 0-51" }
     # Диапазон скорости — тот же, что у скрипта (0 < v <= 100, F15): каскад atempo
     # написан под произвольные значения, а 100 — предел одного звена. Прежние 0.25-4.0
     # были уже́е скриптовых: один и тот же config.ini CLI принимал, а GUI отвергал,
@@ -2138,8 +2136,10 @@ $form.Add_Shown({
             $vOutTask = $vp.StandardOutput.ReadToEndAsync()
             $vErrTask = $vp.StandardError.ReadToEndAsync()
             if (-not $vp.WaitForExit(5000)) { try { $vp.Kill() } catch {} }
-            $versionOut = ""; try { $versionOut = $vOutTask.Result } catch {}
-            try { $null = $vErrTask.Result } catch {}
+            # Чтение — с потолком, как в Test-GpuEncoder: если Kill не сработал (нет прав),
+            # голый .Result ждал конца потока вечно и морозил UI — то, от чего таймаут выше.
+            $versionOut = ""; try { if ($vOutTask.Wait(1000)) { $versionOut = $vOutTask.Result } } catch {}
+            try { $null = $vErrTask.Wait(1000) } catch {}
             $versionLine = (($versionOut -split "`n") | Select-Object -First 1)
             if ($versionLine) { $versionLine = $versionLine.Trim() } else { $versionLine = "" }
             if ($versionLine -match 'ffmpeg version (\S+)') {

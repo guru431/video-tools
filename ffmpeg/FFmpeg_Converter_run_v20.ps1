@@ -205,16 +205,84 @@ $log_file           = Read-Config "log_file"           "other" "ffmpeg_convert.l
 $log_file           = $log_file.Replace('\', $_sep)
 if (-not [System.IO.Path]::IsPathRooted($log_file)) { $log_file = Join-Path $PSScriptRoot $log_file }
 
+# --- Диагностика окружения (--doctor) ---
+# Тот же отчёт, что у ffconv_doctor в .sh: что найдено, где и что без каждого
+# инструмента не работает. Строк curl и sha256 нет: удалённый путь .ps1 ходит в
+# службу и считает sha256 средствами .NET (remote_client.ps1), внешние программы
+# ему не нужны. Возвращает код: 1 — не хватает обязательного инструмента.
+function Invoke-FfconvDoctor {
+	Write-Host ""
+	Write-Host "═══ Проверка окружения (ffmpeg) ═══"
+	Write-Host ""
+	Write-Host "Каталог скрипта: $PSScriptRoot"
+	$cfgNote = if (Test-Path -LiteralPath $configFile) { '' } else { ' (нет — используются умолчания)' }
+	Write-Host "Конфиг:          $configFile$cfgNote"
+	Write-Host ""
+	Write-Host "  инструмент     статус   путь / версия · что без него не работает"
+	Write-Host "  -------------- -------- -------------------------------------------"
+	$rc = 0
+	$p = $null
+	try { $p = (Get-Command $ffmpeg -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source } catch {}
+	if ($p) {
+		$v = ''
+		try { $v = "$(& $p -version 2>$null | Select-Object -First 1)" } catch {}
+		Write-Host ('  {0,-14} {1,-8} {2}' -f 'ffmpeg', 'есть', $(if ($v) { $v } else { $p }))
+	} elseif ($remote_enabled -eq 'yes') {
+		Write-Host ('  {0,-14} {1,-8} {2}' -f 'ffmpeg', 'НЕТ', 'тонкий клиент: считает служба; локально недоступны проверка результата и длительность')
+	} else {
+		Write-Host ('  {0,-14} {1,-8} {2}' -f 'ffmpeg', 'НЕТ', 'КОНВЕРТАЦИЯ НЕВОЗМОЖНА — это основной инструмент')
+		$rc = 1
+	}
+	Write-Host ""
+	Write-Host "Настройки, влияющие на раскладку файлов и на то, где идёт счёт:"
+	$srcNote = if (Test-Path -LiteralPath $folder_sources -PathType Container) { '' } else { '   ← каталога НЕТ' }
+	Write-Host "  Источник:    $folder_sources$srcNote"
+	Write-Host "  Назначение:  $folder_destination"
+	Write-Host "  Расширения:  $format_files_in"
+	Write-Host "  Лог:         $(if ($enable_log -eq 'yes') { $log_file } else { 'выключен' })"
+	$remNote = ''
+	if ($remote_enabled -eq 'yes') { $remNote = " → $(if ($remote_endpoint) { $remote_endpoint } else { '<адрес не задан>' })" }
+	Write-Host "  Удалённый:   $remote_enabled$remNote"
+	if ($remote_enabled -eq 'yes') {
+		if (-not $remote_endpoint) { Write-Host "  ВНИМАНИЕ:    адрес службы пуст — задайте [remote] endpoint" }
+		elseif ($remote_endpoint -notmatch '/v\d{1,2}$') { Write-Host "  ВНИМАНИЕ:    адрес без версии API (/v1) — вероятен HTTP 404 на /capabilities" }
+		if ($remote_api_key_command) { Write-Host "  Ключ:        из команды api_key_command (значение не печатаем)" }
+		elseif ($remote_api_key) { Write-Host "  Ключ:        задан (значение не печатаем)" }
+		else { Write-Host "  ВНИМАНИЕ:    ключ службы пуст — задайте [remote] api_key или api_key_command" }
+	}
+	Write-Host ""
+	if ($rc -eq 0) { Write-Host "Обязательные инструменты на месте." }
+	else { Write-Host "Не хватает обязательных инструментов — см. таблицу выше." }
+	return $rc
+}
+
 # start coding
 # Тестовый хук: при дот-сорсинге с $env:FFCONV_TEST=1 конвейер не запускаем — отдаём
 # тестам настоящую Read-Config вместо их собственной копии. Паритет с SH-гардом
 # (BASH_SOURCE == $0) и с $env:YTDLP_TEST в yt-dlp GUI. Копия успела разойтись с
 # оригиналом, а тест паритета SH↔PS1 и вовсе сравнивал копию с копией.
 if ($env:FFCONV_TEST -ne '1') {
-	# Единственный флаг командной строки. Боевая проверка удалённого пути на
-	# пробном ролике: иначе первый настоящий контакт со службой происходит на
+	# Флаги — те же, что у run_v20.sh. --remote-selftest — боевая проверка удалённого
+	# пути на пробном ролике: иначе первый настоящий контакт со службой происходит на
 	# пакете из двухсот файлов, и всё, что расходится на стыке, выясняется там же.
-	if ($args -contains '--remote-selftest') { $env:FFCONV_REMOTE_SELFTEST = '1' }
+	# Неизвестный аргумент — отказ: опечатка (--remoteselftest) раньше молча
+	# запускала полный прогон вместо самопроверки.
+	foreach ($_arg in $args) {
+		switch -CaseSensitive ($_arg) {
+			'--remote-selftest' { $env:FFCONV_REMOTE_SELFTEST = '1' }
+			'--doctor' { exit (Invoke-FfconvDoctor) }
+			{ $_ -ceq '-h' -or $_ -ceq '--help' } {
+				Write-Host "Использование: $(Split-Path -Leaf $PSCommandPath) [--remote-selftest] [--doctor]"
+				Write-Host "  --remote-selftest  прогнать удалённый путь целиком на пробном ролике и выйти"
+				Write-Host "  --doctor           отчёт об окружении: что найдено, где и что без него не работает"
+				exit 0
+			}
+			default {
+				Write-Host "Неизвестный аргумент: $_arg (см. --help)"
+				exit 1
+			}
+		}
+	}
 	$scriptPath = Join-Path $PSScriptRoot "FFmpeg_Converter_script.ps1"
 	# -LiteralPath: каталог установки с [ ] ? * (video[1] после распаковки архива)
 	# иначе трактуется как wildcard — «не найден» при существующем файле.

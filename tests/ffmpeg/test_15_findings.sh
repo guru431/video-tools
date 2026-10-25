@@ -288,6 +288,12 @@ run_capture 'video_subtitles=":+:meta"' 'output_container=":+:mp4"'
 if log_has "-c:s mov_text"; then pass "meta mp4 → -c:s mov_text"; else fail "meta mp4 → -c:s mov_text" "-c:s mov_text" "нет"; fi
 run_capture 'video_subtitles=":+:meta"' 'output_container=":+:webm"' 'video_codec=":+:libvpx-vp9"' 'audio_codec=":+:libopus"'
 if log_has "-c:s webvtt"; then pass "meta webm → -c:s webvtt"; else fail "meta webm → -c:s webvtt" "-c:s webvtt" "нет"; fi
+# Метка языка — на sidecar: -map 0 кладёт субтитры источника ПЕРВЫМИ, и s:s:0 метил
+# встроенную дорожку, а добавленная оставалась без языка.
+run_capture 'video_subtitles=":+:meta"' 'output_container=":+:mkv"' 'overwrite_existing="yes"'
+if log_has "-metadata:s:s:0 language=rus"; then pass "meta, у источника нет субтитров → s:s:0"; else fail "meta, у источника нет субтитров → s:s:0" "-metadata:s:s:0 language=rus" "$(cat "$FFMPEG_LOG")"; fi
+run_capture 'video_subtitles=":+:meta"' 'output_container=":+:mkv"' 'overwrite_existing="yes"' 'export MOCK_FFMPEG_SUBS=2'
+if log_has "-metadata:s:s:2 language=rus"; then pass "meta, 2 встроенные дорожки → метка на третьей (sidecar)"; else fail "meta, 2 встроенные дорожки → s:s:2" "-metadata:s:s:2 language=rus" "$(cat "$FFMPEG_LOG")"; fi
 rm -f "$IN/g.mp4" "$IN/g.srt" "$DST/g.mkv" "$DST/g.mp4" "$DST/g.webm"
 
 # ══════════════════════════════════════════════════════════════
@@ -867,7 +873,11 @@ src_cmd_col="$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.cmd")"
 
 assert_contains "PS1: карта коллизий строится"        'collision_outputs'        "$src_ps1_col"
 assert_contains "PS1: группа конфликта помечается"    'Конфликт выходов'         "$src_ps1_col"
-assert_contains "PS1: проверка в Encode-File"         'ContainsKey($canon_out'   "$src_ps1_col"
+assert_contains "PS1: проверка в Encode-File"         'ContainsKey((Get-CollisionKey $canon_out))' "$src_ps1_col"
+# Регистр — по ФС, как collision_key в .sh: обычная @{} сравнивала ключи без учёта
+# регистра, и на Linux pwsh X.mp4/x.mp4 давали ложный конфликт (поведение — test_29).
+assert_contains "PS1: карта выходов — Ordinal-таблица" '$collision_outputs = New-CollisionMap' "$src_ps1_col"
+assert_contains "PS1: карта входов — Ordinal-таблица"  '$_cmap = New-CollisionMap' "$src_ps1_col"
 # Карта не должна строиться в режимах с другой формулой выхода.
 assert_contains "PS1: merge/extract/frame исключены"  '$merge_files -ne "yes" -and $extract_audio_copy -ne "yes" -and $create_frame -ne "yes"' "$src_ps1_col"
 
@@ -1123,6 +1133,13 @@ else
     d2_part_check "PS1" fail "$D2_OUT" win
     d2_ps1 "$W_IN" "$W_DST" "\$start_coding=':+:00-00-10'"
     d2_part_check "PS1" ok "$D2_OUT" win
+    # Метка языка meta — на sidecar (паритет с .sh): -map 0 кладёт встроенные субтитры первыми.
+    MS_DIR="$WORK/ms_ps1"; rm -rf "$MS_DIR"; mkdir -p "$MS_DIR/in" "$MS_DIR/out"
+    : > "$MS_DIR/in/sm.mp4"; printf '1\n00:00:00,000 --> 00:00:01,000\nX\n' > "$MS_DIR/in/sm.srt"
+    rm -f "$WORK/mock_d2.log"
+    d2_ps1 "$(cygpath -w "$MS_DIR/in")" "$(cygpath -w "$MS_DIR/out")" "\$video_subtitles=':+:meta'; \$output_container=':+:mkv'; \$env:MOCK_FFMPEG_SUBS='2'"
+    assert_contains "PS1 meta, 2 встроенные дорожки → метка на третьей (sidecar)" "-metadata:s:s:2 language=rus" "$(cat "$WORK/mock_d2.log" 2>/dev/null)"
+    rm -rf "$MS_DIR"
 fi
 
 # --- CMD (настоящий script.cmd, мок ffmpeg.exe) ---
@@ -1139,6 +1156,10 @@ public class M {
         System.Console.Error.WriteLine("  Duration: 00:00:10.00, start: 0.000000, bitrate: 1000 kb/s");
         string log = System.Environment.GetEnvironmentVariable("MOCK_FFMPEG_LOG");
         if (log != null) System.IO.File.AppendAllText(log, string.Join(" ", a) + System.Environment.NewLine);
+        string ac = System.Environment.GetEnvironmentVariable("MOCK_FFMPEG_AUDIO_CODEC");
+        if (ac != null) System.Console.Error.WriteLine("    Stream #0:1(und): Audio: " + ac + ", 48000 Hz, stereo, fltp, 128 kb/s");
+        int ns = 0; int.TryParse(System.Environment.GetEnvironmentVariable("MOCK_FFMPEG_SUBS") ?? "0", out ns);
+        for (int i = 0; i < ns; i++) System.Console.Error.WriteLine("    Stream #0:" + (i + 2) + "(eng): Subtitle: subrip");
         if (System.Environment.GetEnvironmentVariable("MOCK_FFMPEG_BROKEN") != null && System.Array.IndexOf(a, "null") >= 0) return 1;
         if (System.Environment.GetEnvironmentVariable("MOCK_FFMPEG_FAIL") != null && a.Length > 1 && a[a.Length - 1] == "-y") return 1;
         if (a.Length > 1 && a[a.Length - 1] == "-y") System.IO.File.WriteAllText(a[a.Length - 2], "MOCK");
@@ -1282,6 +1303,35 @@ CSEOF
         assert_contains "CMD dry_run, overwrite=yes: команда кодирования показана" "-c:v libx264" "$D2_OUT"
         assert_eq "CMD dry_run, overwrite=yes: файл не тронут" "MOCK" "$(cat "$DR_OUT/dr.mp4" 2>/dev/null)"
         rm -rf "$DR_IN" "$DR_OUT"
+        # Метка языка meta — на sidecar (паритет с .sh/.ps1): -map 0 кладёт встроенные
+        # субтитры первыми, и s:s:0 метил первую из них.
+        CX_IN="$WORK/cx_in"; CX_OUT="$WORK/cx_out"; CX_LOG="$WORK/cx_mock.log"
+        cx_reset() { rm -rf "$CX_IN" "$CX_OUT" "$CX_LOG"; mkdir -p "$CX_IN" "$CX_OUT"; }
+        W_CX_IN=$(cygpath -w "$CX_IN"); W_CX_OUT=$(cygpath -w "$CX_OUT"); W_CX_LOG=$(cygpath -w "$CX_LOG")
+        cx_reset; : > "$CX_IN/sm.mp4"; printf '1\r\n00:00:00,000 --> 00:00:01,000\r\nX\r\n' > "$CX_IN/sm.srt"
+        d2_cmd "$W_CX_IN" "$W_CX_OUT" $'set "video_subtitles=:+:meta"\nset "output_container=:+:mkv"\nset "MOCK_FFMPEG_SUBS=2"\nset "MOCK_FFMPEG_LOG='"$W_CX_LOG"'"'
+        assert_contains "CMD meta, 2 встроенные дорожки → метка на третьей (sidecar)" "-metadata:s:s:2 language=rus" "$(cat "$CX_LOG" 2>/dev/null)"
+        # Кодек при извлечении звука — первое слово после «Audio: », как в .sh/.ps1:
+        # подстрока «Audio: aac» принимала и aac_latm (выход .m4a вместо .mka).
+        for _ac in aac:m4a aac_latm:mka pcm_s16le:wav mp3:mp3; do
+            cx_reset; : > "$CX_IN/ea.mp4"
+            d2_cmd "$W_CX_IN" "$W_CX_OUT" $'set "extract_audio_copy=yes"\nset "MOCK_FFMPEG_AUDIO_CODEC='"${_ac%%:*}"'"'
+            if [ -f "$CX_OUT/ea.${_ac##*:}" ]; then pass "CMD extract: ${_ac%%:*} → .${_ac##*:}"
+            else fail "CMD extract: ${_ac%%:*} → .${_ac##*:}" "ea.${_ac##*:}" "$(ls "$CX_OUT")"; fi
+        done
+        # Каталог кадров с чужими файлами не сносится (паритет с .sh/.ps1): при in-place
+        # clip.mp4 рядом с пользовательским clip\ тот раньше вычищался молча.
+        cx_reset; : > "$CX_IN/fr.mp4"; mkdir -p "$CX_OUT/fr"; printf 'USER' > "$CX_OUT/fr/notes.txt"
+        d2_cmd "$W_CX_IN" "$W_CX_OUT" 'set "create_frame=yes"'
+        assert_contains "CMD кадры: занятый каталог — FAIL" "[FAIL] fr:" "$D2_OUT"
+        assert_eq "CMD кадры: чужой файл не тронут" "USER" "$(cat "$CX_OUT/fr/notes.txt" 2>/dev/null)"
+        # Свой частичный каталог (маркер .frames_partial) пересоздаётся.
+        cx_reset; : > "$CX_IN/fr.mp4"; mkdir -p "$CX_OUT/fr"; : > "$CX_OUT/fr/.frames_partial"; : > "$CX_OUT/fr/fr_00001.png"
+        d2_cmd "$W_CX_IN" "$W_CX_OUT" 'set "create_frame=yes"'
+        if [ -f "$CX_OUT/fr/.frames_complete" ] && [ ! -e "$CX_OUT/fr/.frames_partial" ] && [ ! -e "$CX_OUT/fr/fr_00001.png" ]; then
+            pass "CMD кадры: свой частичный каталог пересоздан, маркер завершения есть"
+        else fail "CMD кадры: свой частичный каталог пересоздан" ".frames_complete без .frames_partial и старых кадров" "$(ls -A "$CX_OUT/fr" 2>/dev/null | tr '\n' ' ')"; fi
+        rm -rf "$CX_IN" "$CX_OUT" "$CX_LOG"
     fi
 fi
 rm -rf "$D2_IP" "$D2_OTHER" "$IN/ov.mp4" "$DST"/ov* "$DST/.ov.ffconv"

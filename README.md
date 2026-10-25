@@ -64,7 +64,9 @@ video/
 В `ffmpeg/` **`ffprobe.exe` не нужен** — эта сторона его не вызывает.
 Проверить раскладку одной командой:
 `bash yt-dlp/Downloading_from_YouTube_v20.sh --doctor` и
-`bash ffmpeg/FFmpeg_Converter_run_v20.sh --doctor`.
+`bash ffmpeg/FFmpeg_Converter_run_v20.sh --doctor` (или
+`powershell -File ffmpeg\FFmpeg_Converter_run_v20.ps1 --doctor`; в GUI — кнопка
+«Проверить окружение»).
 
 Ссылки:
 
@@ -273,7 +275,7 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 | `test_09_ps1_filters_gpu` | PS1: фильтры и GPU |
 | `test_10_cmd` | CMD-скрипт |
 | `test_11_cmd_smoke` | CMD: smoke-тест |
-| `test_12_cmd_run_parser` | CMD: парсер run-конфига |
+| `test_12_cmd_run_parser` | CMD: парсер run-конфига; аргументы (`--help`, отказ на недоступные и неизвестные флаги) |
 | `test_13_parser_parity` | Кросс-парсерный паритет SH/PS1 read_config (кавычки, ` #` внутри кавычек, строка без `=`; GUI-ридер) |
 | `test_14_audio_only_codec` | audio_only: контейнер/кодек из `[audio] codec` |
 | `test_15_findings` | Фиксы аудита: dry-run спецрежимов, маркер кадров, overwrite (и очистка прошлых частей по manifest), коллизии, порядок merge и фрагмент по тишине на трёх платформах |
@@ -290,7 +292,7 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 | `test_26_asr_ps1` | Распознавание речи: PS1-модуль — те же случаи и фикстуры, запуск curl.exe и отмена |
 | `test_27_asr_parity` | Распознавание речи: .sh и .ps1 дают одинаковые план частей, аргументы curl, исходы, текст и разбор странных ответов сервера |
 | `test_28_asr_integration` | Распознавание речи: сквозной прогон script.sh с моками ffmpeg и curl, Ctrl+C во время публикации |
-| `test_29_asr_ps1_integration` | Распознавание речи: сквозной прогон FFmpeg_Converter_script.ps1 (мок ffmpeg.cmd, подменённая сеть), отмена из GUI, код возврата CLI .ps1 |
+| `test_29_asr_ps1_integration` | Распознавание речи: сквозной прогон FFmpeg_Converter_script.ps1 (мок ffmpeg.cmd, подменённая сеть), отмена из GUI, код возврата и флаги CLI .ps1 (`--doctor`, `--help`, неизвестный аргумент) |
 
 ### Тест-модули YT-DLP (15 файлов)
 
@@ -323,7 +325,7 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 | `test_guardrails` | Статические guardrail'ы против регресса опасных паттернов |
 | `test_path_matrix` | Adversarial имена/пути: Quote-WinArg + CMD `!`-детект |
 | `test_ytdlp_preset_parity` | Паритет таблиц форматов yt-dlp SH ↔ PS1 |
-| `test_build_strip` | Комментарии не попадают в собранный EXE: сборка зовёт вырезание, вырезание не трогает код и строки |
+| `test_build_strip` | Комментарии не попадают в собранный EXE: сборка зовёт вырезание, вырезание не трогает код и строки; `.sha256` — UTF-8 без BOM |
 | `test_pre_commit_hook` | pre-commit на реальном temp-репо: блок секрета, разрешение удаления утечки |
 | `test_privacy_scan` | privacy-scan на реальном temp-репо: RFC1918 IP / e-mail, файлы с пробелами и кириллицей, `*.example`, бинарники; сломанный барьер падает, а не рапортует «чисто» |
 | `test_docs_links` | Ссылки и пути в документации ведут на существующие файлы; имена EXE в CI ↔ файлы на диске |

@@ -10,6 +10,8 @@
 #                      DownloadCancelled
 #   MOCK_YTDLP_OUTFILE= — путь(и) «скачанных» файлов через '|'. Мок создаёт их и
 #                         сообщает через --print-to-file (эмуляция after_move:filepath).
+#   MOCK_YTDLP_READ_STDIN=1 — дочитать stdin до конца, как интерактивный запрос
+#                         ввода (пароль хранилища браузера и т.п.)
 # ============================================================
 
 LOG_FILE="${MOCK_YTDLP_LOG:-/tmp/mock_ytdlp_calls.txt}"
@@ -34,6 +36,8 @@ for ((i=0; i<${#args[@]}; i++)); do
         break
     fi
 done
+
+[ "${MOCK_YTDLP_READ_STDIN:-0}" = "1" ] && cat > /dev/null
 
 # Имитация успешного скачивания
 echo "[download] Simulated download complete (mock yt-dlp)"

@@ -239,6 +239,7 @@ Write-Output ("plat_notyt=" + (Get-Platform 'https://notyoutube.com/watch'))
 # F13: youtube.com в ПУТИ чужого хоста не должен считаться YouTube.
 Write-Output ("plat_pathinj=" + (Get-Platform 'https://example.invalid/path/youtube.com/video'))
 Write-Output ("plat_suffix=" + (Get-Platform 'https://youtube.com.evil.tld/x'))
+Write-Output ("plat_noscheme=" + (Get-Platform 'youtube.com/watch?v=abc123'))
 
 # qualityMap → defaultQualityIdx
 foreach ($q in @('audio','720','360','480','1080','1440','2160','xxx','')) {
@@ -390,6 +391,7 @@ assert_eq "example.com → Video"     "Video"       "$(get_field "$out" plat_oth
 assert_eq "notyoutube.com → Video (граница!)"  "Video"  "$(get_field "$out" plat_notyt)"
 assert_eq "F13: youtube.com в пути чужого хоста → Video"  "Video"  "$(get_field "$out" plat_pathinj)"
 assert_eq "F13: youtube.com.evil.tld → Video (якорь конца)" "Video"  "$(get_field "$out" plat_suffix)"
+assert_eq "ссылка без схемы → YouTube"                 "YouTube" "$(get_field "$out" plat_noscheme)"
 
 # ── qualityMap ────────────────────────────────────────────────
 suite "PS1 yt-dlp: qualityMap → defaultQualityIdx (production)"

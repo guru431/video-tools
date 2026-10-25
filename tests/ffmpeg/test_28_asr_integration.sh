@@ -166,6 +166,13 @@ reset_dirs; ok_routes; : > "$IN/a.mp4"
 run_asr 'asr_language="de"'
 assert_eq "чужой язык — код 1" "1" "$RUN_RC"
 assert_contains "язык назван" "language = 'de'" "$RUN_OUT"
+# Ключ с переводом строки (из ${ASR_API_KEY}): строка curl-конфига разломилась бы,
+# и хвост ключа стал бы отдельной директивой curl. Отказ — до первого запроса.
+reset_dirs; ok_routes; : > "$IN/a.mp4"
+run_asr $'asr_api_key="k1\noutput = /tmp/x"'
+assert_eq "ключ с переводом строки — код 1" "1" "$RUN_RC"
+assert_contains "причина названа" "ключ содержит управляющие символы" "$RUN_OUT"
+assert_empty "сервер не опрашивался" "$(cat "$WORK/curl.log" 2>/dev/null)"
 
 # ══════════════════════════════════════════════════════════════
 suite "dry_run: план и команды без извлечения и отправки"
@@ -190,6 +197,14 @@ run_asr
 assert_eq "коллизия — код 1" "1" "$RUN_RC"
 assert_contains "конфликт назван" "конфликт выходов" "$RUN_OUT"
 posts; assert_eq "отправлен только первый" "1" "$POSTS"
+# Регистр — как у карты коллизий конвертера: на регистронезависимой ФС X.txt и x.txt
+# один файл (конфликт), на Linux — два разных (конфликта нет). Платформа — по OSTYPE.
+reset_dirs; ok_routes; : > "$IN/X.mp4"; : > "$IN/x.mkv"
+run_asr 'OSTYPE=msys'
+assert_contains "Windows: X.txt и x.txt — конфликт" "конфликт выходов" "$RUN_OUT"
+reset_dirs; ok_routes; : > "$IN/X.mp4"; : > "$IN/x.mkv"
+run_asr 'OSTYPE=linux-gnu'
+assert_not_contains "Linux: X.txt и x.txt — не конфликт" "конфликт выходов" "$RUN_OUT"
 reset_dirs; ok_routes; : > "$IN/a.mp4"
 run_asr 'folder_destination="$IN"'
 assert_file_exists "рядом с записью" "$IN/a.txt"

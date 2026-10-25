@@ -671,6 +671,18 @@ function Get-CanonPath {
 		$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)) } catch {}
 	try { return [System.IO.Path]::GetFullPath($Path) } catch { return $Path }
 }
+# Ключ карты коллизий выходов: регистр опускается только там, где ФС его не различает
+# (Windows, macOS). Паритет с collision_key в .sh: на Linux X.mp4 и x.mp4 — разные
+# файлы, и безусловный нижний регистр давал ложный «конфликт выходов». $IsLinux в
+# Windows PowerShell 5.1 не определена — там это $null, то есть регистр опускается.
+# Карты с такими ключами — только New-CollisionMap: обычная @{} сама сравнивает
+# ключи без учёта регистра, и на Linux конфликт оставался ложным.
+function New-CollisionMap { return [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal) }
+function Get-CollisionKey {
+	param([string]$Path)
+	if ($IsLinux) { return $Path }
+	return $Path.ToLowerInvariant()
+}
 $canon_sources     = (Get-CanonPath $folder_sources).TrimEnd('\','/')
 $canon_destination = (Get-CanonPath $folder_destination).TrimEnd('\','/')
 $dest_inside_source = $canon_destination.StartsWith($canon_sources + $_sep, [System.StringComparison]::OrdinalIgnoreCase)
@@ -1010,16 +1022,16 @@ function Log-Msg {
 #
 # Режимы merge (один выход), extract (расширение известно только после probe каждого
 # файла) и frame (выход — каталог) сюда не попадают: там формула выхода другая.
-$collision_outputs = @{}
+$collision_outputs = New-CollisionMap
 # У распознавания своя проверка коллизий (Invoke-AsrFile): выход — .txt.
 if ($merge_files -ne "yes" -and $extract_audio_copy -ne "yes" -and $create_frame -ne "yes" -and $asr_enabled -ne 'yes') {
-	$_cmap = @{}
+	$_cmap = New-CollisionMap
 	foreach ($_f in $format_files_in_list) {
 		# Формула обязана совпадать с Encode-File, иначе карта врёт.
 		$_dir = Get-RelDir $_f.DirectoryName
 		$_name = if ($save_old_extension -eq "yes") { $_f.Name } else { $_f.BaseName }
 		$_fmt = if ($copy_codecs -eq "yes") { $_f.Extension.TrimStart('.') } else { $format_files_out }
-		$_out = (Get-CanonPath "$folder_destination$_dir$_name$part_suffix_known.$_fmt").ToLowerInvariant()
+		$_out = Get-CollisionKey (Get-CanonPath "$folder_destination$_dir$_name$part_suffix_known.$_fmt")
 		if (-not $_cmap.ContainsKey($_out)) { $_cmap[$_out] = @() }
 		$_cmap[$_out] += $_f.FullName
 	}
@@ -1217,7 +1229,7 @@ function Encode-File {
 
 	# F-collision-map. Выход этого файла оспаривается другим входом (карта построена
 	# до кодирования). Обрабатывать нельзя: кто-то из группы затрёт чужой результат.
-	if ($collision_outputs.ContainsKey($canon_out.ToLowerInvariant())) {
+	if ($collision_outputs.ContainsKey((Get-CollisionKey $canon_out))) {
 		Log-Msg "FAIL" "$($file.Name): конфликт выходов — файл пропущен"
 		$script:countFail++
 		Write-GUIProgress -CurrentFile $file.Name
@@ -1284,6 +1296,9 @@ function Encode-File {
 	if ($ffmpeg_available) {
 		$ffmpeg_info = ((& $ffmpeg -nostdin -i $full_path 2>&1 | ForEach-Object { "$_" }) -join "`n")
 	}
+	# Дорожки субтитров источника: при meta sidecar идёт за ними (-map 0 -map 1), и
+	# метка языка ставится на его номер. Паритет с MI_SUBS в .sh (без учёта регистра).
+	$src_sub_streams = [regex]::Matches($ffmpeg_info, 'Stream #[^\n]*Subtitle:', 'IgnoreCase').Count
 
 	# F25. Битрейт ИМЕННО видеопотока: строка `Stream #...: Video: ..., N kb/s`.
 	# Раньше брали `Duration: ..., bitrate: N kb/s` — это битрейт КОНТЕЙНЕРА
@@ -1561,7 +1576,8 @@ function Encode-File {
 							}
 						}
 						if ($video_subtitles_value -eq "meta") {
-							$subtitles_args = @("-i", $sub_file, "-c:s", $sub_meta_codec, "-metadata:s:s:0", "language=rus")
+							# -map 0 кладёт субтитры источника первыми: s:s:0 метил встроенную дорожку.
+							$subtitles_args = @("-i", $sub_file, "-c:s", $sub_meta_codec, "-metadata:s:s:$src_sub_streams", "language=rus")
 							$convert_args += @("-map", "0", "-map", "1")
 						}
 						$sub_found = $true
@@ -1716,7 +1732,7 @@ function Encode-File {
 				$jobId = Submit-RemoteJob $script:remoteUploadId $rMap.Op $rMap.Params $script:remoteSubId
 				if ($jobId) {
 					$script:RemoteUploadSidecar = "$manifest.upload"
-					Write-RemoteUploadSidecarJob -Source $full_path -Part $c -Signature $file_sig -JobId $jobId
+					Write-RemoteUploadSidecarJob -Source $full_path -Part $c -Signature $file_sig -JobId $jobId -UploadId $script:remoteUploadId
 					$script:RemoteUploadSidecar = ''
 				}
 			}

@@ -133,6 +133,20 @@ try {
     $guard = 'no-throw'
 } catch { $guard = 'threw' }
 Write-Output ("bad_input_throws=" + $guard)
+
+# Write-ExeChecksum: the name is written as UTF-8 without BOM, LF only. ASCII turned
+# non-ASCII letters into '?', and sha256sum -c could not find the file.
+$shaDir = Join-Path ([System.IO.Path]::GetTempPath()) ('sha_' + [guid]::NewGuid().ToString('N'))
+[void][System.IO.Directory]::CreateDirectory($shaDir)
+$exeName = 'v' + [char]0x0438 + [char]0x0434 + 'eo.exe'
+$exe = Join-Path $shaDir $exeName
+[System.IO.File]::WriteAllText($exe, 'x')
+Write-ExeChecksum $exe | Out-Null
+$h = (Get-FileHash -Algorithm SHA256 -LiteralPath $exe).Hash
+$want = [System.Text.UTF8Encoding]::new($false).GetBytes($h + '  ' + $exeName + "`n")
+$got = [System.IO.File]::ReadAllBytes("$exe.sha256")
+Write-Output ("sha_utf8=" + [int]([System.Convert]::ToBase64String($got) -eq [System.Convert]::ToBase64String($want)))
+Remove-Item -LiteralPath $shaDir -Recurse -Force
 PS1EOF
 
 out=$($PS_CMD -NoProfile -NonInteractive -File "$win_harness" \
@@ -170,5 +184,10 @@ assert_eq "'#' внутри пути сохранён"            "1" "$(get_fie
 assert_eq "#requires сохранён (это директива)"  "1" "$(get_field requires_kept)"
 assert_eq "обычный комментарий рядом удалён"    "1" "$(get_field requires_plain_gone)"
 assert_eq "неразбираемый вход роняет сборку"    "threw" "$(get_field bad_input_throws)"
+
+# ══════════════════════════════════════════════════════════════
+suite "Write-ExeChecksum: имя в .sha256 — UTF-8 без BOM, LF"
+# ══════════════════════════════════════════════════════════════
+assert_eq "кириллица в имени EXE не искажается" "1" "$(get_field sha_utf8)"
 
 summary

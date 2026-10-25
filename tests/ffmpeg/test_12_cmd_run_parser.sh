@@ -242,6 +242,27 @@ assert_contains "ffmpeg.exe рядом со скриптом найден" "STUB
 assert_contains "script.cmd рядом со скриптом вызван" "STUB dst=$WIN_BANG\\outdir" "$bang_run"
 
 # ══════════════════════════════════════════════════════════════
+suite "CMD: аргументы — --help, недоступные флаги, неизвестный — отказ"
+# ══════════════════════════════════════════════════════════════
+# Паритет с .sh/.ps1: опечатка во флаге молча запускала полный прогон. В TMP_DIR
+# нет script.cmd — дошёл бы до вызова, сказал бы «не найден».
+printf '[folders]\r\nsource = C:\\abs\\src\r\n' > "$TMP_DIR/config.ini"
+_arg_run() { _AO=$(cmd //c "$WIN_RUN $1" < /dev/null 2>&1); _AR=$?; _AO=$(printf '%s' "$_AO" | tr -d '\r'); }
+_arg_run "--help"
+assert_eq "--help — код 0" "0" "$_AR"
+assert_contains "--help — использование" "Использование:" "$_AO"
+_arg_run "--doctor"
+assert_eq "--doctor — код 1" "1" "$_AR"
+assert_contains "--doctor — назван недоступным" "--doctor в CMD-версии недоступен" "$_AO"
+_arg_run "--remote-selftest"
+assert_eq "--remote-selftest — код 1" "1" "$_AR"
+assert_contains "--remote-selftest — назван недоступным" "--remote-selftest в CMD-версии недоступен" "$_AO"
+_arg_run "--remoteselftest"
+assert_eq "неизвестный аргумент — код 1" "1" "$_AR"
+assert_contains "неизвестный аргумент назван" "Неизвестный аргумент: --remoteselftest" "$_AO"
+assert_not_contains "конвертация не запускалась" "не найден FFmpeg_Converter_script.cmd" "$_AO"
+
+# ══════════════════════════════════════════════════════════════
 suite "CMD: script.cmd не найден — причина, пауза, код 1"
 # ══════════════════════════════════════════════════════════════
 # Как у ранних отказов script.cmd: голый pause (при stdin из nul он возвращается

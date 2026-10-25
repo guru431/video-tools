@@ -528,6 +528,8 @@ function Invoke-AsrPreflight {
 	if (-not (Get-AsrCurlExe)) { return (Set-AsrPreflightError 'curl не найден — распознавание речи невозможно.') }
 	if (-not (Resolve-AsrApiKey)) { return $false }
 	if (-not $asr_api_key) { return (Set-AsrPreflightError '[asr] ключ не задан: api_key, api_key_command или ${ASR_API_KEY}.') }
+	# Ключ уходит строкой curl-конфига (экранируются только \ и "): перевод строки начал бы новую директиву.
+	if ($asr_api_key -match '[\x00-\x1f\x7f]') { return (Set-AsrPreflightError '[asr] ключ содержит управляющие символы (перевод строки, табуляцию) — проверьте api_key или ${ASR_API_KEY}.') }
 	$script:AsrRunDir = Join-Path ([System.IO.Path]::GetTempPath()) ('ffconv_asr_' + [guid]::NewGuid().ToString('N'))
 	[void][System.IO.Directory]::CreateDirectory($script:AsrRunDir)
 	if (-not (Select-AsrEndpoint)) { Remove-AsrRunDir; return (Set-AsrPreflightError $script:AsrStopReason) }
@@ -569,7 +571,8 @@ function Invoke-AsrFile {
 	$stem = if ($save_old_extension -eq 'yes') { $File.Name } else { $File.BaseName }
 	$outDir = "$folder_destination$(Get-RelDir $File.DirectoryName)"
 	$outTxt = "$outDir$stem.txt"; $outJson = "$outDir$stem.asr.json"
-	$claim = (Get-CanonPath $outTxt).ToLowerInvariant()
+	# Get-CollisionKey конвертера: регистр опускается только там, где его не различает ФС.
+	$claim = Get-CollisionKey (Get-CanonPath $outTxt)
 	if ($script:AsrClaimed.ContainsKey($claim)) {
 		Write-AsrFileFail $name "конфликт выходов — «$stem.txt» уже занят другим входом (включите save_old_extension = yes либо разнесите файлы)"
 		return
@@ -676,7 +679,8 @@ function Invoke-AsrFile {
 
 function Invoke-AsrRun {
 	param([object[]]$Files)
-	$script:AsrClaimed = @{}
+	# New-CollisionMap конвертера: у обычной @{} ключи сравниваются без учёта регистра.
+	$script:AsrClaimed = New-CollisionMap
 	$script:AsrStopReason = ''
 	$script:AsrNotProcessed = 0
 	try {

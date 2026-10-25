@@ -203,8 +203,12 @@ foreach ($side in @(@('CLI', $Cli), @('GUI', $Gui))) {
     Write-Output ("{0}={1}" -f $side[0], (($inputs | ForEach-Object { Remove-ConfigComment $_ }) -join '|'))
 }
 PSEOF
-    _rcc_out=$($PS_CMD -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$_rcc_ps")" \
-        -Cli "$RUN_PS1_WIN" -Gui "$(cygpath -w "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v20.ps1")" 2>&1 | tr -d '\r')
+    # cygpath — только в Git Bash; на Linux/macOS (pwsh стоит и там) путь идёт как есть,
+    # иначе -File получал пустую строку и сюит падал на обеих POSIX-линиях CI.
+    _rcc_ps_w=$(cygpath -w "$_rcc_ps" 2>/dev/null || echo "$_rcc_ps")
+    _rcc_gui_w=$(cygpath -w "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v20.ps1" 2>/dev/null || echo "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v20.ps1")
+    _rcc_out=$($PS_CMD -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$_rcc_ps_w" \
+        -Cli "$RUN_PS1_WIN" -Gui "$_rcc_gui_w" 2>&1 | tr -d '\r')
     rm -f "$_rcc_ps"
     _rcc_want='"C:/video #1"|'"'a #b.log'"'|"x" y|value|my#file|"open'
     assert_contains "CLI: комментарий вне кавычек" "CLI=$_rcc_want" "$_rcc_out"

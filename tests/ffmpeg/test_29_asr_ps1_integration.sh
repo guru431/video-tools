@@ -62,8 +62,6 @@ $asr_enabled = 'yes'; $asr_endpoint = 'https://asr.example:30010'; $asr_api_key 
 $asr_api_key_command = ''; $asr_pinned_pubkey = ''; $asr_language = 'ru'; $asr_diarize = 'yes'; $asr_num_speakers = ''
 # Conversion settings that used to stop the run before the first file, though ASR does not use them.
 if ($env:ASR_T_BADCONV) { $start_coding = ':+:1:00:00'; $length_coding = ':+:00-00-00'; $playback_speed = ':+:0'; $output_container = ':+:webm' }
-# Linux pwsh: case-sensitive file system ($IsLinux is undefined in Windows PowerShell 5.1).
-if ($env:ASR_T_LINUX) { $IsLinux = $true }
 # A key with a line feed (from ${ASR_API_KEY}): refused before the first request.
 if ($env:ASR_T_CTLKEY) { $asr_api_key = "k1`noutput = x" }
 . $Module
@@ -147,14 +145,36 @@ assert_contains "коллизия — одна ошибка" "Ошибки:     
 assert_eq "коллизия — код 1" "1" "$RUN_RC"
 assert_contains "конфликт назван" "конфликт выходов" "$RUN_OUT"
 posts; assert_eq "отправлен только первый" "1" "$POSTS"
-# Регистр — как у карты коллизий конвертера: на Windows X.txt и x.txt один файл,
-# на Linux — два разных, и конфликта нет.
+# Регистр — как у карты коллизий конвертера: на Windows X.txt и x.txt один файл.
 reset_dirs; : > "$IN/X.mp4"; : > "$IN/x.mkv"
 run_ps 200
 assert_contains "Windows: X.txt и x.txt — конфликт" "конфликт выходов" "$RUN_OUT"
-reset_dirs; : > "$IN/X.mp4"; : > "$IN/x.mkv"
-ASR_T_LINUX=1 run_ps 200
-assert_not_contains "Linux: X.txt и x.txt — не конфликт" "конфликт выходов" "$RUN_OUT"
+# На Linux — два разных файла. Сквозным прогоном на NTFS этого не показать: там это
+# ОДИН файл, а GetFullPath под 8.3-путём (~ в TEMP раннера CI) ещё и отдаёт регистр,
+# который уже лежит на диске. Поэтому — сами функции воркера, взятые разбором AST;
+# что распознавание зовёт именно их, сверяется по исходнику.
+_ck_ps="$(mktemp_suffix "${TMPDIR:-/tmp}/asr_ck_" .ps1)"
+cat > "$_ck_ps" <<'PSEOF'
+param([string]$Worker)
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($Worker, [ref]$null, [ref]$null)
+foreach ($name in 'Get-CollisionKey', 'New-CollisionMap') {
+    $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true)
+    if (-not $fn) { Write-Output "NOFUNC=$name"; exit 1 }
+    . ([scriptblock]::Create($fn.Extent.Text))
+}
+function Test-Clash { $m = New-CollisionMap; $m[(Get-CollisionKey '/out/x.txt')] = $true; return $m.ContainsKey((Get-CollisionKey '/out/X.txt')) }
+Write-Output ("WIN=" + (Test-Clash))
+$IsLinux = $true
+Write-Output ("LINUX=" + (Test-Clash))
+PSEOF
+_ck_out="$("$PS_BIN" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(_w "$_ck_ps")" \
+    -Worker "$(_w "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1")" 2>&1 | tr -d '\r')"
+rm -f "$_ck_ps"
+assert_contains "Windows: ключи X.txt и x.txt совпадают" "WIN=True" "$_ck_out"
+assert_contains "Linux: ключи X.txt и x.txt различны" "LINUX=False" "$_ck_out"
+_asr_src="$(cat "$PROJECT_DIR/ffmpeg/asr_client.ps1")"
+assert_contains "распознавание: карта — New-CollisionMap" '$script:AsrClaimed = New-CollisionMap' "$_asr_src"
+assert_contains "распознавание: ключ — Get-CollisionKey" '$claim = Get-CollisionKey (Get-CanonPath $outTxt)' "$_asr_src"
 
 # ══════════════════════════════════════════════════════════════
 suite "ASR PS1: ключ с переводом строки — отказ до первого запроса"

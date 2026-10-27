@@ -6,9 +6,9 @@
 # выходов, исходы «файл / прогон», части, сводка и код возврата. Те же
 # сценарии, что test_28 для .sh: файловый цикл .ps1 — основной путь в
 # Windows (GUI и EXE). Один процесс PowerShell на сценарий: воркер кончается exit.
-# Harness передаёт код воркера процессу так же, как FFmpeg_Converter_run_v20.ps1
+# Harness передаёт код воркера процессу так же, как FFmpeg_Converter_run_v21.ps1
 # (`exit` дот-сорснутого скрипта под -File иначе даёт 0); последний сюит
-# проверяет код возврата самого run_v20.ps1.
+# проверяет код возврата самого run_v21.ps1.
 # ============================================================
 
 TESTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -283,20 +283,20 @@ assert_not_contains "сервер распознавания не опрашив
 # ══════════════════════════════════════════════════════════════
 suite "CLI .ps1: код возврата воркера доходит до процесса"
 # ══════════════════════════════════════════════════════════════
-# Настоящая обёртка run_v20.ps1 рядом с настоящим воркером: источник не найден —
+# Настоящая обёртка run_v21.ps1 рядом с настоящим воркером: источник не найден —
 # воркер делает `exit 1`. Под -File код дот-сорснутого скрипта терялся, и
 # cron/планировщик видели 0 на любом провале.
 mkdir -p "$WORK/cli"
-cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v20.ps1" "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1" "$WORK/cli/"
+cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v21.ps1" "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1" "$WORK/cli/"
 printf '[folders]\nsource = %s\n' "$(_w "$WORK/no-such-dir")" > "$WORK/cli/config.ini"
-"$PS_BIN" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(_w "$WORK/cli/FFmpeg_Converter_run_v20.ps1")" > "$WORK/cli.raw" 2>&1 < /dev/null
+"$PS_BIN" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(_w "$WORK/cli/FFmpeg_Converter_run_v21.ps1")" > "$WORK/cli.raw" 2>&1 < /dev/null
 _rc=$?
 assert_eq "источник не найден — код 1" "1" "$_rc"
 assert_contains "причина напечатана" "Папка источника не найдена" "$(tr -d '\r' < "$WORK/cli.raw")"
 
-# Флаги — как у run_v20.sh. Опечатка (--remoteselftest) раньше молча запускала полный
+# Флаги — как у run_v21.sh. Опечатка (--remoteselftest) раньше молча запускала полный
 # прогон вместо самопроверки, а --doctor и --help не существовали вовсе.
-_cli() { "$PS_BIN" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(_w "$WORK/cli/FFmpeg_Converter_run_v20.ps1")" "$@" > "$WORK/cli.raw" 2>&1 < /dev/null; _rc=$?; _co="$(tr -d '\r' < "$WORK/cli.raw")"; }
+_cli() { "$PS_BIN" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(_w "$WORK/cli/FFmpeg_Converter_run_v21.ps1")" "$@" > "$WORK/cli.raw" 2>&1 < /dev/null; _rc=$?; _co="$(tr -d '\r' < "$WORK/cli.raw")"; }
 _cli --remoteselftest
 assert_eq "неизвестный аргумент — код 1" "1" "$_rc"
 assert_contains "неизвестный аргумент назван" "Неизвестный аргумент: --remoteselftest (см. --help)" "$_co"
@@ -312,7 +312,7 @@ assert_not_contains "--doctor — прогон не запускался" "Па�
 # каталог PowerShell (ffmpeg бывает и в System32), сам он — по абсолютному пути.
 _ps_abs="$(command -v "$PS_BIN")"
 PATH="/c/Windows/System32/WindowsPowerShell/v1.0" "$_ps_abs" -NoProfile -NonInteractive -ExecutionPolicy Bypass \
-    -File "$(_w "$WORK/cli/FFmpeg_Converter_run_v20.ps1")" --doctor > "$WORK/cli.raw" 2>&1 < /dev/null
+    -File "$(_w "$WORK/cli/FFmpeg_Converter_run_v21.ps1")" --doctor > "$WORK/cli.raw" 2>&1 < /dev/null
 _rc=$?; _co="$(tr -d '\r' < "$WORK/cli.raw")"
 assert_eq "--doctor без ffmpeg — код 1" "1" "$_rc"
 assert_contains "--doctor без ffmpeg — сказано, что не работает" "КОНВЕРТАЦИЯ НЕВОЗМОЖНА" "$_co"
@@ -321,10 +321,10 @@ assert_contains "--doctor без ffmpeg — сказано, что не рабо
 # не запускает вовсе — только `&` из сессии. Файл-пустышка: версию доклад не прочтёт
 # и покажет путь.
 mkdir -p "$WORK/br[x"
-cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v20.ps1" "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1" "$WORK/br[x/"
+cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v21.ps1" "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1" "$WORK/br[x/"
 : > "$WORK/br[x/ffmpeg.exe"
 PATH="/c/Windows/System32/WindowsPowerShell/v1.0" "$_ps_abs" -NoProfile -NonInteractive -ExecutionPolicy Bypass \
-    -Command "Set-Location -LiteralPath '$(_w "$WORK/br[x")'; & '.\FFmpeg_Converter_run_v20.ps1' --doctor; exit \$LASTEXITCODE" \
+    -Command "Set-Location -LiteralPath '$(_w "$WORK/br[x")'; & '.\FFmpeg_Converter_run_v21.ps1' --doctor; exit \$LASTEXITCODE" \
     > "$WORK/cli.raw" 2>&1 < /dev/null
 _rc=$?; _co="$(tr -d '\r' < "$WORK/cli.raw")"
 assert_eq "--doctor, каталог с «[»: ffmpeg рядом найден — код 0" "0" "$_rc"
@@ -334,8 +334,8 @@ assert_not_contains "--doctor, каталог с «[»: ffmpeg не объявл
 # ранних отказов воркера; Pause-Prompt живёт в ненайденном файле). Без -NonInteractive:
 # Read-Host не бросает, и без проверки IsInputRedirected он ждал бы stdin.
 mkdir -p "$WORK/lone"
-cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v20.ps1" "$WORK/lone/"
-"$PS_BIN" -NoProfile -ExecutionPolicy Bypass -File "$(_w "$WORK/lone/FFmpeg_Converter_run_v20.ps1")" > "$WORK/lone.raw" 2>&1 < /dev/null
+cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v21.ps1" "$WORK/lone/"
+"$PS_BIN" -NoProfile -ExecutionPolicy Bypass -File "$(_w "$WORK/lone/FFmpeg_Converter_run_v21.ps1")" > "$WORK/lone.raw" 2>&1 < /dev/null
 _rc=$?
 assert_eq "воркер не найден — код 1" "1" "$_rc"
 # Переводы строк снимаются вместе с CR: Write-Error печатает запись об ошибке с
@@ -344,7 +344,7 @@ assert_eq "воркер не найден — код 1" "1" "$_rc"
 assert_contains "воркер не найден — причина" "FFmpeg_Converter_script.ps1" "$(tr -d '\r\n' < "$WORK/lone.raw")"
 assert_contains "пауза — только при интерактивном stdin" \
     'try { if (-not [Console]::IsInputRedirected) { Read-Host "Нажмите [Enter], чтобы выйти..." | Out-Null } } catch {}' \
-    "$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v20.ps1")"
+    "$(cat "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v21.ps1")"
 
 rm -f "$HARNESS"
 rm -rf "$WORK"

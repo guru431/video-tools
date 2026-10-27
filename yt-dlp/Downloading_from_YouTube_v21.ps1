@@ -614,7 +614,7 @@ if ($env:YTDLP_TEST -eq '1') { return }
 
 # ── Создание формы ────────────────────────────────────────────────────────
 $form = [System.Windows.Forms.Form]::new()
-$form.Text = "Video Downloader (yt-dlp) v20"
+$form.Text = "Video Downloader (yt-dlp) v21"
 $form.Size = [System.Drawing.Size]::new(830, 807)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
@@ -1506,7 +1506,7 @@ $btnStart.Add_Click({
 
             Set-UiProgress -Percent 0 `
                 -Status "Загрузка $itemNum/$totalItems  [$platform]" `
-                -Title  "Video Downloader (yt-dlp) v20  [$itemNum/$totalItems]"
+                -Title  "Video Downloader (yt-dlp) v21  [$itemNum/$totalItems]"
             Append-Output ""
             Append-Output "═══ [$itemNum/$totalItems] [$platform]  $currentUrl" ([System.Drawing.Color]::Cyan)
 
@@ -1732,7 +1732,7 @@ $btnStart.Add_Click({
                         $pct = [int][math]::Floor([double]$Matches[1])
                         Set-UiProgress -Percent $pct `
                             -Status "Загрузка $itemNum/$totalItems  [$platform]  $pct%" `
-                            -Title  "Video Downloader (yt-dlp) v20  [$itemNum/$totalItems]  $pct%"
+                            -Title  "Video Downloader (yt-dlp) v21  [$itemNum/$totalItems]  $pct%"
                     } elseif ($line -match '\[download\] Destination:') {
                         Append-Output $line ([System.Drawing.Color]::LightGreen)
                     } elseif ($line -match '\[Merger\]|\[info\].*Merging') {
@@ -2102,7 +2102,7 @@ $btnStart.Add_Click({
             if ($failCount -gt 0) { $summary += "  |  Ошибки: $failCount" }
             Append-Output $summary ([System.Drawing.Color]::LightGreen)
             Set-UiProgress -Status "Завершено: $successCount/$totalItems" `
-                           -Title  "Video Downloader (yt-dlp) v20 — Готово!"
+                           -Title  "Video Downloader (yt-dlp) v21 — Готово!"
         } else {
             Append-Output "═══ Остановлено  |  Загружено: $successCount" ([System.Drawing.Color]::Yellow)
             Set-UiProgress -Status "Остановлено"
@@ -2149,7 +2149,7 @@ $btnClear.Add_Click({
     $richOutput.Clear()
     $progressBar.Value = 0
     $lblStatus.Text    = "Готов к загрузке"
-    $form.Text         = "Video Downloader (yt-dlp) v20"
+    $form.Text         = "Video Downloader (yt-dlp) v21"
 })
 $_fc.Add($btnClear)
 

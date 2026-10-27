@@ -22,8 +22,8 @@ source "$TESTS_DIR/lib/framework.sh"
 # Хуже того, копии закрепляли ложное утверждение: тест уверял, что ffmpeg-парсер не
 # делает подстановку ${VAR} и оставляет её литералом. Оба production-парсера её делают.
 PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
-RUN_SH="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v20.sh"
-RUN_PS1="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v20.ps1"
+RUN_SH="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v21.sh"
+RUN_PS1="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v21.ps1"
 for _f in "$RUN_SH" "$RUN_PS1"; do
     if [ ! -f "$_f" ]; then
         suite "Кросс-парсерный паритет"
@@ -34,7 +34,7 @@ for _f in "$RUN_SH" "$RUN_PS1"; do
 done
 source "$RUN_SH"
 
-# ── PS1-сторона: настоящая Read-Config из run_v20.ps1 ──────────────────────
+# ── PS1-сторона: настоящая Read-Config из run_v21.ps1 ──────────────────────
 HAVE_PS1=true
 PS_CMD="powershell"
 if command -v pwsh &>/dev/null; then
@@ -44,7 +44,7 @@ elif ! command -v powershell &>/dev/null; then
 fi
 RUN_PS1_WIN=$(cygpath -w "$RUN_PS1" 2>/dev/null || echo "$RUN_PS1")
 
-# $env:FFCONV_TEST=1 — гард в run_v20.ps1: дот-сорсим только определения, конвейер
+# $env:FFCONV_TEST=1 — гард в run_v21.ps1: дот-сорсим только определения, конвейер
 # не запускаем (паритет с SH-гардом BASH_SOURCE == $0).
 # 6>$null: WARN разбора PS1 печатает через Write-Host (информационный поток), а
 # файл разбирается целиком при первом вызове — без этого WARN про ЛЮБОЙ ключ
@@ -206,7 +206,7 @@ PSEOF
     # cygpath — только в Git Bash; на Linux/macOS (pwsh стоит и там) путь идёт как есть,
     # иначе -File получал пустую строку и сюит падал на обеих POSIX-линиях CI.
     _rcc_ps_w=$(cygpath -w "$_rcc_ps" 2>/dev/null || echo "$_rcc_ps")
-    _rcc_gui_w=$(cygpath -w "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v20.ps1" 2>/dev/null || echo "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v20.ps1")
+    _rcc_gui_w=$(cygpath -w "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v21.ps1" 2>/dev/null || echo "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_win_v21.ps1")
     _rcc_out=$($PS_CMD -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$_rcc_ps_w" \
         -Cli "$RUN_PS1_WIN" -Gui "$_rcc_gui_w" 2>&1 | tr -d '\r')
     rm -f "$_rcc_ps"
@@ -252,7 +252,7 @@ fi
 # CMD: штатный хук --print-config печатает разобранные переменные и выходит.
 if cmd //c "exit 0" &>/dev/null; then
     # Полный windows-путь: cmd //c не наследует cwd bash-субоболочки.
-    RUN_CMD_WIN=$(cygpath -w "$FF_DIR/FFmpeg_Converter_run_v20.cmd" 2>/dev/null || echo "$FF_DIR/FFmpeg_Converter_run_v20.cmd")
+    RUN_CMD_WIN=$(cygpath -w "$FF_DIR/FFmpeg_Converter_run_v21.cmd" 2>/dev/null || echo "$FF_DIR/FFmpeg_Converter_run_v21.cmd")
     cmd_log=$(cmd //c "$RUN_CMD_WIN --print-config" 2>/dev/null | tr -d '\r' | grep '^log_file=' | head -1 | sed 's/^log_file=//')
     case "$cmd_log" in
         /*|[A-Za-z]:*) pass "CMD: log_file абсолютный" ;;
@@ -296,9 +296,9 @@ fi
 # службы — в неотслеживаемом и не закрытом .gitignore файле config.ini.parity-bak.
 if cmd //c "exit 0" &>/dev/null; then
     mkdir -p "$CFG_DIR/cmd"
-    cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v20.cmd" "$CFG_DIR/cmd/"
+    cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v21.cmd" "$CFG_DIR/cmd/"
     cp "$BOM_CFG" "$CFG_DIR/cmd/config.ini"
-    RUN_CMD_WIN=$(cygpath -w "$CFG_DIR/cmd/FFmpeg_Converter_run_v20.cmd" 2>/dev/null || echo "$CFG_DIR/cmd/FFmpeg_Converter_run_v20.cmd")
+    RUN_CMD_WIN=$(cygpath -w "$CFG_DIR/cmd/FFmpeg_Converter_run_v21.cmd" 2>/dev/null || echo "$CFG_DIR/cmd/FFmpeg_Converter_run_v21.cmd")
     cmd_src=$(cmd //c "$RUN_CMD_WIN --print-config" < /dev/null 2>/dev/null | tr -d '\r' | grep '^folder_sources=' | head -1 | sed 's/^folder_sources=//')
     assert_eq "CMD: [folders] source читается из файла с BOM" "C:/bom/in" "$cmd_src"
 else

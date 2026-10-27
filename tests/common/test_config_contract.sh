@@ -17,9 +17,9 @@ PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
 source "$TESTS_DIR/lib/framework.sh"
 
 YAML="$TESTS_DIR/config-key-contract.yaml"
-YT_SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v20.sh"
-YT_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v20.ps1"
-YT_CMD="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v20.cmd"
+YT_SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v21.sh"
+YT_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v21.ps1"
+YT_CMD="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v21.cmd"
 YT_EXAMPLE="$PROJECT_DIR/yt-dlp/config.ini.example"
 
 keys_of() { grep -oE '^[[:space:]]*[a-z_]+[[:space:]]*=' "$1" | sed 's/[[:space:]=]//g'; }
@@ -96,7 +96,7 @@ suite "contract: ffmpeg-исключения читаются, а не деко�
 # проверяемое — ключ, у которого поведение расходится между платформами, обязан
 # в «обделённой» платформе печатать [ПРЕДУПРЕЖДЕНИЕ] рядом с чтением. Иначе один
 # config.ini молча значит разное, что правило паритета и запрещает.
-FF_CMD_RUN="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v20.cmd"
+FF_CMD_RUN="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v21.cmd"
 FF_CMD_SCRIPT="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.cmd"
 FF_PS1_SCRIPT="$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1"
 
@@ -129,7 +129,7 @@ done < <(printf '%s
 _cmd_run_src="$(cat "$FF_CMD_RUN")"
 while IFS= read -r k; do
     [ -z "$k" ] && continue
-    assert_contains "remote-ключ '$k' читается в run_v20.cmd" "\"$k\"" "$_cmd_run_src"
+    assert_contains "remote-ключ '$k' читается в run_v21.cmd" "\"$k\"" "$_cmd_run_src"
 done < <(printf '%s
 ' "$ff_sh_ps1_only")
 assert_contains "CMD предупреждает о недоступности удалённого бэкенда"     "Удалённый бэкенд" "$_cmd_run_src"
@@ -141,7 +141,7 @@ ff_asr_only=$(yaml_list_after '    asr_sh_ps1_only_behavior:')
 assert_not_empty "контракт: список asr_sh_ps1_only_behavior (ffmpeg) не пуст" "$ff_asr_only"
 while IFS= read -r k; do
     [ -z "$k" ] && continue
-    assert_contains "asr-ключ '$k' читается в run_v20.cmd" "if /i \"!_key!\"==\"$k\" set \"asr_" "$_cmd_run_src"
+    assert_contains "asr-ключ '$k' читается в run_v21.cmd" "if /i \"!_key!\"==\"$k\" set \"asr_" "$_cmd_run_src"
 done < <(printf '%s\n' "$ff_asr_only")
 assert_contains "CMD отказывается при включённом распознавании" "Распознавание речи" "$_cmd_run_src"
 

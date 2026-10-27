@@ -1,5 +1,5 @@
-﻿$src      = Join-Path $PSScriptRoot 'Downloading_from_YouTube_v20.ps1'
-$out      = Join-Path $PSScriptRoot '_VideoDownloader_v20.exe'
+﻿$src      = Join-Path $PSScriptRoot 'Downloading_from_YouTube_v21.ps1'
+$out      = Join-Path $PSScriptRoot '_VideoDownloader_v21.exe'
 $tmpSrc   = Join-Path $PSScriptRoot '_build_tmp.ps1'
 $ps2exePs = Join-Path $PSScriptRoot '..\tools\ps2exe.ps1'
 $icon     = Join-Path $PSScriptRoot 'downloader.ico'
@@ -34,7 +34,7 @@ try {
         -noConsole `
         -STA `
         -x64 `
-        -title   "Video Downloader (yt-dlp) v20" `
+        -title   "Video Downloader (yt-dlp) v21" `
         -version $script:BuildVersion
 } catch {
     Write-Host "FAIL: $_"

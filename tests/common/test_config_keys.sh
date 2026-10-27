@@ -96,14 +96,14 @@ FF="$PROJECT_DIR/ffmpeg"
 assert_nonempty_keys "ffmpeg" "$FF/config.ini.example"
 while IFS= read -r pair; do
     [ -z "$pair" ] && continue
-    for plat in FFmpeg_Converter_run_v20.sh FFmpeg_Converter_run_v20.cmd FFmpeg_Converter_run_v20.ps1; do
+    for plat in FFmpeg_Converter_run_v21.sh FFmpeg_Converter_run_v21.cmd FFmpeg_Converter_run_v21.ps1; do
         if key_sec_is_read "$FF/$plat" "$pair"; then pass "ffmpeg '$pair' в $plat"
         else fail "ffmpeg '$pair' в $plat" "читается" "отсутствует"; fi
     done
 done < <(keys_sec_of "$FF/config.ini.example")
 
 # Негативная самопроверка: ключ, прочитанный в ДРУГОЙ секции, не засчитывается.
-if key_sec_is_read "$FF/FFmpeg_Converter_run_v20.sh" "nosuch/enabled"; then
+if key_sec_is_read "$FF/FFmpeg_Converter_run_v21.sh" "nosuch/enabled"; then
     fail "чтение [remote] enabled не засчитывается за [nosuch] enabled" "не засчитано" "засчитано"
 else
     pass "чтение [remote] enabled не засчитывается за [nosuch] enabled"
@@ -115,7 +115,7 @@ YT="$PROJECT_DIR/yt-dlp"
 assert_nonempty_keys "yt-dlp" "$YT/config.ini.example"
 while IFS= read -r key; do
     [ -z "$key" ] && continue
-    if key_is_read "$YT/Downloading_from_YouTube_v20.sh" "$key" || key_is_read "$YT/Downloading_from_YouTube_v20.ps1" "$key"; then
+    if key_is_read "$YT/Downloading_from_YouTube_v21.sh" "$key" || key_is_read "$YT/Downloading_from_YouTube_v21.ps1" "$key"; then
         pass "yt-dlp '$key' (есть читатель)"
     else
         fail "yt-dlp '$key' (есть читатель)" "читается в .sh или .ps1" "нигде не читается (мёртвый ключ)"

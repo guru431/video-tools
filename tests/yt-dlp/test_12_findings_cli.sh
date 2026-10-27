@@ -14,8 +14,8 @@ TESTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$(cd "$TESTS_DIR/.." && pwd)"
 source "$TESTS_DIR/lib/framework.sh"
 
-YT_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v20.ps1"
-YT_CMD="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v20.cmd"
+YT_PS1="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v21.ps1"
+YT_CMD="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v21.cmd"
 PS1_SRC="$(cat "$YT_PS1")"
 CMD_SRC="$(cat "$YT_CMD")"
 
@@ -157,7 +157,7 @@ suite "Y5 (SH): --no-playlist/--yes-playlist перекрывают [download] p
 # Подстановка флага стояла в load_config, а parse_args, который его задаёт, идёт
 # ПОСЛЕ load_config: флаг не действовал никогда, и --no-playlist на ссылке с
 # &list=RD… качал бесконечный авто-микс по playlist-шаблону.
-YT_SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v20.sh"
+YT_SH="$PROJECT_DIR/yt-dlp/Downloading_from_YouTube_v21.sh"
 CFG=$(mktemp_suffix /tmp/test_yt12c_ .ini)
 printf '%s\n' "[download]" "use_archive = false" "playlist = auto" > "$CFG"
 LIST_URL="https://www.youtube.com/watch?v=abc&list=RDabc"

@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
-# test_12_cmd_run_parser.sh — Парсер config.ini в FFmpeg_Converter_run_v20.cmd
-# Прогоняет run_v20.cmd с тестовым config.ini через хук --print-config
+# test_12_cmd_run_parser.sh — Парсер config.ini в FFmpeg_Converter_run_v21.cmd
+# Прогоняет run_v21.cmd с тестовым config.ini через хук --print-config
 # (печатает распарсенные переменные, не запуская script.cmd). Ловит баги:
 #   (а) детект секций через echo|findstr (пробел + якорь $ на piped input)
 #   (б) хвостовой пробел в ключе после "key = value" — ключи не матчатся
@@ -17,18 +17,18 @@ source "$TESTS_DIR/lib/framework.sh"
 
 # Проверяем доступность cmd (Git Bash на Windows)
 if ! cmd //c "exit 0" &>/dev/null; then
-    suite "CMD: парсер config.ini (run_v20)"
+    suite "CMD: парсер config.ini (run_v21)"
     skip "Все тесты парсера" "cmd.exe не доступен"
     summary
     exit 0
 fi
 
 # ══════════════════════════════════════════════════════════════
-suite "CMD: парсер config.ini (run_v20, --print-config)"
+suite "CMD: парсер config.ini (run_v21, --print-config)"
 # ══════════════════════════════════════════════════════════════
 
 TMP_DIR=$(mktemp -d /tmp/test_cmd_run_parser_XXXXXX)
-cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v20.cmd" "$TMP_DIR/"
+cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v21.cmd" "$TMP_DIR/"
 
 # Тестовый config.ini рядом с run-скриптом (run ищет его в каталоге скрипта).
 # quality имеет 5 хвостовых пробелов (баг г), codec пустой (баг д),
@@ -63,7 +63,7 @@ INIEOF
 # CRLF для cmd
 sed -i 's/$/\r/' "$TMP_DIR/config.ini"
 
-WIN_RUN=$(cygpath -w "$TMP_DIR/FFmpeg_Converter_run_v20.cmd")
+WIN_RUN=$(cygpath -w "$TMP_DIR/FFmpeg_Converter_run_v21.cmd")
 WIN_TMP=$(cygpath -w "$TMP_DIR")
 
 output=$(cmd //c "$WIN_RUN --print-config" < /dev/null 2>&1)
@@ -233,19 +233,19 @@ suite "CMD: '!' в пути каталога скрипта не теряетс�
 # delayed expansion, что у настоящего script.cmd).
 BANG_DIR="$TMP_DIR/dir"'!'"bang"
 mkdir -p "$BANG_DIR"
-cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v20.cmd" "$BANG_DIR/"
+cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v21.cmd" "$BANG_DIR/"
 : > "$BANG_DIR/ffmpeg.exe"
 printf '[audio]\r\ncodec = +opus\r\n[folders]\r\ndestination = outdir\r\n' > "$BANG_DIR/config.ini"
 printf '@echo off\r\necho STUB ffmpeg=!ffmpeg!\r\necho STUB dst=!folder_destination!\r\n' > "$BANG_DIR/FFmpeg_Converter_script.cmd"
 WIN_BANG=$(cygpath -w "$BANG_DIR")
-bang_out=$(cmd //c "$WIN_BANG\\FFmpeg_Converter_run_v20.cmd --print-config" < /dev/null 2>&1 | tr -d '\r')
+bang_out=$(cmd //c "$WIN_BANG\\FFmpeg_Converter_run_v21.cmd --print-config" < /dev/null 2>&1 | tr -d '\r')
 assert_eq "config.ini рядом со скриптом прочитан" "audio_codec=:+:opus" \
     "$(printf '%s\n' "$bang_out" | grep '^audio_codec=' | head -1)"
 assert_eq "относительный destination резолвится в каталог с '!'" "folder_destination=$WIN_BANG\\outdir" \
     "$(printf '%s\n' "$bang_out" | grep '^folder_destination=' | head -1)"
 assert_eq "относительный log_file резолвится в каталог с '!'" "log_file=$WIN_BANG\\ffmpeg_convert.log" \
     "$(printf '%s\n' "$bang_out" | grep '^log_file=' | head -1)"
-bang_run=$(cmd //c "$WIN_BANG\\FFmpeg_Converter_run_v20.cmd" < /dev/null 2>&1 | tr -d '\r')
+bang_run=$(cmd //c "$WIN_BANG\\FFmpeg_Converter_run_v21.cmd" < /dev/null 2>&1 | tr -d '\r')
 assert_contains "ffmpeg.exe рядом со скриптом найден" "STUB ffmpeg=$WIN_BANG\\ffmpeg.exe" "$bang_run"
 assert_contains "script.cmd рядом со скриптом вызван" "STUB dst=$WIN_BANG\\outdir" "$bang_run"
 
@@ -277,14 +277,14 @@ suite "CMD: script.cmd не найден — причина, пауза, код 
 # сразу — здесь это и проверяется: прогон не зависает).
 LONE_DIR="$TMP_DIR/lone"
 mkdir -p "$LONE_DIR"
-cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v20.cmd" "$LONE_DIR/"
-cmd //c "$(cygpath -w "$LONE_DIR")\\FFmpeg_Converter_run_v20.cmd" < /dev/null > "$TMP_DIR/lone.out" 2>&1
+cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v21.cmd" "$LONE_DIR/"
+cmd //c "$(cygpath -w "$LONE_DIR")\\FFmpeg_Converter_run_v21.cmd" < /dev/null > "$TMP_DIR/lone.out" 2>&1
 lone_rc=$?
 lone_out=$(tr -d '\r' < "$TMP_DIR/lone.out")
 assert_eq       "script.cmd не найден — код 1"   "1"                                   "$lone_rc"
 assert_contains "script.cmd не найден — причина" "не найден FFmpeg_Converter_script.cmd" "$lone_out"
 # Текст приглашения pause зависит от языка Windows — паузу ищем в исходнике.
-lone_src=$(grep -A4 'не найден FFmpeg_Converter_script.cmd' "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v20.cmd" | tr -d '\r')
+lone_src=$(grep -A4 'не найден FFmpeg_Converter_script.cmd' "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v21.cmd" | tr -d '\r')
 assert_contains "script.cmd не найден — пауза перед выходом" $'\tpause\n\texit /b 1' "$lone_src"
 
 rm -rf "$TMP_DIR"

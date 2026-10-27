@@ -1,6 +1,6 @@
-﻿$src       = Join-Path $PSScriptRoot 'FFmpeg_Converter_run_win_v20.ps1'
+﻿$src       = Join-Path $PSScriptRoot 'FFmpeg_Converter_run_win_v21.ps1'
 $scriptPs1 = Join-Path $PSScriptRoot 'FFmpeg_Converter_script.ps1'
-$out       = Join-Path $PSScriptRoot '_VideoConverter_v20.exe'
+$out       = Join-Path $PSScriptRoot '_VideoConverter_v21.exe'
 $ps2exePs  = Join-Path $PSScriptRoot '..\tools\ps2exe.ps1'
 $tmpSrc    = Join-Path $PSScriptRoot '_build_tmp.ps1'
 $icon      = Join-Path $PSScriptRoot 'converter.ico'
@@ -80,7 +80,7 @@ try {
         -noConsole `
         -STA `
         -x64 `
-        -title   "Video Converter (ffmpeg) v20" `
+        -title   "Video Converter (ffmpeg) v21" `
         -version $script:BuildVersion
 } catch {
     Write-Host "FAIL: $_"

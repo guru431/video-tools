@@ -1,11 +1,11 @@
 #!/bin/bash
 # Тест дот-сорсит настоящий модуль: переменные asr_*, которые здесь только
 # присваиваются, читает он (SC2034); а те, что выставляет дот-сорснутый
-# run_v20.sh, shellcheck не видит (SC2154).
+# run_v21.sh, shellcheck не видит (SC2154).
 # shellcheck disable=SC2034,SC2154
 # ============================================================
 # test_25_asr_client.sh — клиент распознавания речи (.sh): ключи [asr] в
-# run_v20.sh, адреса, пределы сервера, план частей, аргументы curl, исходы,
+# run_v21.sh, адреса, пределы сервера, план частей, аргументы curl, исходы,
 # выбор адреса и запрос через мок curl, сборка текста и JSON из общих фикстур
 # tests/fixtures/asr (те же ожидаемые .txt сверяет test_26 для .ps1).
 # ============================================================
@@ -23,9 +23,9 @@ TAB=$'\t'
 _join() { local IFS='|'; JOINED="$*"; }
 
 # ══════════════════════════════════════════════════════════════
-suite "ключи [asr] читаются в run_v20.sh"
+suite "ключи [asr] читаются в run_v21.sh"
 # ══════════════════════════════════════════════════════════════
-cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v20.sh" "$WORK/run.sh"
+cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v21.sh" "$WORK/run.sh"
 printf '%s\n' '[asr]' 'enabled = yes' 'endpoint = ${FF_T_ASR_UNSET} https://b.example:30010/' \
     'api_key = k1' 'api_key_command = printf k2' 'pinned_pubkey = sha256//AAA=' \
     'language = en' 'diarize = no' 'num_speakers = 3' > "$WORK/config.ini"

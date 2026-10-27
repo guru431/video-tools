@@ -677,7 +677,10 @@ $btnCheckUpdate.Add_Click({
             $proxyUri = "${proxyScheme}://${pHost}"
             if (-not [string]::IsNullOrWhiteSpace($pPort)) { $proxyUri += ":${pPort}" }
             $webArgs.Proxy = $proxyUri
-            if (-not [string]::IsNullOrWhiteSpace($textProxyUser.Text)) {
+            # Кредиты — только парой, как у Join-ProxyUrl для загрузки: логин без пароля
+            # ронял ConvertTo-SecureString на пустой строке, и вместо проверки было
+            # «ошибка запроса».
+            if (-not [string]::IsNullOrWhiteSpace($textProxyUser.Text) -and -not [string]::IsNullOrWhiteSpace($textProxyPass.Text)) {
                 $webArgs.ProxyCredential = New-Object System.Management.Automation.PSCredential(
                     $textProxyUser.Text,
                     (ConvertTo-SecureString $textProxyPass.Text -AsPlainText -Force)
@@ -2082,8 +2085,9 @@ $btnStart.Add_Click({
             }
             # Очистка манифеста — на ЛЮБОМ исходе итерации, а не только при
             # exitCode = 0: на каждом ненулевом коде (плейлист с одним битым
-            # элементом под -i, Stop, исключение) в %TEMP% оставался файл
-            # ytdlp_manifest_<guid>.txt.
+            # элементом под -i, Stop) в %TEMP% оставался файл
+            # ytdlp_manifest_<guid>.txt. Исключение уводит мимо этой строки —
+            # его манифест удаляет finally обработчика.
             if ($dlManifest) { Remove-Item -LiteralPath $dlManifest -Force -ErrorAction SilentlyContinue }
             $itemIdx++
         } # конец while
@@ -2116,6 +2120,8 @@ $btnStart.Add_Click({
         # ссылки, поэтому здесь очистка сработает только на пути исключения.
         if ($evtOut) { Unregister-Event -SourceIdentifier $evtOut.Name -ErrorAction SilentlyContinue; $evtOut | Remove-Job -Force -ErrorAction SilentlyContinue }
         if ($evtErr) { Unregister-Event -SourceIdentifier $evtErr.Name -ErrorAction SilentlyContinue; $evtErr | Remove-Job -Force -ErrorAction SilentlyContinue }
+        # Манифест итерации, прерванной исключением (штатный путь его уже удалил).
+        if ($dlManifest) { Remove-Item -LiteralPath $dlManifest -Force -ErrorAction SilentlyContinue }
         $btnStart.Enabled      = $true
         $btnStop.Enabled       = $false
         $btnRemoveUrl.Enabled  = $true

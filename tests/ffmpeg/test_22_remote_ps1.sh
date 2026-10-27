@@ -117,6 +117,35 @@ assert_contains "хеш отправлен" '"sha256"' "$_out"
 # Тот же вход, что в .sh-тесте: хеш обязан совпасть на обеих платформах.
 assert_not_contains "хеш не пустой" '"sha256":""' "$_out"
 assert_contains "длительность из complete запомнена" "DUR=" "$_out"
+# sha256 считается тем же проходом, что и отправка (Get-FileHash читал исходник
+# второй раз): значение обязано совпасть с хешем файла. При докачке префикс уже у
+# службы — он читается только ради хеша, и complete несёт хеш ВСЕГО файла.
+_sha_x="$(sha256sum "$_payload" | cut -d' ' -f1)"
+assert_contains "хеш — sha256 всего файла" "\"sha256\":\"$_sha_x\"" "$_out"
+cat > "$_harness" <<PSEOF
+. '$MODULE'
+\$script:calls = New-Object System.Collections.ArrayList
+function Read-RemoteUploadSidecar { return 'up-55' }
+function Test-RemoteUploadSidecarCompleted { return \$false }
+function Invoke-RemoteHttp {
+	param([string]\$Method, [string]\$Path, [string]\$Body = '',
+	      [hashtable]\$Headers = @{}, [string]\$OutFile = '',
+	      [byte[]]\$InBytes = \$null, [int]\$TimeoutMs = 60000)
+	\$range = if (\$Headers.ContainsKey('Content-Range')) { \$Headers['Content-Range'] } else { '' }
+	[void]\$script:calls.Add("\$Method \$Path \$range \$Body")
+	if (\$Method -eq 'GET' -and \$Path -eq '/uploads/up-55') { return [pscustomobject]@{ Code = 200; Body = '{"received":2048}' } }
+	return [pscustomobject]@{ Code = 200; Body = '{}' }
+}
+\$script:RemoteChunkSize = 1024
+\$uid = Send-RemoteUpload '$_payload_win'
+Write-Output "UID=\$uid"
+\$script:calls | ForEach-Object { Write-Output \$_ }
+PSEOF
+_out="$("$PS_BIN" -NoProfile -NonInteractive -File "$_harness" 2>&1 | tr -d '\r')"
+assert_contains "докачка: отправлен только хвост" "bytes 2048-2999/3000" "$_out"
+assert_not_contains "докачка: принятое службой не отправлено" "bytes 0-1023/3000" "$_out"
+assert_contains "докачка: хеш всего файла, не хвоста" "\"sha256\":\"$_sha_x\"" "$_out"
+assert_not_contains "второго прохода по исходнику ради хеша нет" 'Get-FileHash -LiteralPath $Path' "$(cat "$MODULE")"
 rm -f "$_harness" "$_payload"
 
 # ══════════════════════════════════════════════════════════════

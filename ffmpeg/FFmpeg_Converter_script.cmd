@@ -499,7 +499,8 @@ if not "%merge_files%"=="yes" if not "%extract_audio_copy%"=="yes" if not "%crea
 	rem поэтому любые ( ) в этом участке закрыли бы скобочный блок и дали
 	rem «was unexpected at this time». Суффикс кладём в простую переменную $sfx —
 	rem подстановка $(...) внутри \"...\" здесь недопустима.
-	powershell -NoProfile -Command "$e=$env:FFCONV_EXTS.Split(','); $src=$env:FFCONV_SRC; $dst=$env:FFCONV_DST; $sfx=$env:FFCONV_PART_SUFFIX; Get-ChildItem -LiteralPath $src -Recurse -File | Where-Object { $e -contains $_.Extension.TrimStart('.') -and -not $_.Name.StartsWith('.ffconv-partial-') } | ForEach-Object { $dir = ($_.DirectoryName + '\') -replace [regex]::Escape($src), ''; $n = if ($env:FFCONV_SAVE_OLD -eq 'yes') { $_.Name } else { $_.BaseName }; $f = if ($env:FFCONV_COPY_CODECS -eq 'yes') { $_.Extension.TrimStart('.') } else { $env:FFCONV_FMT_OUT }; [System.IO.Path]::GetFullPath(\"$dst$dir$n$sfx.$f\").ToLowerInvariant() } | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name }" > "!_col_file!" 2>nul
+	rem Источник — корень диска (D:\): ведущий '\' подпапки возвращается, как в :process_file.
+	powershell -NoProfile -Command "$e=$env:FFCONV_EXTS.Split(','); $src=$env:FFCONV_SRC; $dst=$env:FFCONV_DST; $sfx=$env:FFCONV_PART_SUFFIX; Get-ChildItem -LiteralPath $src -Recurse -File | Where-Object { $e -contains $_.Extension.TrimStart('.') -and -not $_.Name.StartsWith('.ffconv-partial-') } | ForEach-Object { $dir = ($_.DirectoryName + '\') -replace [regex]::Escape($src), ''; if ($src.EndsWith('\') -and -not $dir.StartsWith('\')) { $dir = '\' + $dir }; $n = if ($env:FFCONV_SAVE_OLD -eq 'yes') { $_.Name } else { $_.BaseName }; $f = if ($env:FFCONV_COPY_CODECS -eq 'yes') { $_.Extension.TrimStart('.') } else { $env:FFCONV_FMT_OUT }; [System.IO.Path]::GetFullPath(\"$dst$dir$n$sfx.$f\").ToLowerInvariant() } | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name }" > "!_col_file!" 2>nul
 	if not exist "!_col_file!" (
 		rem PowerShell недоступен — карту построить нечем. Явно говорим об этом, а не
 		rem делаем вид, что конфликтов нет.
@@ -665,6 +666,10 @@ rem а goto из тела for обрывал бы перечисление фа�
 		if "%save_old_extension%"=="yes" (set "file_name=!pf_nx!")
 
 		set "file_path=!file_path:%folder_sources%=!"
+		rem Корень диска (source = D:\) norm_folder оставляет с '\', и вычитание съедало
+		rem ведущий разделитель: выход уезжал в "D:\outsub\movie.mp4". Возвращаем его —
+		rem как _src_prefix_len в .sh и DirectoryName + '\' карты коллизий.
+		if "%folder_sources:~-1%"=="\" set "file_path=\!file_path!"
 		call set "file_path=!file_path:%%=%%%%!"
 		rem D7. Dry-run только печатает команды — каталоги зеркала не создаём. Иначе
 		rem «безопасный» прогон оставлял дерево пустых подпапок в destination (и маскировал
@@ -712,8 +717,13 @@ rem а goto из тела for обрывал бы перечисление фа�
 			rem а не пропускает молча (раньше пропуск был безусловным).
 			rem D7. Удаление — мутация; при dry_run её делать нельзя, иначе режим, обещающий лишь
 			rem показать команду, реально уничтожает данные (ffmpeg -y ниже и так перезапишет).
+			rem Пропуск — только готовый выход без overwrite (как в .sh/.ps1). Ворота «выхода
+			rem нет» после del при dry_run пропускали файл: del там не выполняется, и холостой
+			rem прогон с overwrite_existing=yes рапортовал «пропущено» вместо команды.
+			set "_ea_skip="
+			if exist "!out_audio!" if not "%overwrite_existing%"=="yes" set "_ea_skip=1"
 			if exist "!out_audio!" if "%overwrite_existing%"=="yes" if not "%dry_run%"=="yes" del "!out_audio!"
-			if not exist "!out_audio!" (
+			if not defined _ea_skip (
 				if "%dry_run%"=="yes" (
 					echo [DRY-RUN] "!ffmpeg!" -hide_banner -nostdin -strict -2 -i "!full_path!" -vn -c:a copy "!out_audio!" -y
 				) else (
@@ -737,6 +747,10 @@ rem а goto из тела for обрывал бы перечисление фа�
 		if "%create_frame%"=="yes" (
 			set "frame_dir=%folder_destination%!file_path!!file_name!"
 			set "frame_done=!frame_dir!\.frames_complete"
+			rem Шаблон image2: '%' из пути удваивается (как в .sh/.ps1), иначе «50% off»
+			rem даёт «% o» в шаблоне, и ffmpeg отвергает его на каждом таком файле.
+			set "frame_pat=!frame_dir!\!file_name!"
+			set "frame_pat=!frame_pat:%%=%%%%!"
 			rem Готовность каталога кадров — по маркеру завершения, а не по факту существования:
 			rem прерванный прогон оставлял частичный каталог, который молча пропускался.
 			set "_frame_skip="
@@ -745,7 +759,7 @@ rem а goto из тела for обрывал бы перечисление фа�
 				set /a "total_skip+=1"
 			) else (
 				if "%dry_run%"=="yes" (
-					echo [DRY-RUN] "!ffmpeg!" -hide_banner -nostdin -strict -2 -i "!full_path!" -r 1/1 "!frame_dir!\!file_name!_%%05d.png"
+					echo [DRY-RUN] "!ffmpeg!" -hide_banner -nostdin -strict -2 -i "!full_path!" -r 1/1 "!frame_pat!_%%05d.png"
 				) else (
 					rem Частичный каталог прошлого прогона удаляем, но ТОЛЬКО если он наш (маркер
 					rem начала или завершения внутри; пустой безопасен). Раньше сносился ЛЮБОЙ
@@ -766,7 +780,7 @@ rem а goto из тела for обрывал бы перечисление фа�
 						md "!frame_dir!" 2>nul
 						type nul > "!frame_dir!\.frames_partial"
 						echo [INFO] Извлечение кадров: !full_path!& call :log_msg "INFO" "Извлечение кадров: !full_path!"
-						"!ffmpeg!" -hide_banner -nostdin -strict -2 -i "!full_path!" -r 1/1 "!frame_dir!\!file_name!_%%05d.png"
+						"!ffmpeg!" -hide_banner -nostdin -strict -2 -i "!full_path!" -r 1/1 "!frame_pat!_%%05d.png"
 						if errorlevel 1 (
 							echo [FAIL] !full_path!& call :log_msg "FAIL" "!full_path!"
 							if exist "!frame_dir!\" rd /s /q "!frame_dir!"
@@ -1257,13 +1271,15 @@ if not defined hw_candidate (
 	exit /b 0
 )
 
-rem Якорим имя по границе столбца: пробел слева и конец строки справа, иначе
-rem av1_nvenc матчился бы внутри av1_nvenc_hypothetical.
+rem Якорим имя по границе столбца — пробел с обеих сторон, иначе av1_nvenc
+rem матчился бы внутри av1_nvenc_hypothetical. Справа пробел, а не конец строки:
+rem ffmpeg печатает имя колонкой с описанием после него, и якорь `$` не совпадал
+rem НИКОГДА — GPU не включался ни на одной сборке. /l — имя не регэксп.
 set "encoder_check="
 rem Кавычки: `""!ffmpeg!"` — обёртка пути с пробелами; закрывающих кавычек ДВЕ —
 rem одна закрывает аргумент findstr, вторая внешнюю обёртку (иначе "The syntax of
 rem the command is incorrect" ещё до запуска ffmpeg).
-for /f "tokens=*" %%i in ('""!ffmpeg!" -encoders 2^>^&1 ^| findstr /r /c:" !hw_candidate!$""') do set "encoder_check=%%i"
+for /f "tokens=*" %%i in ('""!ffmpeg!" -encoders 2^>^&1 ^| findstr /l /c:" !hw_candidate! ""') do set "encoder_check=%%i"
 if not defined encoder_check (
 	echo [ПРЕДУПРЕЖДЕНИЕ] Энкодер !hw_candidate! отсутствует в данной сборке ffmpeg. Используется программное кодирование.
 	exit /b 0

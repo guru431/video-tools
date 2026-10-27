@@ -498,7 +498,9 @@ function Write-AsrTranscript {
 		$lines.Add("# Частей: $np по ≈$(Format-AsrTs $PartLen) — метки говорящих в разных частях независимы")
 	}
 	$lowTail = if ($low -gt 0) { '; первые: ' + ($lowList -join ', ') } else { '' }
-	$lines.Add("# Сомнительных сегментов (confidence < 0.6): $low$lowTail")
+	# Порог — из той же константы, что и отбор: литерал в шапке разошёлся бы с ним молча.
+	# Интерполяция числа в PowerShell культуронезависима — «0.6», как у awk в .sh.
+	$lines.Add("# Сомнительных сегментов (confidence < $($script:AsrLowConfidence)): $low$lowTail")
 	if ($bad.Count -gt 0) { $lines.Add('# Этапы с ошибкой: ' + ($bad -join ', ')) }
 	foreach ($w in $warn) { $lines.Add("# Предупреждение: $w") }
 	$lines.Add('')
@@ -572,6 +574,9 @@ function Invoke-AsrFile {
 	$outDir = "$folder_destination$(Get-RelDir $File.DirectoryName)"
 	$outTxt = "$outDir$stem.txt"; $outJson = "$outDir$stem.asr.json"
 	# Get-CollisionKey конвертера: регистр опускается только там, где его не различает ФС.
+	# Ключ занимается и тогда, когда файл ниже пропускается как готовый: иначе второй
+	# вход на тот же <stem>.txt «пропустился» бы по чужой расшифровке, а конфликт
+	# зависел бы от того, лежит ли .txt с прошлого прогона. Паритет с asr_file (.sh).
 	$claim = Get-CollisionKey (Get-CanonPath $outTxt)
 	if ($script:AsrClaimed.ContainsKey($claim)) {
 		Write-AsrFileFail $name "конфликт выходов — «$stem.txt» уже занят другим входом (включите save_old_extension = yes либо разнесите файлы)"

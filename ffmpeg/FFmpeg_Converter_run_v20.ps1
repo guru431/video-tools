@@ -223,6 +223,9 @@ function Invoke-FfconvDoctor {
 	$rc = 0
 	$p = $null
 	try { $p = (Get-Command $ffmpeg -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source } catch {}
+	# Get-Command читает путь как шаблон: из каталога с непарной «[» он бросает,
+	# и ffmpeg.exe рядом со скриптом объявлялся отсутствующим. Как в доктор-кнопке GUI.
+	if (-not $p -and (Test-Path -LiteralPath $ffmpeg -PathType Leaf)) { $p = $ffmpeg }
 	if ($p) {
 		$v = ''
 		try { $v = "$(& $p -version 2>$null | Select-Object -First 1)" } catch {}

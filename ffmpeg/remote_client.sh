@@ -1344,6 +1344,9 @@ remote_wait() {
 			last_change="${EPOCHSECONDS:-$(date +%s)}"
 		fi
 		polls=$((polls + 1))
+		# Тестовый хук: «прекратить наблюдение после N опросов». Задачу он сознательно
+		# НЕ отменяет — test_21 так проверяет, что ожидание карты до порога не отменено
+		# (DELETE в логе мока был бы от самого хука). В конфиге и документах его нет.
 		if [ -n "${REMOTE_WAIT_MAX_POLLS:-}" ] && [ "$polls" -ge "$REMOTE_WAIT_MAX_POLLS" ]; then
 			printf "\n"; REMOTE_CURRENT_JOB=""; return 1
 		fi

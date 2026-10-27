@@ -316,6 +316,19 @@ PATH="/c/Windows/System32/WindowsPowerShell/v1.0" "$_ps_abs" -NoProfile -NonInte
 _rc=$?; _co="$(tr -d '\r' < "$WORK/cli.raw")"
 assert_eq "--doctor без ffmpeg — код 1" "1" "$_rc"
 assert_contains "--doctor без ffmpeg — сказано, что не работает" "КОНВЕРТАЦИЯ НЕВОЗМОЖНА" "$_co"
+# ffmpeg.exe рядом, каталог с непарной «[»: Get-Command читает путь как шаблон и
+# бросает, а доклад объявлял ffmpeg отсутствующим. -File из такого каталога PowerShell
+# не запускает вовсе — только `&` из сессии. Файл-пустышка: версию доклад не прочтёт
+# и покажет путь.
+mkdir -p "$WORK/br[x"
+cp "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v20.ps1" "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1" "$WORK/br[x/"
+: > "$WORK/br[x/ffmpeg.exe"
+PATH="/c/Windows/System32/WindowsPowerShell/v1.0" "$_ps_abs" -NoProfile -NonInteractive -ExecutionPolicy Bypass \
+    -Command "Set-Location -LiteralPath '$(_w "$WORK/br[x")'; & '.\FFmpeg_Converter_run_v20.ps1' --doctor; exit \$LASTEXITCODE" \
+    > "$WORK/cli.raw" 2>&1 < /dev/null
+_rc=$?; _co="$(tr -d '\r' < "$WORK/cli.raw")"
+assert_eq "--doctor, каталог с «[»: ffmpeg рядом найден — код 0" "0" "$_rc"
+assert_not_contains "--doctor, каталог с «[»: ffmpeg не объявлен отсутствующим" "КОНВЕРТАЦИЯ НЕВОЗМОЖНА" "$_co"
 
 # Воркера рядом нет: причина, код 1 и пауза только при интерактивном stdin (как у
 # ранних отказов воркера; Pause-Prompt живёт в ненайденном файле). Без -NonInteractive:

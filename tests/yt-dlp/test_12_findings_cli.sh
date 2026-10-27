@@ -176,6 +176,22 @@ assert_contains     "CLI перекрывает playlist = single"      "--yes-p
 assert_not_contains "CLI перекрывает: --no-playlist не идёт" "--no-playlist"   "$out"
 out=$(dry_cmd "$LIST_URL")
 assert_contains     "без флага действует config.ini"         "--no-playlist"   "$out"
-rm -f "$CFG"
+
+# ══════════════════════════════════════════════════════════════
+suite "Y6 (SH): --cookie-file/--cookie-browser без --cookies включают свой способ"
+# ══════════════════════════════════════════════════════════════
+# Флаги задавали только путь и браузер, а способ оставался из config.ini (по
+# умолчанию none): `--cookie-file c.txt URL` молча шёл без cookies.
+CK=$(mktemp_suffix /tmp/test_yt12d_ .txt)
+printf '%s\n' "[cookies]" "method = none" > "$CFG"
+out=$(dry_cmd --cookie-file "$CK" "$LIST_URL")
+assert_contains     "--cookie-file один → cookies из файла"  "--cookies $CK" "$out"
+out=$(dry_cmd --cookie-browser firefox "$LIST_URL")
+assert_contains     "--cookie-browser один → из браузера"    "--cookies-from-browser firefox" "$out"
+out=$(dry_cmd --cookies none --cookie-file "$CK" "$LIST_URL")
+assert_not_contains "явный --cookies none главнее"           "--cookies" "$out"
+out=$(dry_cmd --cookie-file "$CK" --cookies browser "$LIST_URL")
+assert_contains     "явный --cookies browser главнее файла"  "--cookies-from-browser" "$out"
+rm -f "$CFG" "$CK"
 
 summary

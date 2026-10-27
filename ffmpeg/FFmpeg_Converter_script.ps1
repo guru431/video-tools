@@ -976,17 +976,21 @@ function Get-ManifestOutputs {
 function Remove-ManifestOutputs {
 	param([string[]]$OldOutputs, [string]$ManifestPath, [string]$Source, [string]$Ext, [string[]]$NewOutputs)
 	if (-not $OldOutputs -or $OldOutputs.Count -eq 0) { return }
-	$mfDir = [System.IO.Path]::GetDirectoryName((Get-CanonPath $ManifestPath))
-	$canonIn = Get-CanonPath $Source
-	$newKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-	foreach ($n in $NewOutputs) { if ($n) { [void]$newKeys.Add((Get-CanonPath $n)) } }
+	# Сравнения — по Get-CollisionKey, как в purge_manifest_outputs (.sh): регистр не
+	# значим только там, где его не различает ФС. Безусловный -ieq на Linux считал
+	# старый X.mp4 тем же файлом, что новый x.mp4, и устаревший выход оставался.
+	$mfDir = Get-CollisionKey ([System.IO.Path]::GetDirectoryName((Get-CanonPath $ManifestPath)))
+	$inKey = Get-CollisionKey (Get-CanonPath $Source)
+	$extKey = Get-CollisionKey ".$Ext"
+	$newKeys = New-CollisionMap
+	foreach ($n in $NewOutputs) { if ($n) { $newKeys[(Get-CollisionKey (Get-CanonPath $n))] = $true } }
 	foreach ($p in $OldOutputs) {
 		if (-not $p -or !(Test-Path -LiteralPath $p -PathType Leaf)) { continue }
-		$canonP = Get-CanonPath $p
-		if ([System.IO.Path]::GetDirectoryName($canonP) -ine $mfDir) { continue }
-		if ($canonP -ieq $canonIn) { continue }
-		if ([System.IO.Path]::GetExtension($canonP) -ine ".$Ext") { continue }
-		if ($newKeys.Contains($canonP)) { continue }
+		$key = Get-CollisionKey (Get-CanonPath $p)
+		if ([System.IO.Path]::GetDirectoryName($key) -cne $mfDir) { continue }
+		if ($key -ceq $inKey) { continue }
+		if ([System.IO.Path]::GetExtension($key) -cne $extKey) { continue }
+		if ($newKeys.ContainsKey($key)) { continue }
 		if ($dry_run -eq "yes") {
 			Log-Msg "INFO" "[DRY-RUN] после успешного кодирования был бы удалён выход прошлого прогона: $p"
 		} else {

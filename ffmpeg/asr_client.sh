@@ -647,7 +647,7 @@ END {
 		print "# Говорящих по частям: " spkh > out
 		print "# Частей: " part " по ≈" ts(ENVIRON["ASR_R_PLEN"] + 0) " — метки говорящих в разных частях независимы" > out
 	}
-	print "# Сомнительных сегментов (confidence < 0.6): " low (low > 0 ? "; первые: " lowlist : "") > out
+	print "# Сомнительных сегментов (confidence < " lowthr "): " low (low > 0 ? "; первые: " lowlist : "") > out
 	if (bad != "") print "# Этапы с ошибкой: " bad > out
 	for (j = 1; j <= nwarn; j++) print "# Предупреждение: " WARN[j] > out
 	print "" > out

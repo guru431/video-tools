@@ -765,8 +765,23 @@ function Send-RemoteUpload {
 		Write-RemoteUploadSidecar -UploadId $uid -Size $size -Source $Path
 	}
 
+	# sha256 для complete считается тем же проходом, что и отправка: Get-FileHash
+	# после неё читал многогигабайтный исходник с сетевой шары второй раз целиком.
+	# При докачке префикс [0, offset) уже у службы — его читаем только ради хеша.
+	$hasher = [System.Security.Cryptography.SHA256]::Create()
 	$fs = [System.IO.File]::OpenRead($Path)
 	try {
+		$hb = New-Object byte[] 1048576
+		$pos = [int64]0
+		while ($pos -lt $offset) {
+			$n = $fs.Read($hb, 0, [int][Math]::Min([int64]$hb.Length, $offset - $pos))
+			if ($n -le 0) {
+				Write-Host "[ОШИБКА] Прочитано $pos байт вместо $offset при подсчёте sha256 — отправка прервана."
+				return $null
+			}
+			[void]$hasher.TransformBlock($hb, 0, $n, $null, 0)
+			$pos += $n
+		}
 		while ($offset -lt $size) {
 			# Имя $take, а не $this: $this в PowerShell зарезервировано за текущим
 			# объектом в блоках-методах, и присваивание ему читается как ошибка.
@@ -790,6 +805,7 @@ function Send-RemoteUpload {
 				Write-Host "[ОШИБКА] Прочитано $read байт вместо $take со смещения $offset — отправка прервана."
 				return $null
 			}
+			[void]$hasher.TransformBlock($buf, 0, $take, $null, 0)
 			$tries = if ($env:REMOTE_UPLOAD_RETRIES) { [int]$env:REMOTE_UPLOAD_RETRIES } else { 3 }
 			$sent = $false
 			for ($try = 1; $try -le $tries; $try++) {
@@ -818,9 +834,10 @@ function Send-RemoteUpload {
 				return $null
 			}
 		}
-	} finally { $fs.Dispose() }
+		[void]$hasher.TransformFinalBlock((New-Object byte[] 0), 0, 0)
+		$sha = ([System.BitConverter]::ToString($hasher.Hash) -replace '-', '').ToLower()
+	} finally { $fs.Dispose(); $hasher.Dispose() }
 
-	$sha = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLower()
 	# complete заставляет службу посчитать sha256 всего файла: на 20 ГБ это минуты,
 	# и штатных 60 с не хватало — клиент получал «HTTP 0» после полностью
 	# отправленных гигабайт, а sidecar (см. выше) загонял следующий запуск в тот же

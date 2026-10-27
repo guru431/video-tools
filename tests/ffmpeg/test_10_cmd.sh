@@ -358,9 +358,11 @@ RESOLVE_HW_SRC=$(awk '/^:resolve_hw/{f=1} f&&/^:build_atempo/{exit} f{print}' "$
 if [ -z "$RESOLVE_HW_SRC" ]; then
     fail "CMD: подпрограмма :resolve_hw найдена в production-файле" "найдена" "не найдена"
 fi
-# Mock ffmpeg.cmd: печатает список энкодеров (имя в конце строки — под якорь `$` findstr).
+# Mock ffmpeg.cmd: печатает список энкодеров, как настоящий ffmpeg, — имя колонкой и
+# описание после него. Прежний мок печатал имя в конце строки, под якорь `$` findstr,
+# и тест был зелёным, хотя с настоящим ffmpeg GPU в CMD не включался никогда.
 MOCK_FF=$(mktemp_suffix /tmp/test_ffmock_ .cmd)
-printf '@echo off\r\necho  V..... libx264\r\necho  V..... libx265\r\necho  V..... libsvtav1\r\nfor %%%%e in (%%MOCK_ENC%%) do echo  V....D %%%%e\r\nexit /b 0\r\n' > "$MOCK_FF"
+printf '@echo off\r\necho  V..... libx264              libx264 H.264\r\necho  V..... libx265              libx265 H.265\r\necho  V..... libsvtav1            SVT-AV1\r\nfor %%%%e in (%%MOCK_ENC%%) do echo  V....D %%%%e           GPU encoder (codec x)\r\nexit /b 0\r\n' > "$MOCK_FF"
 MOCK_FF_WIN=$(cygpath -w "$MOCK_FF" 2>/dev/null || echo "$MOCK_FF" | sed 's|/c/|C:/|;s|/|\\|g')
 
 resolve_hw_cmd() {

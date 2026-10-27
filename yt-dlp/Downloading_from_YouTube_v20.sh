@@ -1465,8 +1465,8 @@ COOKIES:
   --cookies browser            Извлечь cookies из браузера (Chrome по умолчанию)
   --cookies file               Использовать cookies из файла
   --cookies none               Без cookies (по умолчанию)
-  --cookie-browser NAME        Браузер: chrome, firefox, edge
-  --cookie-file PATH           Путь к файлу cookies
+  --cookie-browser NAME        Браузер: chrome, firefox, edge (без --cookies — browser)
+  --cookie-file PATH           Путь к файлу cookies (без --cookies — file)
 
 ПРОКСИ:
   --speed-profile P            Профиль сети: careful|normal|fast (по умолч. normal)
@@ -1667,6 +1667,8 @@ parse_args() {
     SPEED_PROFILE_CLI=""
     LIMIT_RATE_CLI=""
     PLAYLIST_MODE_CLI=""
+    COOKIE_METHOD_CLI=""
+    COOKIE_METHOD_IMPLIED=""
     URL=""
 
     while [ $# -gt 0 ]; do
@@ -1703,15 +1705,15 @@ parse_args() {
             --cookies)
                 require_value "$1" "$#" "${2:-}"
                 validate_enum "$1" "$2" browser file none
-                COOKIE_METHOD="$2"; shift 2
+                COOKIE_METHOD="$2"; COOKIE_METHOD_CLI="$2"; shift 2
                 ;;
             --cookie-browser)
                 require_value "$1" "$#" "${2:-}"
-                COOKIE_BROWSER="$2"; shift 2
+                COOKIE_BROWSER="$2"; COOKIE_METHOD_IMPLIED="browser"; shift 2
                 ;;
             --cookie-file)
                 require_value "$1" "$#" "${2:-}"
-                COOKIE_FILE_PATH="$2"; shift 2
+                COOKIE_FILE_PATH="$2"; COOKIE_METHOD_IMPLIED="file"; shift 2
                 ;;
             --translate)
                 require_value "$1" "$#" "${2:-}"
@@ -1794,6 +1796,9 @@ parse_args() {
     [ -n "$LIMIT_RATE_CLI" ] && LIMIT_RATE="$LIMIT_RATE_CLI"
     # Здесь, а не в load_config: он выполняется ДО parse_args, и флаг не действовал.
     [ -n "$PLAYLIST_MODE_CLI" ] && PLAYLIST_MODE="$PLAYLIST_MODE_CLI"
+    # --cookie-file/--cookie-browser без --cookies включают свой способ: при
+    # method = none в config.ini флаг молча ничего не делал. Явный --cookies главнее.
+    [ -z "$COOKIE_METHOD_CLI" ] && [ -n "$COOKIE_METHOD_IMPLIED" ] && COOKIE_METHOD="$COOKIE_METHOD_IMPLIED"
 
     # Сформировать cookie args (заполняет global COOKIE_ARGS_ARR)
     build_cookie_args "$COOKIE_METHOD" "$COOKIE_FILE_PATH" "$COOKIE_BROWSER"

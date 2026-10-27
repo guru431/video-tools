@@ -207,6 +207,15 @@ assert_contains "PS1 печатает пропуск отдельно от «Г�
     'Пропущено (уже в архиве)' "$src_ps1"
 assert_contains "PS1 показывает пропуски в итоговой сводке" \
     'Пропущено (в архиве): $skipCount' "$src_ps1"
+# Исключение внутри итерации уходит во внешний catch мимо штатной очистки в конце
+# тела while — манифест в %TEMP% оставался. Его удаляет finally обработчика.
+_fin_block=$(awk '/Если исключение прервало итерацию между Register-ObjectEvent/{f=1} f{print} f&&/\$global:processRunning = \$false/{exit}' "$PS1_SCRIPT")
+assert_contains "манифест удаляется и в finally обработчика (путь исключения)" \
+    'if ($dlManifest) { Remove-Item -LiteralPath $dlManifest -Force -ErrorAction SilentlyContinue }' "$_fin_block"
+# Проверка обновлений: кредиты прокси — только парой, как у Join-ProxyUrl. Логин без
+# пароля ронял ConvertTo-SecureString на пустой строке («ошибка запроса»).
+assert_contains "проверка обновлений: кредиты прокси только парой" \
+    'if (-not [string]::IsNullOrWhiteSpace($textProxyUser.Text) -and -not [string]::IsNullOrWhiteSpace($textProxyPass.Text)) {' "$src_ps1"
 
 # Ключевое: на пропуске successCount расти НЕ должен — иначе «Готово: N/M» врёт.
 # Проверяем, что инкремент успеха лежит в else-ветке archive-skip.

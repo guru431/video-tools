@@ -1140,6 +1140,32 @@ else
     d2_ps1 "$(cygpath -w "$MS_DIR/in")" "$(cygpath -w "$MS_DIR/out")" "\$video_subtitles=':+:meta'; \$output_container=':+:mkv'; \$env:MOCK_FFMPEG_SUBS='2'"
     assert_contains "PS1 meta, 2 встроенные дорожки → метка на третьей (sidecar)" "-metadata:s:s:2 language=rus" "$(cat "$WORK/mock_d2.log" 2>/dev/null)"
     rm -rf "$MS_DIR"
+    # Сверка путей очистки — по Get-CollisionKey, как в .sh: на Linux старый X.mp4 и
+    # новый x.mp4 — разные файлы, и X.mp4 обязан уйти. На NTFS двух таких файлов не
+    # бывает, поэтому — сами функции воркера (разбор AST), $IsLinux и Test-Path подменены.
+    _mo_ps="$(mktemp_suffix "${TMPDIR:-/tmp}/purge_ck_" .ps1)"
+    cat > "$_mo_ps" <<'PSEOF'
+param([string]$Worker)
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($Worker, [ref]$null, [ref]$null)
+foreach ($name in 'Get-CanonPath', 'Get-CollisionKey', 'New-CollisionMap', 'Remove-ManifestOutputs') {
+    $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true)
+    if (-not $fn) { Write-Output "NOFUNC=$name"; exit 1 }
+    . ([scriptblock]::Create($fn.Extent.Text))
+}
+function Test-Path { return $true }
+function Log-Msg { param([string]$Level, [string]$Msg) Write-Output "LOG=$Msg" }
+$dry_run = 'yes'
+function Purge { Remove-ManifestOutputs -OldOutputs @('C:\out\X.mp4') -ManifestPath 'C:\out\.a.ffconv' -Source 'C:\in\a.avi' -Ext 'mp4' -NewOutputs @('C:\out\x.mp4') }
+Write-Output ("WIN=" + ((Purge) -join '|'))
+$IsLinux = $true
+Write-Output ("LINUX=" + ((Purge) -join '|'))
+PSEOF
+    _mo_out="$("$_ps_bin" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$_mo_ps")" \
+        -Worker "$(cygpath -w "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_script.ps1")" 2>&1 | tr -d '\r')"
+    rm -f "$_mo_ps"
+    assert_contains "PS1 очистка, Windows: X.mp4 и x.mp4 — один выход, не удаляется" "WIN=" "$_mo_out"
+    assert_not_contains "PS1 очистка, Windows: удаление не названо" "WIN=LOG=" "$_mo_out"
+    assert_contains "PS1 очистка, Linux: старый X.mp4 при новом x.mp4 удаляется" 'LINUX=LOG=[DRY-RUN]' "$_mo_out"
 fi
 
 # --- CMD (настоящий script.cmd, мок ffmpeg.exe) ---
@@ -1331,7 +1357,42 @@ CSEOF
         if [ -f "$CX_OUT/fr/.frames_complete" ] && [ ! -e "$CX_OUT/fr/.frames_partial" ] && [ ! -e "$CX_OUT/fr/fr_00001.png" ]; then
             pass "CMD кадры: свой частичный каталог пересоздан, маркер завершения есть"
         else fail "CMD кадры: свой частичный каталог пересоздан" ".frames_complete без .frames_partial и старых кадров" "$(ls -A "$CX_OUT/fr" 2>/dev/null | tr '\n' ' ')"; fi
+        # '%' из имени в шаблоне image2 удваивается (как в .sh/.ps1): «50% off_%05d.png»
+        # ffmpeg отвергает — «% o» не спецификатор, — и кадры не извлекались.
+        cx_reset; : > "$CX_IN/50% off.mp4"
+        d2_cmd "$W_CX_IN" "$W_CX_OUT" $'set "create_frame=yes"\nset "MOCK_FFMPEG_LOG='"$W_CX_LOG"'"'
+        assert_contains "CMD кадры: '%' имени удвоен в шаблоне image2" '50%% off\50%% off_%05d.png' "$(cat "$CX_LOG" 2>/dev/null)"
+        # dry_run + overwrite_existing=yes при готовом выходе извлечения: команда, как в
+        # .sh/.ps1, а не «пропущено» (del при dry_run не выполняется, и ворота «выхода
+        # нет» оставались закрыты). Выход не трогается; без overwrite — пропуск.
+        cx_reset; : > "$CX_IN/ea.mp4"; printf 'OLD' > "$CX_OUT/ea.m4a"
+        d2_cmd "$W_CX_IN" "$W_CX_OUT" $'set "extract_audio_copy=yes"\nset "dry_run=yes"\nset "MOCK_FFMPEG_AUDIO_CODEC=aac"'
+        assert_contains "CMD dry_run, extract, overwrite=yes: команда показана" "-vn -c:a copy" "$D2_OUT"
+        assert_eq "CMD dry_run, extract: готовый выход не тронут" "OLD" "$(cat "$CX_OUT/ea.m4a" 2>/dev/null)"
+        d2_cmd "$W_CX_IN" "$W_CX_OUT" $'set "extract_audio_copy=yes"\nset "dry_run=yes"\nset "overwrite_existing=no"\nset "MOCK_FFMPEG_AUDIO_CODEC=aac"'
+        assert_not_contains "CMD dry_run, extract, overwrite=no: готовый выход пропущен" "-vn -c:a copy" "$D2_OUT"
         rm -rf "$CX_IN" "$CX_OUT" "$CX_LOG"
+        # Источник — корень диска (source = Q:\, subst на временный каталог). norm_folder
+        # оставляет '\' корня, и вычитание источника съедало ведущий разделитель подпапки:
+        # выход уезжал в «...\rt_outsub\m.mp4». Карта коллизий считала так же — правятся обе.
+        RT_SRC="$WORK/rt_src"; RT_OUT="$WORK/rt_out"
+        rm -rf "$RT_SRC" "$RT_OUT"*; mkdir -p "$RT_SRC/sub" "$RT_OUT"; : > "$RT_SRC/sub/m.mp4"; : > "$RT_SRC/r.mp4"
+        _rt_drv=""
+        for _l in Q R T U V W X Y; do
+            cmd //c "if exist $_l:\\ (exit 1) else (exit 0)" >/dev/null 2>&1 || continue
+            cmd //c "subst $_l: $(cygpath -w "$RT_SRC")" >/dev/null 2>&1 && { _rt_drv="$_l"; break; }
+        done
+        if [ -z "$_rt_drv" ]; then
+            skip "CMD: источник — корень диска" "subst не подключился ни на одну свободную букву"
+        else
+            d2_cmd "$_rt_drv:\\" "$(cygpath -w "$RT_OUT")" ''
+            cmd //c "subst $_rt_drv: /d" >/dev/null 2>&1
+            if [ -f "$RT_OUT/sub/m.mp4" ] && [ -f "$RT_OUT/r.mp4" ]; then pass "CMD: источник — корень диска, подпапка зеркалится внутрь destination"
+            else fail "CMD: источник — корень диска, подпапка зеркалится внутрь destination" "rt_out/sub/m.mp4 и rt_out/r.mp4" "$(cd "$WORK" && ls -d rt_out* 2>/dev/null | tr '\n' ' '); вывод: $(printf '%s' "$D2_OUT" | tr '\n' '|')"; fi
+            if ls -d "$RT_OUT"?* >/dev/null 2>&1; then fail "CMD: источник — корень диска, рядом с destination ничего не создано" "нет rt_out*" "$(cd "$WORK" && ls -d rt_out?* | tr '\n' ' ')"
+            else pass "CMD: источник — корень диска, рядом с destination ничего не создано"; fi
+        fi
+        rm -rf "$RT_SRC" "$RT_OUT"*
     fi
 fi
 rm -rf "$D2_IP" "$D2_OTHER" "$IN/ov.mp4" "$DST"/ov* "$DST/.ov.ffconv"

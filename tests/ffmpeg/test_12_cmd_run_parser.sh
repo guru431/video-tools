@@ -185,6 +185,14 @@ assert_eq "\${1ABC} остаётся литералом" 'subtitles_style=${1ABC
 assert_contains "недопустимое имя → WARN" "недопустимое имя переменной окружения" "$env_out"
 assert_eq "допустимое имя по-прежнему подставляется" "dry_run=yes" \
     "$(printf '%s\n' "$env_out" | grep '^dry_run=' | head -1)"
+# Растущая самоссылка: значение меняется на каждом шаге, и проверка «подстановка
+# обязана менять значение» цикл не останавливала. Потолок — 32 подстановки, как в
+# SH и PS1: результат тот же, что у них, — ${…} и 32 хвоста.
+printf '[other]\r\nformat_files_in = ${FF_T_GROW}\r\n' > "$TMP_DIR/config.ini"
+grow_out=$(env 'FF_T_GROW=${FF_T_GROW}x' cmd //c "$WIN_RUN --print-config" < /dev/null 2>&1 | tr -d '\r')
+assert_eq "растущая самоссылка — 32 подстановки, как в SH/PS1" \
+    'format_files_in=${FF_T_GROW}xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' \
+    "$(printf '%s\n' "$grow_out" | grep '^format_files_in=' | head -1)"
 
 # ══════════════════════════════════════════════════════════════
 suite "CMD: ключи [asr] разбираются; enabled = yes — отказ без конвертации"

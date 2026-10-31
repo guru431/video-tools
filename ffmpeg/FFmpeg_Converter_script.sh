@@ -2126,7 +2126,7 @@ if [ "$merge_files" != "yes" ] && [ "$extract_audio_copy" != "yes" ] && [ "$crea
 				for (k in c) {
 					if (c[k] > 1) conflict[k] = 1
 					if (!split_parts) continue
-					stem = k; sub(/\.[^./]*$/, "", stem)
+					stem = k; sub(/\.[^.\/]*$/, "", stem)
 					ext = substr(k, length(stem) + 1)
 					if (stem !~ / \(part\.([1-9][0-9]{0,2}|1000)\)$/) continue
 					sub(/ \(part\.([1-9][0-9]{0,2}|1000)\)$/, "", stem)

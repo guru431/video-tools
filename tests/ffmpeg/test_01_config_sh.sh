@@ -179,7 +179,11 @@ cat > "$CONFIG_FILE" << 'EOCONFIG'
 [Other]
 Mixed_Refs = ${FFCONV_CASE}/${ffconv_case}
 EOCONFIG
-FFCONV_CASE="upper"; ffconv_case="lower"
+# Переменные читает read_config через косвенное ${!_vn}.
+# shellcheck disable=SC2034
+FFCONV_CASE="upper"
+# shellcheck disable=SC2034
+ffconv_case="lower"
 assert_eq "ключ без учёта регистра, placeholders с учётом регистра" "upper/lower" \
     "$(read_config mixed_refs other '')"
 unset FFCONV_CASE ffconv_case

@@ -431,6 +431,7 @@ function Stop-ProcessTree {
 # Контракт совпадает с limit_output_template в .sh (тест test_13_path_limit.sh сверяет).
 $script:LimitMaxPath = 259
 $script:LimitReserve = 32       # .fNNN + .m4a + .part + -FragNNN
+$script:PathLimitWarned = $null # Последняя папка; сбрасывается при старте очереди.
 
 # Третий параметр — предел длины пути; production его не передаёт (берётся 259),
 # тест передаёт явно, чтобы сверять результат с .sh на любой ОС раннера.
@@ -516,7 +517,7 @@ function Limit-OutputTemplate {
         }
     }
     if ($deficit -gt 0 -and $script:PathLimitWarned -ne $BaseDir) {
-        # Предупреждаем один раз на папку: очередь из 50 URL иначе зальёт лог одним и тем же.
+        # Одна папка на очередь: предупреждаем один раз за прогон, повторный старт предупредит снова.
         $script:PathLimitWarned = $BaseDir
         if (Get-Command Append-Output -ErrorAction SilentlyContinue) {
             Append-Output "ВНИМАНИЕ: папка назначения слишком длинная ($($BaseDir.Length) симв.) — путь может превысить лимит Windows даже с минимальными именами. Выберите папку короче." ([System.Drawing.Color]::Yellow)
@@ -537,6 +538,18 @@ function Limit-OutputTemplate {
         $out = [regex]::Replace($out, '%\(channel('  + $inner + ')\)(\.\d+)?([a-zA-Z])', "%(channel`$1).$u`$3")
     }
     return $out
+}
+
+# Один URL — один mp3: несколько результатов нельзя молча сводить к первому.
+function Get-TranslationFile {
+    param([string]$Directory)
+    $files = @(Get-ChildItem -LiteralPath $Directory -Filter '*.mp3' -File)
+    if ($files.Count -gt 1) {
+        Append-Output "AI-перевод: найдено несколько mp3 ($($files.Count)) — перевод пропущен." ([System.Drawing.Color]::Red)
+        return $null
+    }
+    if ($files.Count -eq 1 -and $files[0].Length -gt 0) { return $files[0] }
+    return $null
 }
 
 # ── Таблицы форматов (script scope: читаются из Add_Click и из тестов) ─────
@@ -673,8 +686,8 @@ $btnCheckUpdate.Add_Click({
                 return
             }
             # ServicePointManager не поддерживает https:// как схему прокси — используем http://
-            $proxyScheme = if ($pType -match "^socks") { $pType } else { "http" }
-            $proxyUri = "${proxyScheme}://${pHost}"
+            # SOCKS уже отклонён выше; остальные типы используют HTTP-прокси.
+            $proxyUri = "http://${pHost}"
             if (-not [string]::IsNullOrWhiteSpace($pPort)) { $proxyUri += ":${pPort}" }
             $webArgs.Proxy = $proxyUri
             # Кредиты — только парой, как у Join-ProxyUrl для загрузки: логин без пароля
@@ -1480,6 +1493,7 @@ $btnStart.Add_Click({
     # Очередь нельзя менять во время загрузки — иначе индексы съезжают.
     $btnRemoveUrl.Enabled = $false
     $btnClearQueue.Enabled = $false
+    $script:PathLimitWarned = $null
     $global:processRunning = $true
     $richOutput.Clear()
     $progressBar.Value = 0
@@ -1969,8 +1983,7 @@ $btnStart.Add_Click({
                         # (не прерван, код 0) и непустой файл.
                         $transFile = $null
                         if (-not $_votAborted -and $votExit -eq 0) {
-                            $transFile = Get-ChildItem -LiteralPath $tempDir -Filter "*.mp3" -File |
-                                Where-Object { $_.Length -gt 0 } | Select-Object -First 1
+                            $transFile = Get-TranslationFile $tempDir
                         } else {
                             Append-Output "AI-перевод: vot-cli-live не завершился успешно (код $votExit) — перевод пропущен." ([System.Drawing.Color]::Red)
                         }

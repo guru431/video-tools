@@ -104,6 +104,8 @@ class MockBin {
                 // скрипт обязан переименовать его в фиксированное translated.mp3.
                 if (String.IsNullOrEmpty(rc) || rc == "0")
                     File.WriteAllText(Path.Combine(dir, "Mock Video Title!.mp3"), "mp3-bytes");
+                if (Environment.GetEnvironmentVariable("MOCK_VOT_MULTI") == "1")
+                    File.WriteAllText(Path.Combine(dir, ";Other Track.mp3"), "other-mp3-bytes");
             }
         }
         return String.IsNullOrEmpty(rc) ? 0 : int.Parse(rc);
@@ -230,6 +232,7 @@ run_menu() {
         MOCK_ACOUNT="${MOCK_ACOUNT:-}" \
         MOCK_DLP_RC="${MOCK_DLP_RC:-}" \
         MOCK_VOT_RC="${MOCK_VOT_RC:-}" \
+        MOCK_VOT_MULTI="${MOCK_VOT_MULTI:-}" \
         MOCK_FF_RC="${MOCK_FF_RC:-}" \
         MOCK_MANIFEST_EMPTY="${MOCK_MANIFEST_EMPTY:-}" \
         cmd //c "$DL_WIN" < "$TMP_DIR/answers.txt" 2>&1)
@@ -299,6 +302,13 @@ assert_contains "смешанная дорожка названа через han
 assert_contains "перевод объявлен успешным" "Перевод добавлен успешно!" "$SMOKE_OUT"
 
 # ══════════════════════════════════════════════════════════════
+suite "CMD yt-dlp: несколько mp3 от vot — явный отказ до мержа"
+MOCK_VOT_MULTI=1 run_menu url="$YT_URL" quality=3 cookie=0 translate=2 audiofmt=0 sb=0 subsvid=0
+assert_eq "неоднозначный перевод → rc=1" "1" "$SMOKE_RC"
+assert_contains "названа причина отказа" "найдено несколько mp3" "$SMOKE_OUT"
+assert_not_contains "не выбран произвольный перевод" "ffmpeg ARGS:" "$SMOKE_LOG"
+assert_eq "оригинал сохранён" "video-bytes" "$(cat "$TMP_DIR/_video_/Mock Video Title.mp4")"
+
 suite "CMD yt-dlp: сквозной прогон — dual_track и число дорожек"
 # ══════════════════════════════════════════════════════════════
 # ffprobe отдаёт ДВЕ оригинальные дорожки → индекс перевода = 2, а не 1.

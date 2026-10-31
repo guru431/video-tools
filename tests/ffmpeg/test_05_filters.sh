@@ -168,5 +168,21 @@ assert_eq "copy_codecs ext вычислен ДО existence-check"  "ok"  "$order
 # Duration N/A → num=(0) fallback
 assert_contains "Duration N/A → num fallback"  'if [ ${#num[@]} -eq 0 ]; then'  "$src_sh"
 
+suite "script.sh: out_time только в формате ffmpeg"
+# Определение берётся из production, как show_progress_bar в test_21.
+eval "$(sed -n '/^progress_time_seconds() {/,/^}/p' "$SCRIPT")"
+PROGRESS_SECONDS=0
+progress_time_seconds '01:05:30.123456'
+assert_eq "часы, минуты, секунды; дробь отброшена" "3930" "$PROGRESS_SECONDS"
+progress_time_seconds '00:08:09'
+assert_eq "ведущие нули — десятичные" "489" "$PROGRESS_SECONDS"
+for _bad_time in '05:30' 'N/A' '00::01' ''; do
+    if progress_time_seconds "$_bad_time"; then
+        fail "неполное время '$_bad_time' пропущено" "отказ" "$PROGRESS_SECONDS"
+    else
+        assert_eq "неполное время '$_bad_time' пропущено" "0" "$PROGRESS_SECONDS"
+    fi
+done
+
 rm -rf "$EMPTY_DIR"
 summary

@@ -670,6 +670,14 @@ if not "%translate_lang%"=="" (
         rem названия ролика, а `for %%f in (...)` подставляет его в фазе 4, после чего
         rem фаза 5 (delayed expansion) съедает "!" — обычный на YouTube символ.
         set "trans_file="
+        rem Считаем имена, не подставляя их в команды: %%f со знаком ! иначе исказится.
+        set /a _trans_count=0
+        for /f "eol=| delims=" %%f in ('dir /b /a-d "!temp_dir!\*.mp3" ^<nul 2^>nul') do set /a _trans_count+=1
+        if !_trans_count! GTR 1 (
+            echo ОШИБКА: AI-перевод: найдено несколько mp3 ^(!_trans_count!^) — перевод пропущен.
+            rmdir /s /q "!temp_dir!" 2>nul
+            goto :skip_translate
+        )
         ren "!temp_dir!\*.mp3" "translated.mp3" >nul 2>&1
         if exist "!temp_dir!\translated.mp3" set "trans_file=!temp_dir!\translated.mp3"
         set "video_file="

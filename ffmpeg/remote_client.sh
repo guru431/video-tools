@@ -935,6 +935,9 @@ remote_upload() {
 	size="$(file_size "$file")"
 
 	uid="$(remote_upload_sidecar_read "$file")"
+	# Sidecar мог быть отредактирован: к его идентификатору тот же контракт,
+	# что и к ответу службы. Негодный sidecar означает новую загрузку.
+	remote_valid_id "$uid" || uid=""
 	if [ -n "$uid" ]; then
 		# Сколько уже принято. Не 200 — идентификатор протух, начинаем заново.
 		remote_http_retry GET "/uploads/$uid"

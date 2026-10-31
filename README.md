@@ -264,11 +264,11 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 
 | Файл | Что тестирует |
 |------|---------------|
-| `test_01_config_sh` | Парсинг config.ini (Bash) |
+| `test_01_config_sh` | Парсинг config.ini (Bash), независимые подстановки `${Var}` / `${VAR}` |
 | `test_02_config_ps1` | Парсинг config.ini (PowerShell) |
 | `test_03_audio_args` | Формирование аудио-аргументов |
 | `test_04_video_args` | Формирование видео-аргументов |
-| `test_05_filters` | Фильтры (scale, rotate, setpts, atempo) |
+| `test_05_filters` | Фильтры (scale, rotate, setpts, atempo), разбор времени прогресса |
 | `test_06_gpu` | GPU-ускорение (NVENC, QSV, fallback) |
 | `test_07_integration` | Интеграционный: реальный MP4 + mock |
 | `test_08_ps1_audio_video` | PS1: аудио/видео аргументы |
@@ -284,8 +284,8 @@ bash tests/run_tests.sh common    # кросс-платформенные инв
 | `test_18_findings_audit` | Фиксы аудита: dry-run+overwrite не удаляет выход, merge in-place отклоняется, проверка финального rename, silence-настройки в signature |
 | `test_19_findings_paths` | Пути и выборка входов: хвостовой разделитель source, прямые слэши, каталог «season.mp4», dry-run без mkdir, `.ffconv-partial-*`, суффикс `(part.1)` в проверке in==out, диапазон скорости и overwrite в GUI |
 | `test_20_remote_map` | Удалённый бэкенд: отображение config.ini на операции службы (.sh) |
-| `test_21_remote_client` | Удалённый бэкенд: HTTP-слой, preflight, загрузка кусками, задача и отмена (мок curl) |
-| `test_22_remote_ps1` | Удалённый бэкенд: PS1-модуль клиента, загрузка через подменённый HTTP-слой |
+| `test_21_remote_client` | Удалённый бэкенд: HTTP-слой, preflight, загрузка кусками, проверка upload_id, задача и отмена (мок curl) |
+| `test_22_remote_ps1` | Удалённый бэкенд: PS1-модуль клиента, загрузка через подменённый HTTP-слой, upload_id и отказы генерации пробного ролика |
 | `test_23_remote_parity` | Удалённый бэкенд: SH и PS1 собирают побайтово одинаковый JSON |
 | `test_24_gui_worker_runspace` | Воркер запускается ТАК ЖЕ, как из GUI (AddScript-строка): `$PSScriptRoot` пуст, stderr не оседает в `Streams.Error` |
 | `test_25_asr_client` | Распознавание речи: клиент (.sh) — ключи, адреса, пределы, план частей, curl, исходы, сборка текста |

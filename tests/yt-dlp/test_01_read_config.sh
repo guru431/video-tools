@@ -212,7 +212,7 @@ assert_not_contains "SH: нет захардкоженного -c -i -w"  '"$YTD
 # ══════════════════════════════════════════════════════════════
 suite "Task 13: подстановка \${ENV_VAR} в config.ini"
 # ══════════════════════════════════════════════════════════════
-# Поведенческий (через inline-копию, зеркало реального SH)
+# Поведенческий: вызывается настоящий read_config из production.
 write_config "[proxy]
 url = \${TEST_PROXY_VAR}"
 export TEST_PROXY_VAR="https://u:p@h:1"
@@ -232,6 +232,25 @@ export A="x"; export B="y"
 result=$(read_config "url" "proxy" "")
 assert_eq "несколько \${VAR} → обе подставлены"  "x-y"  "$result"
 unset A; unset B
+rm -f "$CONFIG_FILE"
+
+# nocasematch нужен ключам ini, но не подстановке переменных: в bash имена
+# переменных различают регистр. Один replace не должен схлопывать обе ссылки.
+write_config '[PrOxY]
+UrL = ${YTDLP_TEST_Mixed}/${YTDLP_TEST_MIXED}'
+YTDLP_TEST_Mixed=lower; YTDLP_TEST_MIXED=upper
+shopt -u nocasematch
+read_config url proxy '' result
+assert_eq "ENV: ссылки разного регистра раскрываются независимо" "lower/upper" "$result"
+if shopt -q nocasematch; then fail "read_config восстанавливает выключенный nocasematch" "off" "on"
+else pass "read_config восстанавливает выключенный nocasematch"; fi
+shopt -s nocasematch
+read_config url proxy '' result
+assert_eq "ENV: исходно включённый nocasematch не смешивает ссылки" "lower/upper" "$result"
+if shopt -q nocasematch; then pass "read_config сохраняет включённый nocasematch"
+else fail "read_config сохраняет включённый nocasematch" "on" "off"; fi
+shopt -u nocasematch
+unset YTDLP_TEST_Mixed YTDLP_TEST_MIXED
 rm -f "$CONFIG_FILE"
 
 # Статический: фича присутствует в реальных SH и PS1

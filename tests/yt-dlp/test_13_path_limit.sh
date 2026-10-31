@@ -250,6 +250,9 @@ param([string]$Prod)
 $ErrorActionPreference = 'Stop'
 $env:YTDLP_TEST = '1'
 . $Prod
+Write-Output ('warn_init=' + [bool](Get-Variable PathLimitWarned -Scope Script -ErrorAction SilentlyContinue))
+$script:warnCount = 0
+function Append-Output { param($Message, $Color); $script:warnCount++ }
 $base45 = 'C:\000\!_git\Downloading_from_YouTube\_video_'
 $tplPl  = '%(uploader)s\%(playlist)s\%(playlist_index)03d - %(title).100U.%(ext)s'
 $WIN = 259   # предел передаём явно — паритет с .sh сверяется по одинаковым числам
@@ -260,6 +263,15 @@ Write-Output ("user50=" + (Limit-OutputTemplate 'C:\dl' '%(title).50U.%(ext)s' $
 Write-Output ("plain="  + (Limit-OutputTemplate 'C:\dl' '%(id)s.%(ext)s' $WIN))
 $long = 'C:\' + ('x' * 235)
 Write-Output ("long="   + (Limit-OutputTemplate $long $tplPl $WIN))
+$null = Limit-OutputTemplate $long $tplPl $WIN
+Write-Output ('warn_once=' + $script:warnCount)
+# Сбрасываем состояние той же командой, что выполняет настоящий обработчик Start.
+$prodText = [System.IO.File]::ReadAllText($Prod)
+$startText = $prodText.Substring($prodText.IndexOf('$btnStart.Add_Click({'))
+$reset = [regex]::Match($startText, '(?m)^\s*\$script:PathLimitWarned = \$null\r?$')
+if ($reset.Success) { . ([scriptblock]::Create($reset.Value)) }
+$null = Limit-OutputTemplate $long $tplPl $WIN
+Write-Output ('warn_restart=' + $script:warnCount)
 $once = Limit-OutputTemplate $base45 $tplPl $WIN
 Write-Output ("idem="   + ((Limit-OutputTemplate $base45 $once $WIN) -eq $once))
 # Альтернативные формы поля — те же строки, что проверены у .sh выше: результат
@@ -287,6 +299,9 @@ PS1EOF
     assert_contains "PS1 пользовательский .50U" '%(title).50U'    "$(get_field "$ps_out" user50)"
     assert_eq "PS1 шаблон без длинных полей"    '%(id)s.%(ext)s'  "$(get_field "$ps_out" plain)"
     assert_contains "PS1 длинная база → минимум" '%(title).25U'   "$(get_field "$ps_out" long)"
+    assert_eq "PS1 предупреждение инициализировано" "True" "$(get_field "$ps_out" warn_init)"
+    assert_eq "PS1 длинная папка предупреждает один раз за очередь" "1" "$(get_field "$ps_out" warn_once)"
+    assert_eq "PS1 повторный старт очереди предупреждает снова" "2" "$(get_field "$ps_out" warn_restart)"
     assert_eq "PS1 идемпотентно"                "True"            "$(get_field "$ps_out" idem)"
     assert_eq "PS1 без аргумента = 259"         "True"            "$(get_field "$ps_out" default)"
     assert_eq "PS1 форма со значением по умолчанию = SH" \

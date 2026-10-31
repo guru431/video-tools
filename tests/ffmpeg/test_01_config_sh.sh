@@ -174,6 +174,16 @@ assert_eq       "незаданная \${VAR} → пусто, не литера�
 assert_contains "незаданная \${VAR} → WARN в stderr"     "FFCONV_TEST_NAME не задана" "$_env_warn"
 unset FFCONV_TEST_SRC
 
+suite "read_config: регистр подстановок окружения"
+cat > "$CONFIG_FILE" << 'EOCONFIG'
+[Other]
+Mixed_Refs = ${FFCONV_CASE}/${ffconv_case}
+EOCONFIG
+FFCONV_CASE="upper"; ffconv_case="lower"
+assert_eq "ключ без учёта регистра, placeholders с учётом регистра" "upper/lower" \
+    "$(read_config mixed_refs other '')"
+unset FFCONV_CASE ffconv_case
+
 # ══════════════════════════════════════════════════════════════
 suite "run_v21.sh: Task 8 (анализ исходника)"
 # ══════════════════════════════════════════════════════════════

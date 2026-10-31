@@ -59,6 +59,10 @@ assert_contains "F15: lowercase-конфиг не сломан (360)" "height<=3
 rm -f "$CFG"
 
 # ══════════════════════════════════════════════════════════════
+suite "SH: --help описывает все режимы перевода"
+HELP=$(bash "$SH_SCRIPT" --help)
+assert_contains "--dual-track есть в справке" "--dual-track" "$HELP"
+
 suite "F6 (SH): --dry-run с --translate печатает план, а не падает ошибкой"
 # ══════════════════════════════════════════════════════════════
 W6=$(mktemp -d /tmp/test_ytf6_XXXXXX)
@@ -92,6 +96,7 @@ cat > "$W9/bin/vot" <<'VOTEOF'
 od=""
 for a in "$@"; do case "$a" in --output=*) od="${a#--output=}";; esac; done
 [ -n "$od" ] && touch "$od/translation.mp3"
+[ "${MOCK_VOT_MULTI:-}" = "1" ] && touch "$od/other.mp3"
 exit 0
 VOTEOF
 cat > "$W9/bin/ffmpeg" <<'FFEOF'
@@ -120,6 +125,10 @@ assert_eq       "F9: dual_track без ffprobe → rc=1"         "1"            
 OUT=$(run_tr_f9 mix); RC=$?
 assert_contains "F9: mix без ffprobe работает (fallback=1)" "Перевод добавлен" "$OUT"
 assert_eq       "F9: mix без ffprobe → rc=0"                "0"                "$RC"
+OUT=$(MOCK_VOT_MULTI=1 run_tr_f9 mix); RC=$?
+assert_eq "SH: несколько mp3 → отказ" "1" "$RC"
+assert_contains "SH: объяснён неоднозначный перевод" "найдено несколько mp3" "$OUT"
+assert_not_contains "SH: несколько mp3 не выдаются за успех" "Перевод добавлен" "$OUT"
 rm -rf "$W9"
 
 # ══════════════════════════════════════════════════════════════
@@ -173,7 +182,7 @@ suite "F8 (PS1 source-scan): exit code vot сохранён до Dispose"
 assert_contains     "F8: exit code читается до Dispose"       '$votExit = $votProc.ExitCode' "$PS1_SRC"
 assert_contains     "F8: флаг прерывания (Stop/таймаут)"      '$_votAborted = $true'          "$PS1_SRC"
 assert_contains     "F8: успех только при чистом выходе"      'if (-not $_votAborted -and $votExit -eq 0)' "$PS1_SRC"
-assert_contains     "F8: требуется непустой файл"             '$_.Length -gt 0'               "$PS1_SRC"
+assert_contains     "F8: требуется непустой файл"             '$files[0].Length -gt 0'         "$PS1_SRC"
 
 # ══════════════════════════════════════════════════════════════
 suite "F9 (PS1/CMD source-scan): dual_track требует ffprobe"

@@ -474,12 +474,14 @@ rem ошибка и пустой результат, в общем случае 
 rem значения config.ini. Передаём через переменные окружения: PowerShell читает их как
 rem данные, разбора кавычек не происходит вовсе.
 set "FFCONV_SRC=%folder_sources%"
-set "FFCONV_DST=%folder_destination%"
+for %%I in ("%folder_destination%") do set "FFCONV_DST=%%~fI"
 set "FFCONV_EXTS=!_ffi!"
 set "FFCONV_FMT_OUT=%format_files_out%"
 set "FFCONV_SAVE_OLD=%save_old_extension%"
 set "FFCONV_COPY_CODECS=%copy_codecs%"
 set "FFCONV_PART_SUFFIX=%part_suffix_known%"
+set "FFCONV_LENGTH_PARTS=no"
+if "!length_coding_status!"=="+" if not "!start_coding_status!"=="+" set "FFCONV_LENGTH_PARTS=yes"
 
 rem F-collision-map. Два РАЗНЫХ входа могут претендовать на ОДИН выход: при
 rem save_old_extension=no имена movie.avi и movie.mp4 оба дают movie.mp4. Раньше это
@@ -500,7 +502,9 @@ if not "%merge_files%"=="yes" if not "%extract_audio_copy%"=="yes" if not "%crea
 	rem «was unexpected at this time». Суффикс кладём в простую переменную $sfx —
 	rem подстановка $(...) внутри \"...\" здесь недопустима.
 	rem Источник — корень диска (D:\): ведущий '\' подпапки возвращается, как в :process_file.
-	powershell -NoProfile -Command "$e=$env:FFCONV_EXTS.Split(','); $src=$env:FFCONV_SRC; $dst=$env:FFCONV_DST; $sfx=$env:FFCONV_PART_SUFFIX; Get-ChildItem -LiteralPath $src -Recurse -File | Where-Object { $e -contains $_.Extension.TrimStart('.') -and -not $_.Name.StartsWith('.ffconv-partial-') } | ForEach-Object { $dir = ($_.DirectoryName + '\') -replace [regex]::Escape($src), ''; if ($src.EndsWith('\') -and -not $dir.StartsWith('\')) { $dir = '\' + $dir }; $n = if ($env:FFCONV_SAVE_OLD -eq 'yes') { $_.Name } else { $_.BaseName }; $f = if ($env:FFCONV_COPY_CODECS -eq 'yes') { $_.Extension.TrimStart('.') } else { $env:FFCONV_FMT_OUT }; [System.IO.Path]::GetFullPath(\"$dst$dir$n$sfx.$f\").ToLowerInvariant() } | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name }" > "!_col_file!" 2>nul
+	rem При length длинный movie и короткий movie (part.N) могут делить выход.
+	rem Проверяем непосредственного родителя; соседние part.N без movie безопасны.
+	powershell -NoProfile -Command "$e=$env:FFCONV_EXTS.Split(','); $src=(Get-Item -LiteralPath $env:FFCONV_SRC).FullName; $dst=$env:FFCONV_DST.TrimEnd('\'); $sfx=$env:FFCONV_PART_SUFFIX; $keys=@(Get-ChildItem -LiteralPath $src -Recurse -File | Where-Object { $e -contains $_.Extension.TrimStart('.') -and -not $_.Name.StartsWith('.ffconv-partial-') } | ForEach-Object { $dir = ($_.DirectoryName + '\') -replace [regex]::Escape($src), ''; if ($src.EndsWith('\') -and -not $dir.StartsWith('\')) { $dir = '\' + $dir }; $n = if ($env:FFCONV_SAVE_OLD -eq 'yes') { $_.Name } else { $_.BaseName }; $f = if ($env:FFCONV_COPY_CODECS -eq 'yes') { $_.Extension.TrimStart('.') } else { $env:FFCONV_FMT_OUT }; (\"$dst$dir$n$sfx.$f\").ToLowerInvariant() }); $map=@{}; $bad=@{}; foreach($k in $keys) { if($map.ContainsKey($k)) { $bad[$k]=1 }; $map[$k]=1 }; if($env:FFCONV_LENGTH_PARTS -eq 'yes') { foreach($k in $keys) { $ext=[IO.Path]::GetExtension($k); $stem=$k.Substring(0,$k.Length-$ext.Length); $parent=[regex]::Replace($stem,' \(part\.(?:[1-9][0-9]{0,2}|1000)\)$','')+$ext; if($parent -cne $k -and $map.ContainsKey($parent)) { $bad[$k]=1; $bad[$parent]=1 } } }; $bad.Keys" > "!_col_file!" 2>nul
 	if not exist "!_col_file!" (
 		rem PowerShell недоступен — карту построить нечем. Явно говорим об этом, а не
 		rem делаем вид, что конфликтов нет.

@@ -1046,6 +1046,22 @@ if ($merge_files -ne "yes" -and $extract_audio_copy -ne "yes" -and $create_frame
 			foreach ($_in in $_cmap[$_k]) { Write-Host "    $_in" }
 		}
 	}
+	# При разбиении длинный movie и короткий movie (part.N) могут писать один
+	# выход, хотя базовые ключи различны. Длительность ещё неизвестна: отвергаем
+	# такую пару заранее. Соседние movie (part.1)/(part.2) без movie безопасны.
+	if ($length_coding_status -eq '+' -and $start_coding_status -ne '+') {
+		foreach ($_k in $_cmap.Keys) {
+			$_ext = [System.IO.Path]::GetExtension($_k)
+			$_stem = $_k.Substring(0, $_k.Length - $_ext.Length)
+			$_parent = [regex]::Replace($_stem, ' \(part\.(?:[1-9][0-9]{0,2}|1000)\)$', '') + $_ext
+			if ($_parent -cne $_k -and $_cmap.ContainsKey($_parent)) {
+				$collision_outputs[$_k] = $true
+				$collision_outputs[$_parent] = $true
+				Log-Msg "FAIL" "Конфликт выходов: часть «$_k» может принадлежать другому входу — оба пропущены:"
+				foreach ($_in in ($_cmap[$_k] + $_cmap[$_parent])) { Write-Host "    $_in" }
+			}
+		}
+	}
 }
 
 function Encode-File {
@@ -1150,7 +1166,7 @@ function Encode-File {
 		}
 		# F-percent. `%` в имени файла ИЛИ в пути ломает image2-мультиплексор: после `%`
 		# он принимает только d/цифру/%. Удваиваем везде, кроме собственного счётчика.
-		$frame_out = ($frame_dir -replace '%', '%%') + "\" + ($file_name -replace '%', '%%') + "_%05d.png"
+		$frame_out = Join-Path ($frame_dir -replace '%', '%%') (($file_name -replace '%', '%%') + "_%05d.png")
 		if ($dry_run -eq "yes") {
 			$_cmdStr = "$ffmpeg -hide_banner -strict -2 -i `"$full_path`" -r 1/1 `"$frame_out`""
 			Write-Host "[DRY-RUN] $_cmdStr"

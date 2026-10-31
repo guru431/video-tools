@@ -731,6 +731,7 @@ function Send-RemoteUpload {
 	if (-not $chunk) { $chunk = 33554432 }
 	$offset = [int64]0
 	$uid = Read-RemoteUploadSidecar -Source $Path -Size $size
+	if ($uid -cnotmatch '\A[A-Za-z0-9_-]+\z') { $uid = '' }
 	if ($uid) {
 		$r = Invoke-RemoteHttpRetry GET "/uploads/$uid"
 		$rec = -1
@@ -760,6 +761,10 @@ function Send-RemoteUpload {
 		try { $u = $r.Body | ConvertFrom-Json } catch {}
 		if ($null -eq $u -or -not $u.upload_id) { Write-Host "[ОШИБКА] Служба не вернула upload_id."; return $null }
 		$uid = $u.upload_id
+		if ($uid -cnotmatch '\A[A-Za-z0-9_-]+\z') {
+			Write-Host "[ОШИБКА] Служба вернула недопустимый upload_id."
+			return $null
+		}
 		if ($u.chunk_size) { $script:RemoteChunkSize = [int]$u.chunk_size; $chunk = [int]$u.chunk_size }
 		$offset = [int64]0
 		Write-RemoteUploadSidecar -UploadId $uid -Size $size -Source $Path
@@ -1157,13 +1162,15 @@ function Invoke-RemoteSelftest {
 	# try обязателен: без локального ffmpeg (заявленный «тонкий клиент»)
 	# CommandNotFoundException — терминирующая и уходила наверх исключением
 	# вместо строки «ОТКАЗ» в таблице самопроверки.
+	$clipRc = -1
 	try {
 		& $ffmpeg -nostdin -hide_banner -v error -y -f lavfi -i "testsrc=size=320x240:rate=25" `
 			-f lavfi -i "sine=frequency=440" -t 1 -shortest -pix_fmt yuv420p $clip 2>$null
+		$clipRc = $LASTEXITCODE
 	} catch {
 		Write-Host "[ОШИБКА] Локальный ffmpeg недоступен — пробный ролик не создать: $($_.Exception.Message)"
 	}
-	if (-not (Test-Path -LiteralPath $clip)) {
+	if ($clipRc -ne 0 -or -not (Test-Path -LiteralPath $clip -PathType Leaf) -or (Get-Item -LiteralPath $clip).Length -eq 0) {
 		Write-RemoteSelftestRow 'пробный ролик' 'ОТКАЗ' ("{0:n0}с" -f ((Get-Date) - $t0).TotalSeconds)
 		Remove-Item -LiteralPath $tmpd -Recurse -Force -ErrorAction SilentlyContinue
 		return 1

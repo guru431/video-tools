@@ -1398,6 +1398,58 @@ fi
 rm -rf "$D2_IP" "$D2_OTHER" "$IN/ov.mp4" "$DST"/ov* "$DST/.ov.ffconv"
 
 # ══════════════════════════════════════════════════════════════
+suite "Разбиение: исходник с именем части не затирает выход другого исходника"
+# ══════════════════════════════════════════════════════════════
+# Длинный movie.avi и короткий movie (part.N).mkv могут дать один выход.
+# Длительность ещё неизвестна карте, поэтому такие пары отклоняются заранее.
+PC_IN="$WORK/part_collision/in"; PC_OUT="$WORK/part_collision/out"
+mkdir -p "$PC_IN/p1" "$PC_IN/p2" "$PC_IN/p1000" "$PC_IN/elsewhere" "$PC_OUT"
+: > "$PC_IN/p1/alpha.avi"; : > "$PC_IN/p1/alpha (part.1).mkv"
+# Обратный порядок создания и другое расширение родителя.
+: > "$PC_IN/p2/omega (part.2).avi"; : > "$PC_IN/p2/omega.mkv"
+: > "$PC_IN/p1000/dotted.name.avi"; : > "$PC_IN/p1000/dotted.name (part.1000).mkv"
+# Без родителя соседние part.N безопасны; разные каталоги тоже не пересекаются.
+: > "$PC_IN/sibling (part.1).avi"; : > "$PC_IN/sibling (part.2).mkv"
+: > "$PC_IN/remote.avi"; : > "$PC_IN/elsewhere/remote (part.1).mkv"
+
+pc_run() {
+    local platform="$1" mode="$2" src="$PC_IN" start=':-:00-00-00' old=no copy=no
+    if [ "$mode" != split ]; then src="$PC_IN/p1"; fi
+    case "$mode" in start0) start=':+:00-00-00' ;; old) old=yes ;; copy) copy=yes ;; esac
+    case "$platform" in
+        SH)
+            run_capture "folder_sources=\"$src\"" "folder_destination=\"$PC_OUT\"" \
+                'dry_run="yes"' 'overwrite_existing="yes"' 'length_coding=":+:00-01-00"' \
+                "start_coding=\"$start\"" "save_old_extension=\"$old\"" "copy_codecs=\"$copy\""
+            PC_TEXT="$OUT_TEXT" ;;
+        PS1)
+            d2_ps1 "$(cygpath -w "$src")" "$(cygpath -w "$PC_OUT")" \
+                "\$dry_run='yes'; \$format_files_in='avi,mkv'; \$length_coding=':+:00-01-00'; \$start_coding='$start'; \$save_old_extension='$old'; \$copy_codecs='$copy'"
+            PC_TEXT="$D2_OUT" ;;
+        CMD)
+            d2_cmd "$(cygpath -w "$src")" "$(cygpath -w "$PC_OUT")" \
+                $'set "dry_run=yes"\nset "format_files_in=avi,mkv"\nset "length_coding=:+:00-01-00"\n'"set \"start_coding=$start\""$'\n'"set \"save_old_extension=$old\""$'\n'"set \"copy_codecs=$copy\""
+            PC_TEXT="$D2_OUT" ;;
+    esac
+}
+for pc_platform in SH PS1 CMD; do
+    if [ "$pc_platform" = PS1 ] && { [ -z "$_ps_ok" ] || [ -z "$_ps_bin" ]; }; then continue; fi
+    if [ "$pc_platform" = CMD ] && ! declare -f d2_cmd >/dev/null; then continue; fi
+    pc_run "$pc_platform" split
+    for pc_name in 'alpha.avi' 'alpha (part.1).mkv' 'omega.mkv' 'omega (part.2).avi' \
+        'dotted.name.avi' 'dotted.name (part.1000).mkv'; do
+        assert_contains "$pc_platform: $pc_name отклонён до кодирования" "$pc_name: конфликт выходов" "$PC_TEXT"
+    done
+    assert_contains "$pc_platform: безопасные соседи обработаны" 'sibling (part.1).mp4' "$PC_TEXT"
+    assert_contains "$pc_platform: разные подпапки не конфликтуют" 'remote.mp4' "$PC_TEXT"
+    for pc_mode in start0 old copy; do
+        pc_run "$pc_platform" "$pc_mode"
+        assert_not_contains "$pc_platform $pc_mode: нет ложного конфликта" 'Конфликт выходов' "$PC_TEXT"
+        assert_contains "$pc_platform $pc_mode: команда запланирована" '[DRY-RUN]' "$PC_TEXT"
+    done
+done
+
+# ══════════════════════════════════════════════════════════════
 suite "F10: порядок объединения один на трёх платформах"
 # ══════════════════════════════════════════════════════════════
 # Порядок склейки — по коду символа ПОЛНОГО пути с '/' вместо '\'. Раньше .sh брал

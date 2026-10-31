@@ -283,6 +283,24 @@ Write-Output ("nd_before=" + [System.IO.Directory]::Exists($ndDir))
 New-DirLiteral $ndDir
 Write-Output ("nd_after=" + [System.IO.Directory]::Exists($ndDir))
 Remove-Item -LiteralPath $ndDir -Recurse -Force -ErrorAction SilentlyContinue
+
+# Настоящий селектор результата vot: ни один из нескольких mp3 не угадывается.
+$trDir = Join-Path ([System.IO.Path]::GetTempPath()) ('ytdlp-select-' + [guid]::NewGuid().ToString('N'))
+$trRoot = [System.IO.Path]::GetFullPath($trDir)
+if ([System.IO.Path]::GetDirectoryName($trRoot) -ne [System.IO.Path]::GetTempPath().TrimEnd('\')) { throw 'Unsafe temp path' }
+[System.IO.Directory]::CreateDirectory($trDir) | Out-Null
+$script:trWarnings = @()
+function Append-Output { param($Message, $Color); $script:trWarnings += $Message }
+try {
+    Write-Output ('tr_empty=' + ($null -eq (Get-TranslationFile $trDir)))
+    $one = Join-Path $trDir 'Track[1]!.mp3'
+    [System.IO.File]::WriteAllText($one, 'one')
+    Write-Output ('tr_single=' + ((Get-TranslationFile $trDir).FullName -eq $one))
+    [System.IO.File]::WriteAllText((Join-Path $trDir 'Other.mp3'), 'two')
+    Write-Output ('tr_multiple=' + ($null -eq (Get-TranslationFile $trDir)))
+    Write-Output ('tr_warning=' + $script:trWarnings.Count)
+    Write-Output ('tr_kept=' + (Get-ChildItem -LiteralPath $trDir -File).Count)
+} finally { Remove-Item -LiteralPath $trRoot -Recurse -Force }
 PS1EOF
 
 out=$($PS_CMD -NoProfile -NonInteractive -File "$win_harness" -Prod "$win_prod" -Cfg "$win_cfg" 2>/dev/null | tr -d '\r')
@@ -437,5 +455,12 @@ suite "PS1 yt-dlp: New-DirLiteral (создание папки загрузок)
 assert_eq "New-Item -LiteralPath падает биндером (причина фикса)"  "ParameterBindingException"  "$(get_field "$out" nd_binderr)"
 assert_eq "каталога до вызова нет"                 "False"  "$(get_field "$out" nd_before)"
 assert_eq "New-DirLiteral создал каталог с [ ] в имени"  "True"   "$(get_field "$out" nd_after)"
+
+suite "PS1 yt-dlp: выбор единственного mp3 перевода"
+assert_eq "без mp3 результат не выбран" "True" "$(get_field "$out" tr_empty)"
+assert_eq "один mp3 со спецсимволами выбран буквально" "True" "$(get_field "$out" tr_single)"
+assert_eq "несколько mp3 → отказ" "True" "$(get_field "$out" tr_multiple)"
+assert_eq "неоднозначность объяснена пользователю" "1" "$(get_field "$out" tr_warning)"
+assert_eq "селектор не переименовывает и не удаляет mp3" "2" "$(get_field "$out" tr_kept)"
 
 summary

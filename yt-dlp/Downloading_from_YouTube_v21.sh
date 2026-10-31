@@ -325,6 +325,9 @@ read_config() {
             #   • счётчик итераций. Значение переменной, содержащее ссылку на саму себя
             #     (SELF='${SELF}' в окружении), давало бесконечный цикл — скрипт висел
             #     молча, не дойдя до первой загрузки.
+            # Имена переменных bash регистрозависимы: под nocasematch replace
+            # для ${Foo} заменил бы одновременно ${FOO} значением первой ссылки.
+            shopt -u nocasematch
             local _sub_guard=0
             while [[ "$value" == *'${'*'}'* ]] && [ "$_sub_guard" -lt 32 ]; do
                 _sub_guard=$((_sub_guard + 1))
@@ -336,6 +339,7 @@ read_config() {
                 [ -n "${!_vn:-}" ] || echo "WARN: переменная $_vn не задана" >&2
                 value="${value//\$\{$_vn\}/${!_vn:-}}"
             done
+            shopt -s nocasematch
             $ncm_was_on || shopt -u nocasematch
             if $_psr_on; then shopt -s patsub_replacement; fi
             _read_config_out "$value" "${4:-}"
@@ -1104,9 +1108,18 @@ translate_audio() {
         return 1
     fi
 
-    # Найти скачанный mp3
-    local translation_file
-    translation_file=$(find "$temp_dir" -name "*.mp3" -type f | head -1)
+    # Для одного URL vot должен вернуть ровно один mp3. Выбирать произвольную
+    # дорожку при нескольких результатах нельзя: можно вмержить чужой перевод.
+    local translation_file="" mp3_count=0 candidate
+    while IFS= read -r -d '' candidate; do
+        translation_file="$candidate"
+        mp3_count=$((mp3_count + 1))
+    done < <(find "$temp_dir" -name '*.mp3' -type f -print0)
+    if [ "$mp3_count" -gt 1 ]; then
+        log_error "AI-перевод: найдено несколько mp3 ($mp3_count) — перевод пропущен."
+        rm -rf "$temp_dir"
+        return 1
+    fi
     if [ -z "$translation_file" ]; then
         log_error "Файл перевода не найден в $temp_dir"
         rm -rf "$temp_dir"
@@ -1476,6 +1489,7 @@ COOKIES:
 ПЕРЕВОД (требует vot-cli-live, ffmpeg, Node.js 18+):
   --translate LANG             Добавить AI-перевод аудио (ru, en, kk)
   --voice STYLE                Голос: live (по умолчанию) / tts
+  --dual-track                 Сохранить оригинал и перевод отдельными дорожками
   --mix                        Смешать оригинал + перевод
   --replace                    Заменить оригинал переводом
   (по умолчанию — mix: смешать оригинал + перевод)

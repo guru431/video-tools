@@ -782,4 +782,54 @@ assert_contains "запятая в скорости отклонена" "playbac
 _out="$(run_ps "$_vsetup; \$threads='много'; Test-RemoteConfigValues")"
 assert_contains "нечисловые threads отклонены" "threads" "$_out"
 
+suite "remote PS1: недопустимый upload_id и сбой пробного ролика"
+_harness="$(mktemp_suffix "${TMPDIR:-/tmp}/remote_validation_" .ps1)"
+_validation_dir="$(mktemp -d "${TMPDIR:-/tmp}/remote_validation_XXXXXX")"
+_validation_win="$(cygpath -w "$_validation_dir" 2>/dev/null || echo "$_validation_dir")"
+cat > "$_harness" <<PSEOF
+. '$MODULE'
+\$payload = Join-Path '$_validation_win' 'payload.bin'
+[System.IO.File]::WriteAllText(\$payload, 'abc')
+\$script:RemoteUploadSidecar = Join-Path '$_validation_win' 'sidecar'
+\$remote_endpoint = 'http://mock.invalid/v1'
+Write-RemoteUploadSidecar -UploadId '../jobs/other' -Size 3 -Source \$payload
+\$script:paths = New-Object System.Collections.ArrayList
+function Invoke-RemoteHttp {
+    param([string]\$Method, [string]\$Path)
+    [void]\$script:paths.Add("\$Method \$Path")
+    if (\$Path -eq '/uploads') {
+        return [pscustomobject]@{ Code = 200; Body = '{"upload_id":"up-safe","chunk_size":1024}' }
+    }
+    return [pscustomobject]@{ Code = 200; Body = '{"received":3}' }
+}
+\$uid = Send-RemoteUpload \$payload
+Write-Output "SAFEUID=\$uid"
+Write-Output ("BADPATH=" + [bool](@(\$script:paths | Where-Object { \$_.Contains('../') }).Count))
+\$script:RemoteUploadSidecar = ''
+function Invoke-RemoteHttp { return [pscustomobject]@{ Code = 200; Body = '{"upload_id":"../bad"}' } }
+\$uid = Send-RemoteUpload \$payload
+Write-Output ("BADRESPONSE=" + [bool]\$uid)
+function Invoke-RemotePreflight { return \$true }
+function Send-RemoteUpload { \$script:uploads++; return \$null }
+function ffmpeg {
+    [System.IO.File]::WriteAllText(\$args[-1], \$script:clipContent)
+    \$global:LASTEXITCODE = \$script:clipExit
+}
+\$ffmpeg = 'ffmpeg'
+foreach (\$mode in @('failed', 'empty')) {
+    \$script:uploads = 0
+    \$script:clipExit = if (\$mode -eq 'failed') { 7 } else { 0 }
+    \$script:clipContent = if (\$mode -eq 'failed') { 'partial' } else { '' }
+    \$rc = Invoke-RemoteSelftest
+    Write-Output ("SELFTEST_\$mode=" + \$rc + '|' + \$script:uploads)
+}
+PSEOF
+_out="$("$PS_BIN" -NoProfile -NonInteractive -File "$_harness" 2>&1 | tr -d '\r')"
+assert_contains "повреждённый sidecar заменён новой загрузкой" "SAFEUID=up-safe" "$_out"
+assert_contains "недопустимый upload_id не ушёл в URL" "BADPATH=False" "$_out"
+assert_contains "недопустимый ответ службы отклонён" "BADRESPONSE=False" "$_out"
+assert_contains "ненулевой ffmpeg с частичным файлом — отказ до отправки" "SELFTEST_failed=1|0" "$_out"
+assert_contains "пустой ролик с rc=0 — отказ до отправки" "SELFTEST_empty=1|0" "$_out"
+rm -f "$_harness"; rm -rf "$_validation_dir"
+
 summary

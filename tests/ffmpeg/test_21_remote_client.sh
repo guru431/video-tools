@@ -436,6 +436,16 @@ rm -f "$_sidecar"
 # ══════════════════════════════════════════════════════════════
 suite "remote: повтор отправки куска"
 # ══════════════════════════════════════════════════════════════
+_sidecar="$(mktemp "${TMPDIR:-/tmp}/remote_sc_XXXXXX")"
+{ echo "upload_id=../jobs/other"; echo "size=3000"; echo "endpoint=$remote_endpoint"; } > "$_sidecar"
+REMOTE_UPLOAD_SIDECAR="$_sidecar"
+: > "$MOCK_CURL_LOG"
+remote_upload "$_big" >/dev/null
+assert_eq "повреждённый идентификатор заменён новой загрузкой" "up-44" "$REMOTE_UPLOAD_ID"
+assert_not_contains "недопустимый upload_id не уходит в URL" "../jobs/other" "$(cat "$MOCK_CURL_LOG")"
+rm -f "$_sidecar"
+REMOTE_UPLOAD_SIDECAR=""
+
 # Обрыв на 90-м проценте трёхгигабайтного файла не должен стоить всего файла.
 # Повторяем то, что может пройти со второй попытки (5xx, 429, обрыв), и НЕ
 # повторяем отказ по существу: 413 не станет верным с третьей попытки.

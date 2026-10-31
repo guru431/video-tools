@@ -59,6 +59,14 @@ now_s() {
 	[ -n "$NOW_S" ] || NOW_S=$(date +%s)
 }
 
+# ffmpeg -progress сообщает чч:мм:сс.мкс. Неполную строку и N/A пропускаем:
+# пустое поле в арифметике 10# иначе обрывает обработку файла.
+progress_time_seconds() {
+	PROGRESS_SECONDS=0
+	[[ "$1" =~ ^([0-9]+):([0-9]+):([0-9]+)(\.[0-9]+)?$ ]] || return 1
+	PROGRESS_SECONDS=$(( 10#${BASH_REMATCH[1]} * 3600 + 10#${BASH_REMATCH[2]} * 60 + 10#${BASH_REMATCH[3]} ))
+}
+
 # --- F-path. Нормализация корневых путей ---
 # Хвостовой разделитель в [folders] source/destination — обычный пользовательский ввод,
 # но относительный путь подпапки считается ВЫЧИТАНИЕМ строки folder_sources из каталога
@@ -752,14 +760,7 @@ publish_result() {
 		verify="size-only"
 		log_msg "WARN" "${src##*/}: без локального ffmpeg результат проверен только по размеру"
 	fi
-	if [ "$verify" = "hash-ok" ] && [ ! -s "$tmp" ]; then
-		log_msg "FAIL" "${src##*/}: скачан пустой результат"
-		rm -f "$tmp"
-		any_fail="yes"
-		put_result "fail"
-		return 1
-	fi
-	if [ "$verify" = "size-only" ] && [ ! -s "$tmp" ]; then
+	if { [ "$verify" = "hash-ok" ] || [ "$verify" = "size-only" ]; } && [ ! -s "$tmp" ]; then
 		log_msg "FAIL" "${src##*/}: скачан пустой результат"
 		rm -f "$tmp"
 		any_fail="yes"
@@ -1928,26 +1929,10 @@ encode_file() {
 					while IFS= read -r _pl; do
 						case "$_pl" in out_time=*) out_time_str="${_pl#out_time=}"; out_time_str="${out_time_str%%=*}" ;; esac
 					done <<< "$_ptail"
-					if [ -n "$out_time_str" ]; then
-						local oh om os out_sec pct
-						# Поля чч:мм:сс.мкс — раскрытием параметров, как прежние `cut -d:`
-						# (строка без ':' у cut отдаётся целиком в любое поле).
-						oh="${out_time_str%%:*}"
-						om="${out_time_str#*:}"; om="${om%%:*}"
-						case "$out_time_str" in
-							*:*:*) os="${out_time_str#*:*:}"; os="${os%%:*}" ;;
-							*:*)   os="" ;;
-							*)     os="$out_time_str" ;;
-						esac
-						os="${os%%.*}"
-						if [[ "$oh$om$os" =~ ^[0-9]+$ ]] && [ "$progress_dur" -gt 0 ]; then
-							out_sec=$(( 10#$oh * 3600 + 10#$om * 60 + 10#$os ))
-							if [ "$out_sec" -gt 0 ]; then
-								pct=$((out_sec * 100 / progress_dur))
-								[ $pct -gt 100 ] && pct=100
-								show_progress_bar $pct "$full_path"
-							fi
-						fi
+					if progress_time_seconds "$out_time_str" && [ "$PROGRESS_SECONDS" -gt 0 ]; then
+						local pct=$((PROGRESS_SECONDS * 100 / progress_dur))
+						[ $pct -gt 100 ] && pct=100
+						show_progress_bar $pct "$full_path"
 					fi
 				fi
 			done
@@ -2129,13 +2114,33 @@ if [ "$merge_files" != "yes" ] && [ "$extract_audio_copy" != "yes" ] && [ "$crea
 	# Ключи, встретившиеся больше одного раза, — и есть коллизии. С одним входом
 	# коллизий не бывает, и sort | awk на нём — два лишних процесса.
 	if [ "$_cmap_n" -gt 1 ]; then
-		LC_ALL=C sort "$_cmap" | LC_ALL=C awk -F'\t' '{c[$1]++} END {for (k in c) if (c[k] > 1) print k}' > "$collisions_file"
+		_pf_split=0
+		[ "$length_coding_status" = "+" ] && [ "$start_coding_status" != "+" ] && _pf_split=1
+		# Длительность ещё неизвестна: movie может дать movie (part.N),
+		# а короткий вход с таким именем — выход без дополнительного суффикса.
+		# Снимаем ровно один суффикс и ищем существующую базу; сами по себе
+		# movie (part.1) и movie (part.2) друг другу не мешают.
+		LC_ALL=C sort "$_cmap" | LC_ALL=C awk -F'\t' -v split_parts="$_pf_split" '
+			{c[$1]++}
+			END {
+				for (k in c) {
+					if (c[k] > 1) conflict[k] = 1
+					if (!split_parts) continue
+					stem = k; sub(/\.[^./]*$/, "", stem)
+					ext = substr(k, length(stem) + 1)
+					if (stem !~ / \(part\.([1-9][0-9]{0,2}|1000)\)$/) continue
+					sub(/ \(part\.([1-9][0-9]{0,2}|1000)\)$/, "", stem)
+					parent = stem ext
+					if (parent in c) {conflict[parent] = 1; conflict[k] = 1}
+				}
+				for (k in conflict) print k
+			}' > "$collisions_file"
 	fi
 	if [ -s "$collisions_file" ]; then
 		while IFS= read -r _col_key; do
 			_col_ins=$(LC_ALL=C awk -F'\t' -v k="$_col_key" '$1 == k {print "    " $3}' "$_cmap")
 			_col_out=$(LC_ALL=C awk -F'\t' -v k="$_col_key" '$1 == k {print $2; exit}' "$_cmap")
-			log_msg "FAIL" "Конфликт выходов: на «${_col_out}» претендуют несколько входов — все пропущены (включите save_old_extension=yes либо разнесите файлы):"
+			log_msg "FAIL" "Конфликт выходов: «${_col_out}» пересекается с выходами другого входа (включая имена частей) — все пропущены (включите save_old_extension=yes либо разнесите файлы):"
 			printf '%s\n' "$_col_ins"
 		done < "$collisions_file"
 	fi

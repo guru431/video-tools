@@ -96,6 +96,10 @@ read_config() {
 			# name», значение терялось молча), и число итераций ограничено —
 			# самоссылка (SELF='${SELF}' в окружении) давала вечный цикл.
 			local _sub_guard=0
+			# Имена placeholders регистрозависимы, как String.Replace в PS1.
+			# nocasematch нужен только ключам/секциям: иначе ${Var}/${VAR}
+			# заменяются одновременно значением первой переменной.
+			shopt -u nocasematch
 			while [[ "$value" == *'${'*'}'* ]] && [ "$_sub_guard" -lt 32 ]; do
 				_sub_guard=$((_sub_guard + 1))
 				local _vn="${value#*\$\{}"; _vn="${_vn%%\}*}"
@@ -106,6 +110,7 @@ read_config() {
 				[ -n "${!_vn:-}" ] || [ "$section" = "remote" ] || [ "$section" = "asr" ] || echo "WARN: переменная $_vn не задана" >&2
 				value="${value//\$\{$_vn\}/${!_vn:-}}"
 			done
+			shopt -s nocasematch
 			# Кавычки вокруг значения — обычный результат «Копировать как путь» в
 			# проводнике Windows. Без снятия путь «"C:/video/in"» не находился ни на
 			# одной платформе, а PS1 вдобавок падал исключением IsPathRooted.

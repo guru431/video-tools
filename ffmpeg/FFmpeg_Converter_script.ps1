@@ -1097,7 +1097,7 @@ function Encode-File {
 
 	# --- I. Извлечение аудио без перекодирования ---
 	if ($extract_audio_copy -eq "yes") {
-		$audioLine = (& $ffmpeg -i $full_path 2>&1 | Out-String) -split "`n" | Where-Object { $_ -match 'Audio:' } | Select-Object -First 1
+		$audioLine = (& $ffmpeg -i $full_path 2>&1 | Out-String) -split "`n" | Where-Object { $_ -match '^\s*Stream #\S+: Audio: ' } | Select-Object -First 1
 		$codec = if ($audioLine -match 'Audio:\s+(\w+)') { $Matches[1] } else { '' }
 		$ext = switch -Regex ($codec) {
 			'^aac$'    { 'm4a'  }
@@ -2183,9 +2183,10 @@ if (-not $guiProgressFile) {
 			elseif ($b -ge 1MB) { "{0:F1} MB" -f ($b / 1MB) }
 			else { "{0:F0} KB" -f ($b / 1KB) }
 		}
-		$compressPct = [int]((1 - $script:totalOutBytes / $script:totalInBytes) * 100)
+		$compressLabel = if ($script:totalOutBytes -gt $script:totalInBytes) { 'увеличение' } else { 'сжатие' }
+		$compressPct = [Math]::Round([Math]::Abs((1 - $script:totalOutBytes / $script:totalInBytes) * 100), 0, [MidpointRounding]::AwayFromZero)
 		Write-Host ("  Вход:        {0}" -f (Format-Bytes $script:totalInBytes))
-		Write-Host ("  Выход:       {0} (сжатие {1}%)" -f (Format-Bytes $script:totalOutBytes), $compressPct)
+		Write-Host ("  Выход:       {0} ({1} {2}%)" -f (Format-Bytes $script:totalOutBytes), $compressLabel, $compressPct)
 	}
 	Write-Host "══════════════════════════════════════════════"
 	Write-Host ""

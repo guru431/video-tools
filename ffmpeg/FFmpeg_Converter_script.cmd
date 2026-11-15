@@ -686,7 +686,7 @@ rem а goto из тела for обрывал бы перечисление фа�
 			set "audio_line="
 			rem findstr, а не find: опция Git «Unix tools from the Command Prompt» ставит
 			rem MSYS find в PATH, и тот искал ФАЙЛ «Audio:» — кодек не находился, выход .mka.
-			for /f "delims=" %%c in ('""!ffmpeg!" -i "!full_path!" 2^>^&1 ^| findstr /c:"Audio:""') do if not defined audio_line set "audio_line=%%c"
+			for /f "delims=" %%c in ('""!ffmpeg!" -i "!full_path!" 2^>^&1 ^| findstr /r /c:"^ *Stream #[^ ]*: Audio: ""') do if not defined audio_line set "audio_line=%%c"
 			rem Кодек - первое слово после "Audio: ", как в parse_media_info .sh и в .ps1.
 			rem Подстрочный поиск "Audio: aac" принимал и aac_latm (DVB .ts): CMD писал .m4a
 			rem там, где SH/PS1 пишут .mka.

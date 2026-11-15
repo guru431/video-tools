@@ -404,7 +404,9 @@ function Invoke-RemoteHttp {
 		# UnauthorizedAccessException, неразбираемый URI. Раньше такие исключения
 		# уходили наверх сквозь Encode-File: в GUI «Сбой выполнения», остаток пакета
 		# не обработан. Ошибка одного файла обязана оставаться ошибкой одного файла.
-		return [pscustomobject]@{ Code = 0; Body = $_.Exception.Message }
+		$baseError = $_.Exception.GetBaseException()
+		$errorCode = if ($baseError -is [System.IO.IOException] -or $baseError -is [System.Net.Sockets.SocketException]) { 0 } else { -1 }
+		return [pscustomobject]@{ Code = $errorCode; Body = $_.Exception.Message }
 	}
 }
 
@@ -421,12 +423,17 @@ function Invoke-RemoteHttpRetry {
 		[byte[]]$InBytes = $null,
 		[int]$TimeoutMs = 60000
 	)
-	$tries = if ($env:REMOTE_HTTP_RETRIES) { [int]$env:REMOTE_HTTP_RETRIES } else { 4 }
+	$tries = 4
+	$parsedTries = 0
+	if ($env:REMOTE_HTTP_RETRIES -cmatch '^[0-9]+$' -and
+	    [int]::TryParse($env:REMOTE_HTTP_RETRIES, [ref]$parsedTries) -and $parsedTries -ge 1) { $tries = $parsedTries }
 	$pause = Get-RemoteRetryDelay
 	for ($try = 1; ; $try++) {
 		$r = Invoke-RemoteHttp $Method $Path $Body $Headers $OutFile $InBytes $TimeoutMs
 		if ($r.Code -ge 200 -and $r.Code -le 204) { return $r }
 		if (-not (Test-RemoteRetryableCode $r.Code)) { return $r }
+		# A lost response does not prove POST /jobs was rejected (no_reuse).
+		if ($Method -eq 'POST' -and $Path -eq '/jobs' -and $r.Code -eq 0) { return $r }
 		if ($try -ge $tries) { return $r }
 		$waitS = [Math]::Min($pause, 60)
 		Write-Host "[ПРЕДУПРЕЖДЕНИЕ] Служба ответила HTTP $($r.Code) — повтор через ${waitS}с (попытка $($try + 1) из $tries)."
@@ -986,6 +993,15 @@ function Get-RemoteStallSeconds {
 	return $s
 }
 
+function Get-RemotePollSeconds {
+	$value = $env:REMOTE_POLL_SECONDS
+	if (-not $value -or $value -cnotmatch '^[0-9]+$') { return 2 }
+	$value = $value.TrimStart('0')
+	if (-not $value) { return 0 }
+	if ($value.Length -gt 2) { return 60 }
+	return [Math]::Min([int]$value, 60)
+}
+
 function Wait-RemoteJob {
 	param([string]$JobId, [string]$Label, [scriptblock]$OnProgress = $null, [scriptblock]$OnCancel = $null)
 	$script:RemoteCurrentJob = $JobId
@@ -993,6 +1009,7 @@ function Wait-RemoteJob {
 	$lastSig = ''
 	$lastState = ''
 	$fails = 0
+	$pollS = Get-RemotePollSeconds
 	$maxFails = if ($env:REMOTE_POLL_MAX_FAILS) { [int]$env:REMOTE_POLL_MAX_FAILS } else { 5 }
 	$limitRun = Get-RemoteStallSeconds
 	$limitGpu = Get-RemoteStallSeconds 'waiting_gpu'
@@ -1024,7 +1041,6 @@ function Wait-RemoteJob {
 				$script:RemoteCurrentJob = ''; return $false
 			}
 			Write-Host "[ПРЕДУПРЕЖДЕНИЕ] Опрос задачи не удался (HTTP $($r.Code)), попытка $fails из $maxFails."
-			$pollS = if ($env:REMOTE_POLL_SECONDS) { [int]$env:REMOTE_POLL_SECONDS } else { 2 }
 			Start-Sleep -Seconds ($pollS * $fails)
 			continue
 		}
@@ -1035,7 +1051,7 @@ function Wait-RemoteJob {
 		try { $j = $r.Body | ConvertFrom-Json } catch {}
 		if ($null -eq $j) {
 			Write-Host "[ПРЕДУПРЕЖДЕНИЕ] Служба вернула неразбираемый ответ на опрос задачи — повтор."
-			Start-Sleep -Seconds $(if ($env:REMOTE_POLL_SECONDS) { [int]$env:REMOTE_POLL_SECONDS } else { 2 })
+			Start-Sleep -Seconds $pollS
 			continue
 		}
 		# Признак живости — пара (state, progress): задача, идущая с 40 % до 41 %,
@@ -1071,7 +1087,7 @@ function Wait-RemoteJob {
 			}
 			default { if ($OnProgress) { & $OnProgress ([int]$j.progress) $Label 'кодирование' } }
 		}
-		Start-Sleep -Seconds $(if ($env:REMOTE_POLL_SECONDS) { [int]$env:REMOTE_POLL_SECONDS } else { 2 })
+		Start-Sleep -Seconds $pollS
 	}
 }
 

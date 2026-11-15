@@ -354,11 +354,17 @@ remote_retry_delay() {
 
 remote_http_retry() {
 	local tries="${REMOTE_HTTP_RETRIES:-4}" try=1 pause="${REMOTE_RETRY_SECONDS:-3}"
+	case "$tries" in *[!0-9]*) tries=4 ;; esac
+	while [ "${#tries}" -gt 1 ] && [ "${tries:0:1}" = 0 ]; do tries="${tries:1}"; done
+	if [ "$tries" = 0 ] || [ "${#tries}" -gt 10 ] || [ "$tries" -gt 2147483647 ]; then tries=4; fi
 	remote_retry_delay; pause="$REMOTE_RETRY_DELAY"
 	while :; do
 		remote_http "$@"
 		case "$REMOTE_HTTP_CODE" in 200|201|202|204) return 0 ;; esac
 		remote_retryable_code "$REMOTE_HTTP_CODE" || return 1
+		# The request may have been accepted before the connection broke.
+		# Retrying a job with no_reuse=true would create an orphan GPU job.
+		case "$1:$2:$REMOTE_HTTP_CODE" in POST:/jobs:0|POST:/jobs:000) return 1 ;; esac
 		[ "$try" -ge "$tries" ] && return 1
 		# Retry-After в теле служба не шлёт, а заголовки мы не читаем — берём
 		# растущую паузу с потолком в минуту.
@@ -1284,8 +1290,16 @@ REMOTE_CURRENT_JOB=""
 REMOTE_RESULT_SHA256=""
 REMOTE_RESULT_SIZE=""
 REMOTE_RESULT_VERIFIED="no"
+remote_poll_seconds() {
+	REMOTE_POLL_INTERVAL="${REMOTE_POLL_SECONDS:-2}"
+	case "$REMOTE_POLL_INTERVAL" in *[!0-9]*) REMOTE_POLL_INTERVAL=2 ;; esac
+	while [ "${#REMOTE_POLL_INTERVAL}" -gt 1 ] && [ "${REMOTE_POLL_INTERVAL:0:1}" = 0 ]; do REMOTE_POLL_INTERVAL="${REMOTE_POLL_INTERVAL:1}"; done
+	if [ "${#REMOTE_POLL_INTERVAL}" -gt 2 ] || [ "$REMOTE_POLL_INTERVAL" -gt 60 ]; then REMOTE_POLL_INTERVAL=60; fi
+}
 remote_wait() {
 	local jid="$1" label="$2" polls=0 answer state
+	remote_poll_seconds
+	local poll_interval="$REMOTE_POLL_INTERVAL"
 	local last_change limit limit_gpu lim sig last_sig="" fails=0 maxfails="${REMOTE_POLL_MAX_FAILS:-5}" now
 	# Время — EPOCHSECONDS (bash 5+, без процесса на каждом опросе); bash 3.2 — date.
 	last_change="${EPOCHSECONDS:-$(date +%s)}"
@@ -1315,7 +1329,7 @@ remote_wait() {
 				REMOTE_CURRENT_JOB=""; return 1
 			}
 			echo "[ПРЕДУПРЕЖДЕНИЕ] Опрос задачи не удался (HTTP $REMOTE_HTTP_CODE), попытка $fails из $maxfails." >&2
-			sleep "$(( ${REMOTE_POLL_SECONDS:-2} * fails ))"
+			sleep "$(( poll_interval * fails ))"
 			continue
 		fi
 		fails=0
@@ -1375,7 +1389,7 @@ remote_wait() {
 			remote_cancel "$jid"
 			REMOTE_CURRENT_JOB=""; return 1
 		fi
-		sleep "${REMOTE_POLL_SECONDS:-2}"
+		sleep "$poll_interval"
 	done
 }
 

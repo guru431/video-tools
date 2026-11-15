@@ -898,4 +898,29 @@ REMOTE_RETRY_SECONDS=999999999999999999999 remote_retry_delay
 assert_eq "огромная пауза ограничена минутой" "60" "$REMOTE_RETRY_DELAY"
 REMOTE_RETRY_SECONDS=000 remote_retry_delay
 assert_eq "явный ноль допустим" "0" "$REMOTE_RETRY_DELAY"
+suite "remote: безопасные повторы и числовые настройки"
+_retry_out=$(
+    source "$PROJECT_DIR/ffmpeg/remote_client.sh"
+    remote_http() { REMOTE_HTTP_CODE=000; calls=$((calls + 1)); }
+    sleep() { :; }
+    for val in abc 0 -1 999999999999999999999; do
+        calls=0
+        REMOTE_HTTP_RETRIES="$val" REMOTE_RETRY_SECONDS=0 remote_http_retry GET /health
+        printf 'TRIES[%s]=%s\n' "$val" "$calls"
+    done
+    calls=0
+    REMOTE_HTTP_RETRIES=4 REMOTE_RETRY_SECONDS=0 remote_http_retry POST /jobs '{}'
+    printf 'POST=%s\n' "$calls"
+    REMOTE_POLL_SECONDS=oops remote_poll_seconds
+    printf 'POLL=%s\n' "$REMOTE_POLL_INTERVAL"
+    REMOTE_POLL_SECONDS=0008 remote_poll_seconds
+    printf 'POLL_ZEROES=%s\n' "$REMOTE_POLL_INTERVAL"
+)
+for val in abc 0 -1 999999999999999999999; do
+    assert_contains "REMOTE_HTTP_RETRIES=$val: четыре попытки" "TRIES[$val]=4" "$_retry_out"
+done
+assert_contains "потерянный ответ POST /jobs не создаёт повторную задачу" "POST=1" "$_retry_out"
+assert_contains "нечисловой интервал заменён на 2" "POLL=2" "$_retry_out"
+assert_contains "интервал с ведущими нулями десятичный" "POLL_ZEROES=8" "$_retry_out"
+
 summary

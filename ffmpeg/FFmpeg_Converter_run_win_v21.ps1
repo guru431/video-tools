@@ -85,9 +85,9 @@ function Remove-ConfigQuotes {
 function Remove-ConfigComment {
     param([string]$Value)
     $m = [regex]::Match($Value, '^("[^"]*"|''[^'']*'')')
-    if ($m.Success) { return $m.Value + ($Value.Substring($m.Length) -replace '\s+#.*', '') }
+    if ($m.Success) { return $m.Value + ($Value.Substring($m.Length) -replace ' +#.*', '') }
     if ($Value -match '^["'']') { return $Value }
-    return ($Value -replace '\s+#.*', '')
+    return ($Value -replace ' +#.*', '')
 }
 
 # Подстановка ${ENV_VAR} — алгоритм read_config из .sh, :expand_env из .cmd и
@@ -112,6 +112,9 @@ function Expand-ConfigEnv {
             $ev = ''
         }
         $Value = $Value.Replace('${' + $vn + '}', $ev)
+    }
+    if ($i -eq 32 -and $Value -match '\$\{[^}]*\}') {
+        $script:configWarnings += 'WARN: превышен лимит подстановок переменных окружения (32), остаток оставлен как есть'
     }
     return $Value
 }

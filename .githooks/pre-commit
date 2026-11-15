@@ -9,6 +9,14 @@ set -eu
 
 repo_root=$(git rev-parse --show-toplevel)
 fail=0
+# One task-owned directory per hook invocation; never fall back to shared names.
+mkdir -p "$repo_root/.tmp"
+if ! hook_tmp=$(mktemp -d "$repo_root/.tmp/pre-commit.XXXXXXXX"); then
+  echo 'BLOCKED: pre-commit: mktemp failed; secret scan cannot run.' >&2
+  exit 1
+fi
+trap 'rm -rf "$hook_tmp"' EXIT
+trap 'exit 1' HUP INT TERM
 
 # 1) Block sensitive filenames being newly introduced (allow *.example* templates).
 #    --diff-filter=ACR (not just A): a plain rename of an already-tracked file into a
@@ -53,7 +61,7 @@ fi
 # 3) Personal denylist — concrete values from untracked .sanitize-patterns
 sp="$repo_root/.sanitize-patterns"
 if [ -f "$sp" ]; then
-  pat=$(mktemp 2>/dev/null || echo "$repo_root/.sanitize-patterns.tmp")
+  pat="$hook_tmp/patterns"
   # Отбрасываем пустые строки И комментарии (#) — формат из .sanitize-patterns.example.
   grep -vE '^[[:space:]]*($|#)' "$sp" > "$pat" 2>/dev/null || true
   if [ -s "$pat" ]; then
@@ -63,7 +71,7 @@ if [ -f "$sp" ]; then
     # Windows) комбинация -iF падает с SIGABRT (rc=134), и тот же `|| true` снова
     # глушил бы провал. Регистронезависимость — приведением обеих сторон к нижнему
     # регистру (tr) + grep -nFf без -i.
-    patlc=$(mktemp 2>/dev/null || echo "$repo_root/.sanitize-patterns.lc")
+    patlc="$hook_tmp/patterns-lower"
     tr 'A-Z' 'a-z' < "$pat" > "$patlc" 2>/dev/null || true
     hits=$(printf '%s\n' "$diff_content" | tr 'A-Z' 'a-z' | grep -nFf "$patlc" || true)
     rm -f "$patlc"
@@ -84,7 +92,8 @@ fi
 # то есть блок 4 не проверял ничего. Репозиторий русскоязычный.
 bins=$(git -c core.quotePath=false diff --cached --numstat --diff-filter=AM | awk -F'\t' '$1=="-" && $2=="-" { print $3 }')
 if [ -n "$bins" ]; then
-  bin_report=$(mktemp 2>/dev/null || echo "$repo_root/.pc_binscan.tmp")
+  bin_report="$hook_tmp/binary-report"
+  : > "$bin_report"
   printf '%s\n' "$bins" | while IFS= read -r bf; do
     [ -n "$bf" ] || continue
     strs=$(git show ":$bf" 2>/dev/null | grep -aoE '[[:print:]]{6,}' || true)
@@ -96,7 +105,7 @@ if [ -n "$bins" ]; then
     if [ -f "$sp" ]; then
       dl=$(grep -vE '^[[:space:]]*($|#)' "$sp" 2>/dev/null || true)
       if [ -n "$dl" ]; then
-        dlf=$(mktemp 2>/dev/null || echo "$repo_root/.pc_dl.tmp")
+        dlf="$hook_tmp/binary-denylist"
         printf '%s\n' "$dl" | tr 'A-Z' 'a-z' > "$dlf"
         ph=$(printf '%s\n' "$strs" | tr 'A-Z' 'a-z' | grep -nFf "$dlf" || true)
         rm -f "$dlf"

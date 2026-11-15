@@ -205,4 +205,17 @@ assert_contains     "обычные слова с sk- → коммит созд�
 assert_not_contains "обычные слова с sk- → нет BLOCKED" "BLOCKED" "$OUT"
 rm -rf "$R"
 
+suite "pre-commit: отказ mktemp останавливает проверку"
+R=$(new_repo)
+printf '.sanitize-patterns\n' > "$R/.gitignore"
+printf 'private-marker\n' > "$R/.sanitize-patterns"
+mkdir "$R/bin"
+printf '#!/bin/sh\nexit 1\n' > "$R/bin/mktemp"
+chmod +x "$R/bin/mktemp"
+OUT=$(PATH="$R/bin:$PATH" try_commit "$R" "mktemp unavailable")
+assert_not_contains "без безопасного temp коммит не создаётся" "RC=0" "$OUT"
+assert_contains "причина отказа названа" "mktemp" "$OUT"
+assert_eq "нет предсказуемого fallback-файла" "absent" "$(if [ -e "$R/.sanitize-patterns.tmp" ]; then echo present; else echo absent; fi)"
+rm -rf "$R"
+
 summary

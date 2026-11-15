@@ -117,6 +117,11 @@ run_tr_f9() {
         export PATH="$W9/bin:$PATH"
         VOT_BIN="$W9/bin/vot"
         FFPROBE="${TEST_AUDIO_PROBE:-$W9/bin/ffprobe_missing_$$}"
+        if [ "${TEST_FAIL_MERGE_TMP:-}" = 1 ]; then
+            mktemp() {
+                case "$*" in *ytdlp_merge_err_*) return 1 ;; *) command mktemp "$@" ;; esac
+            }
+        fi
         translate_audio "$W9/vid/clip.mp4" "http://u" ru live "$mode" en 0.3 1.0 "" 2>&1
     )
 }
@@ -136,6 +141,11 @@ OUT=$(TEST_AUDIO_PROBE="$W9/bin/ffprobe" MOCK_AUDIO_LOG="$W9/audio.log" run_tr_f
 assert_eq "SH: dual_track без оригинального звука → успех" "0" "$RC"
 assert_contains "SH: исходное аудио необязательно" "-map 0:a?" "$(cat "$W9/audio.log")"
 assert_contains "SH: перевод — первая аудиодорожка" "-c:a:0 aac" "$(cat "$W9/audio.log")"
+assert_contains "SH: язык первой дорожки перезаписан языком перевода" '-metadata:s:a:0 language=rus' "$(cat "$W9/audio.log")"
+OUT=$(TEST_FAIL_MERGE_TMP=1 run_tr_f9 mix); RC=$?
+assert_eq "SH: отказ mktemp при мерже → ошибка файла" "1" "$RC"
+assert_contains "SH: отказ временного файла объяснён" "временный файл диагностики" "$OUT"
+assert_eq "SH: исходное видео сохранено" "yes" "$(if [ -f "$W9/vid/clip.mp4" ]; then echo yes; else echo no; fi)"
 rm -rf "$W9"
 
 # ══════════════════════════════════════════════════════════════
@@ -186,7 +196,7 @@ assert_contains "F4 (CMD): errorlevel move проверяется"       'set "m
 # ══════════════════════════════════════════════════════════════
 suite "F8 (PS1 source-scan): exit code vot сохранён до Dispose"
 # ══════════════════════════════════════════════════════════════
-assert_contains     "F8: exit code читается до Dispose"       '$votExit = $votProc.ExitCode' "$PS1_SRC"
+assert_contains     "F8: финализация через проверенную функцию" '$votExit = Complete-TranslationProcess $votProc $outTask $errTask' "$PS1_SRC"
 assert_contains     "F8: флаг прерывания (Stop/таймаут)"      '$_votAborted = $true'          "$PS1_SRC"
 assert_contains     "F8: успех только при чистом выходе"      'if (-not $_votAborted -and $votExit -eq 0)' "$PS1_SRC"
 assert_contains     "F8: требуется непустой файл"             '$files[0].Length -gt 0'         "$PS1_SRC"
@@ -319,5 +329,39 @@ if cmd //c "exit 0" &>/dev/null; then
 else
     skip "CMD: грамматика времени обрезки — cmd.exe недоступен"
 fi
+
+suite "SH: SIGTERM останавливает vot до удаления временного каталога"
+SIGNAL_DIR=$(mktemp -d "${TMPDIR:-/tmp}/ytdlp_signal_XXXXXX")
+(
+    trap 'if [ -n "${worker:-}" ]; then kill -TERM "$worker" 2>/dev/null; wait "$worker" 2>/dev/null; fi; rm -rf "$SIGNAL_DIR"' EXIT
+    printf '#!/bin/bash\nprintf "%%s" "$$" > "$VOT_PID_FILE"\nexec sleep 30\n' > "$SIGNAL_DIR/vot"
+    chmod +x "$SIGNAL_DIR/vot"
+    for seconds in 900 0; do
+        rm -f "$SIGNAL_DIR/vot.pid"
+        (
+            source "$SH_SCRIPT"
+            VOT_BIN="$SIGNAL_DIR/vot"
+            export VOT_PID_FILE="$SIGNAL_DIR/vot.pid"
+            TRANSLATE_TIMEOUT_SEC="$seconds" translate_audio unused.mp4 http://mock.invalid ru live mix en 0.3 1.0 ''
+        ) > "$SIGNAL_DIR/worker.log" 2>&1 &
+        worker=$!
+        for ((i=0; i<100; i++)); do
+            [ -s "$SIGNAL_DIR/vot.pid" ] && break
+            sleep 0.05
+        done
+        vot_child=""
+        [ -s "$SIGNAL_DIR/vot.pid" ] && read -r vot_child < "$SIGNAL_DIR/vot.pid"
+        kill -TERM "$worker" 2>/dev/null
+        wait "$worker"; rc=$?
+        worker=""
+        assert_eq "таймаут=$seconds: rc прерывания 130" "130" "$rc"
+        if [ -n "$vot_child" ] && ! kill -0 "$vot_child" 2>/dev/null; then
+            pass "таймаут=$seconds: vot завершён"
+        else
+            fail "таймаут=$seconds: vot завершён" "завершённый PID" "$vot_child"
+            [ -n "$vot_child" ] && kill -KILL "$vot_child" 2>/dev/null
+        fi
+    done
+)
 
 summary

@@ -93,6 +93,7 @@ unclosed_sq = 'a #b.log
 no_eq
 no_eq = after
 EOCONFIG
+printf 'tab_comment = value\t# retained\nquoted_tab = "x # y"\t# retained\n' >> "$CONFIG_FILE"
 
 CFG_WIN=$(cygpath -w "$CONFIG_FILE" 2>/dev/null || echo "$CONFIG_FILE")
 
@@ -115,7 +116,7 @@ export MY_AMP_VAR="a=1&b=2"
 # mixed_case: ключ `Mixed_Case` в файле — SH сравнивает через =~ под nocasematch,
 # и bash применяет эту опцию и к =~ (ревью 2026-09-26 утверждало обратное).
 KEYS=(embed_eq inline_cmt hash_val spaced var_ref quoted_dq quoted_sq dup_key bad_name digit_name amp_ref mixed_case
-      quoted_hash quoted_hash_sq quoted_tail unclosed_dq unclosed_sq no_eq)
+      quoted_hash quoted_hash_sq quoted_tail unclosed_dq unclosed_sq no_eq tab_comment quoted_tab)
 
 # ══════════════════════════════════════════════════════════════
 suite "Кросс-парсерный паритет: SH read_config vs PS1 Read-Config"
@@ -193,18 +194,26 @@ suite "GUI-ридер: Remove-ConfigComment тот же, что в CLI"
 # разбором AST и гоняются на одних входах — копий в тесте нет.
 if [ "$HAVE_PS1" = true ]; then
     _rcc_ps=$(mktemp_suffix "${TMPDIR:-/tmp}/rcc_" .ps1)
-    cat > "$_rcc_ps" <<'PSEOF'
+    printf '\xEF\xBB\xBF' > "$_rcc_ps"
+    cat >> "$_rcc_ps" <<'PSEOF'
 param([string]$Cli, [string]$Gui)
 function Get-Fn([string]$File) {
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($File, [ref]$null, [ref]$null)
     $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Remove-ConfigComment' }, $true)
 }
-$inputs = @('"C:/video #1" # c', "'a #b.log'", '"x" y # z', 'value # c', 'my#file', '"open #x')
+$inputs = @('"C:/video #1" # c', "'a #b.log'", '"x" y # z', 'value # c', 'my#file', '"open #x', "value`t# retained")
 foreach ($side in @(@('CLI', $Cli), @('GUI', $Gui))) {
     $fn = Get-Fn $side[1]
     if (-not $fn) { Write-Output "$($side[0])=NOFUNC"; continue }
     . ([scriptblock]::Create($fn.Extent.Text))
     Write-Output ("{0}={1}" -f $side[0], (($inputs | ForEach-Object { Remove-ConfigComment $_ }) -join '|'))
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($side[1], [ref]$null, [ref]$null)
+    $fn = $ast.Find({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Expand-ConfigEnv'}, $true)
+    . ([scriptblock]::Create($fn.Extent.Text))
+    $env:VIDEO_EXPAND_LIMIT = '${VIDEO_EXPAND_LIMIT}x'
+    $script:configWarnings = @()
+    $value = Expand-ConfigEnv '${VIDEO_EXPAND_LIMIT}' $false 6>&1
+    Write-Output ("{0}_LIMIT={1}" -f $side[0], ((@($value) + $script:configWarnings) -join '|'))
 }
 PSEOF
     # cygpath — только в Git Bash; на Linux/macOS (pwsh стоит и там) путь идёт как есть,
@@ -214,9 +223,11 @@ PSEOF
     _rcc_out=$($PS_CMD -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$_rcc_ps_w" \
         -Cli "$RUN_PS1_WIN" -Gui "$_rcc_gui_w" 2>&1 | tr -d '\r')
     rm -f "$_rcc_ps"
-    _rcc_want='"C:/video #1"|'"'a #b.log'"'|"x" y|value|my#file|"open #x'
+    _rcc_want='"C:/video #1"|'"'a #b.log'"'|"x" y|value|my#file|"open #x|value'$'\t''# retained'
     assert_contains "CLI: комментарий вне кавычек" "CLI=$_rcc_want" "$_rcc_out"
     assert_contains "GUI: тот же результат"        "GUI=$_rcc_want" "$_rcc_out"
+    assert_contains "CLI: лимит подстановок объяснён" 'CLI_LIMIT=WARN:' "$_rcc_out"
+    assert_contains "GUI: лимит подстановок объяснён" 'WARN: превышен лимит подстановок' "$_rcc_out"
 else
     skip "GUI-ридер: Remove-ConfigComment" "PowerShell не найден"
 fi
@@ -308,6 +319,19 @@ if cmd //c "exit 0" &>/dev/null; then
 else
     skip "CMD: [folders] source читается из файла с BOM" "cmd.exe не доступен"
 fi
+
+suite "Потолок подстановок: SH и CMD предупреждают"
+mkdir -p "$CFG_DIR/cmd"
+printf '[folders]\nsource = ${VIDEO_EXPAND_LIMIT}\n' > "$CFG_DIR/cmd/config.ini"
+export VIDEO_EXPAND_LIMIT='${VIDEO_EXPAND_LIMIT}x'
+CONFIG_FILE="$CFG_DIR/cmd/config.ini"
+_limit_out=$(read_config source folders '' 2>&1)
+assert_contains "SH: лимит назван" 'WARN: превышен лимит подстановок' "$_limit_out"
+if cmd //c "exit 0" &>/dev/null; then
+    _limit_out=$(cmd //c "$RUN_CMD_WIN --print-config" < /dev/null 2>&1 | tr -d '\r')
+    assert_contains "CMD: лимит назван" 'WARN: превышен лимит подстановок' "$_limit_out"
+fi
+unset VIDEO_EXPAND_LIMIT
 
 # ── Cleanup ───────────────────────────────────────────────────
 rm -rf "$CFG_DIR"

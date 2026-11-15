@@ -843,4 +843,35 @@ _retry_out=$(run_ps '
 ')
 assert_contains "нечисловая пауза заменена на 3" "SLEEP=3" "$_retry_out"
 assert_contains "огромная пауза ограничена минутой" "CAP=60" "$_retry_out"
+suite "remote PS1: настройки повторов и потерянный ответ submit"
+_retry_out=$(run_ps '
+    function Invoke-RemoteHttp { $script:calls++; return @{ Code=0 } }
+    function Start-Sleep { param($Seconds) }
+    $env:REMOTE_RETRY_SECONDS="0"
+    foreach ($v in @("abc", "0", "-1", "999999999999999999999")) {
+        $script:calls=0; $env:REMOTE_HTTP_RETRIES=$v
+        Invoke-RemoteHttpRetry GET /health | Out-Null
+        "TRIES[$v]=$script:calls"
+    }
+    $script:calls=0; $env:REMOTE_HTTP_RETRIES="4"
+    Invoke-RemoteHttpRetry POST /jobs "{}" | Out-Null
+    "POST=$script:calls"
+    $env:REMOTE_POLL_SECONDS="oops"; "POLL=$(Get-RemotePollSeconds)"
+    $env:REMOTE_POLL_SECONDS="0008"; "POLL_ZEROES=$(Get-RemotePollSeconds)"
+')
+for val in abc 0 -1 999999999999999999999; do
+    assert_contains "PS1 REMOTE_HTTP_RETRIES=$val: четыре попытки" "TRIES[$val]=4" "$_retry_out"
+done
+assert_contains "PS1 потерянный ответ POST не повторяется" "POST=1" "$_retry_out"
+assert_contains "PS1 неверный poll → 2" "POLL=2" "$_retry_out"
+assert_contains "PS1 ведущие нули poll" "POLL_ZEROES=8" "$_retry_out"
+_local_out=$(run_ps '
+    $remote_endpoint="http://[invalid"
+    function Start-Sleep { param($Seconds); "UNEXPECTED_SLEEP" }
+    $r=Invoke-RemoteHttpRetry GET /capabilities
+    "CONFIG_CODE=$($r.Code)"
+')
+assert_contains "невалидный URI даёт локальную ошибку" "CONFIG_CODE=-1" "$_local_out"
+assert_not_contains "локальная ошибка без пауз" "UNEXPECTED_SLEEP" "$_local_out"
+
 summary

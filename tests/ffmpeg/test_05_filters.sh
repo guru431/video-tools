@@ -191,5 +191,23 @@ for _bad_size in '' bad '-1'; do
 done
 assert_eq "размер 1 MiB" "1.0 MB" "$(human_size 1048576)"
 
+suite "Медиа-информация: Audio в метаданных не является дорожкой"
+eval "$(sed -n '/^parse_media_info() {/,/^}/p' "$SCRIPT")"
+parse_media_info $'    title: Audio: bogus\n  Duration: 01:02:03.45, bitrate: 1000 kb/s\n    Stream #0:0: Video: h264, Audio: fake\n    Stream #0:1(eng): Audio: aac, 48000 Hz'
+assert_eq "кодек взят из аудиодорожки" "aac" "$MI_ACODEC"
+assert_eq "дробь Duration уже отсекается до ASR" "01:02:03" "$MI_DUR"
+
+suite "Сводка размеров: рост и округление"
+_size_block=$(sed -n '/^if \[ "$total_in_bytes" -gt 0 \]; then/,/^fi/p' "$SCRIPT")
+total_in_bytes=1000; total_out_bytes=1156
+_size_out=$(eval "$_size_block")
+assert_contains "рост объёма назван увеличением" "увеличение 16%" "$_size_out"
+total_out_bytes=756
+_size_out=$(eval "$_size_block")
+assert_contains "сжатие округляется" "сжатие 24%" "$_size_out"
+total_out_bytes=744
+_size_out=$(eval "$_size_block")
+assert_contains "дробь больше половины округляется вверх" "сжатие 26%" "$_size_out"
+
 rm -rf "$EMPTY_DIR"
 summary

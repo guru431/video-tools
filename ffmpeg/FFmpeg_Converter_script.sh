@@ -1086,6 +1086,7 @@ show_progress_bar() {
 parse_media_info() {
 	local line rest ncm="no" vline="" cline="" aline="" n=0
 	local re_v='([0-9]+) kb/s' re_c='bitrate: ([0-9]*)' re_d='[0-9]+:[0-9]+:[0-9]+' re_a='^[a-z0-9_]*'
+	local re_audio_stream='^[[:space:]]*Stream #[^[:space:]]+: Audio: '
 	MI_VBR=""; MI_CBR=""; MI_DUR=""; MI_ACODEC=""; MI_SUBS=0
 	shopt -q nocasematch && ncm="yes"
 	shopt -s nocasematch
@@ -1093,7 +1094,7 @@ parse_media_info() {
 		[[ $line == *"Stream #"*"Subtitle:"* ]] && MI_SUBS=$((MI_SUBS + 1))
 		[ -z "$vline" ] && [[ $line == *"Stream #"*"Video:"* ]] && vline="$line"
 		[ -z "$cline" ] && [[ $line == *"bitrate:"* ]] && cline="$line"
-		[ -z "$aline" ] && [[ $line == *"Audio:"* ]] && aline="$line"
+		[ -z "$aline" ] && [[ $line =~ $re_audio_stream ]] && aline="$line"
 		if [ -z "$MI_DUR" ] && [[ $line == *"Duration:"* ]] && [[ $line =~ $re_d ]]; then
 			MI_DUR="${BASH_REMATCH[0]}"
 		fi
@@ -2414,12 +2415,11 @@ printf "  Время:       %d мин %d сек\n" "$elapsed_global_min" "$elaps
 if [ "$total_in_bytes" -gt 0 ]; then
 	in_hr=$(human_size $total_in_bytes)
 	out_hr=$(human_size $total_out_bytes)
-	compress_pct=0
-	if [ "$total_in_bytes" -gt 0 ]; then
-		compress_pct=$(awk "BEGIN {printf \"%d\", (1 - $total_out_bytes/$total_in_bytes) * 100}")
-	fi
+	compress_label="сжатие"
+	[ "$total_out_bytes" -gt "$total_in_bytes" ] && compress_label="увеличение"
+	compress_pct=$(awk "BEGIN {p = (1 - $total_out_bytes/$total_in_bytes) * 100; if (p < 0) p = -p; printf \"%d\", int(p + 0.5)}")
 	echo "  Вход:        ${in_hr}"
-	echo "  Выход:       ${out_hr} (сжатие ${compress_pct}%)"
+	echo "  Выход:       ${out_hr} (${compress_label} ${compress_pct}%)"
 fi
 echo "══════════════════════════════════════════════"
 echo -e "\n"

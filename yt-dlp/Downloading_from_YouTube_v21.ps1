@@ -203,7 +203,7 @@ if ($_proxyParts) {
     # Прокси задан, но не разобран — молчать нельзя: «нет прокси» означает загрузку
     # напрямую, мимо задуманного маршрута. Собирается в очередь и показывается при
     # старте GUI (Write-Host здесь ушёл бы в MessageBox под -noConsole).
-    $script:startupWarnings += "Прокси «$cfg_proxy_raw» не распознан (ожидается [схема]://[user:pass@]host[:port], схема http/https/socks4/socks4a/socks5/socks5h). Прокси ВЫКЛЮЧЕН — загрузка пойдёт напрямую."
+    $script:startupWarnings += "Прокси не распознан (ожидается [схема]://[user:pass@]host[:port], схема http/https/socks4/socks4a/socks5/socks5h). Прокси ВЫКЛЮЧЕН — загрузка пойдёт напрямую."
 }
 # URL прокси из полей GUI. Логин и пароль кодируются (EscapeDataString): '@', '/',
 # ':' или '%' в пароле иначе ломали разбор адреса — yt-dlp брал хвост пароля за хост.
@@ -415,6 +415,20 @@ function Stop-ProcessTree {
     } catch { }
     # Подстраховка, если taskkill недоступен: хотя бы родитель будет снят.
     try { if (-not $Proc.HasExited) { $Proc.Kill() } } catch { }
+}
+
+# A broken stdout/stderr pipe fails one translation, while releasing its process.
+function Complete-TranslationProcess {
+    param($Proc, $OutTask, $ErrTask)
+    try {
+        if (-not $Proc.WaitForExit(5000)) { Stop-ProcessTree $Proc; return -1 }
+        if (-not [System.Threading.Tasks.Task]::WaitAll([System.Threading.Tasks.Task[]]@($OutTask, $ErrTask), 5000)) { return -1 }
+        return $Proc.ExitCode
+    } catch {
+        return -1
+    } finally {
+        if ($Proc) { $Proc.Dispose() }
+    }
 }
 
 # ── Лимит длины пути ───────────────────────────────────────────────────────
@@ -1970,13 +1984,9 @@ $btnStart.Add_Click({
                                 Start-Sleep -Milliseconds 10
                             }
                         }
-                        $votProc.WaitForExit()
-                        $null = $outTask.Result; $null = $errTask.Result
                         # F8. Сохраняем exit code ДО Dispose (после Dispose обращение к
                         # ExitCode бросает исключение).
-                        $votExit = -1
-                        try { $votExit = $votProc.ExitCode } catch { $votExit = -1 }
-                        if ($votProc) { $votProc.Dispose() }
+                        $votExit = Complete-TranslationProcess $votProc $outTask $errTask
                         $global:translateProcess = $null
 
                         # F8. Наличие .mp3 больше не «достаточно»: частичный/пустой файл от

@@ -185,9 +185,18 @@ NC='\033[0m' # No Color
 # <video>_translated.mp4 рядом с оригиналом. Регистрируем всё это по мере
 # создания — trap чистит и выходит с 130, как принято в ffmpeg-части репозитория.
 YTDLP_TMP_PATHS=()
+YTDLP_VOT_PID=""
 _register_tmp_path() { [ -n "${1:-}" ] && YTDLP_TMP_PATHS+=("$1"); }
+_stop_vot() {
+    [ -n "$YTDLP_VOT_PID" ] || return 0
+    kill -TERM "$YTDLP_VOT_PID" 2>/dev/null || true
+    kill -KILL "$YTDLP_VOT_PID" 2>/dev/null || true
+    wait "$YTDLP_VOT_PID" 2>/dev/null || true
+    YTDLP_VOT_PID=""
+}
 _cleanup_on_int() {
     local p
+    _stop_vot
     # Форма с `+`: Ctrl+C до первой регистрации застаёт массив пустым, а bash 3.2
     # под `set -u` считает раскрытие пустого массива незаданной переменной.
     for p in ${YTDLP_TMP_PATHS[@]+"${YTDLP_TMP_PATHS[@]}"}; do
@@ -1043,7 +1052,10 @@ translate_audio() {
     log_info "Получение AI-перевода ($target_lang, $voice_style)..."
 
     local temp_dir
-    temp_dir=$(mktemp -d)
+    if ! temp_dir=$(mktemp -d); then
+        log_error "Не удалось создать временный каталог перевода."
+        return 1
+    fi
     _register_tmp_path "$temp_dir"
     # vot-cli-live на Windows — native-бинарь: POSIX-путь `/tmp/tmp.X` он понимает как
     # свой и пишет в C:\Users\...\Temp\tmp.X, после чего find в $temp_dir не находит
@@ -1074,18 +1086,17 @@ translate_audio() {
     local vot_timeout="${TRANSLATE_TIMEOUT_SEC:-900}"
     case "$vot_timeout" in ''|*[!0-9]*) vot_timeout=900 ;; esac
     local vot_rc=0
+    env "${vot_env[@]}" "${vot_cmd[@]}" &
+    local vot_pid=$!
+    YTDLP_VOT_PID="$vot_pid"
     if [ "$vot_timeout" -gt 0 ]; then
-        env "${vot_env[@]}" "${vot_cmd[@]}" &
-        local vot_pid=$!
         # Первую секунду опрашиваем пятью шагами по 0.2 с: быстрый ответ не ждёт
         # полной секунды. Таймаут считается в секундах, как и раньше.
         local waited=0 short_polls=0
         while kill -0 "$vot_pid" 2>/dev/null; do
             if [ "$waited" -ge "$vot_timeout" ]; then
                 log_error "AI-перевод: превышен таймаут ${vot_timeout} с — процесс остановлен."
-                kill -TERM "$vot_pid" 2>/dev/null
-                sleep 2
-                kill -KILL "$vot_pid" 2>/dev/null
+                _stop_vot
                 vot_rc=124
                 break
             fi
@@ -1098,10 +1109,9 @@ translate_audio() {
                 waited=$((waited + 1))
             fi
         done
-        if [ "$vot_rc" -eq 0 ]; then wait "$vot_pid"; vot_rc=$?; fi
-    else
-        env "${vot_env[@]}" "${vot_cmd[@]}"; vot_rc=$?
     fi
+    if [ "$vot_rc" -eq 0 ]; then wait "$vot_pid"; vot_rc=$?; fi
+    YTDLP_VOT_PID=""
     if [ "$vot_rc" -ne 0 ]; then
         log_error "Не удалось получить перевод для: $url"
         rm -rf "$temp_dir"
@@ -1169,7 +1179,12 @@ translate_audio() {
     # вычитывает stdin: остаток манифеста съедался, и второй/третий файл молча
     # оставался без перевода (при обещании «перевод на КАЖДЫЙ созданный файл»).
     # stderr мержа сохраняем в файл: /dev/null оставлял пользователя без причины отказа.
-    local merge_err; merge_err="$(mktemp "${TMPDIR:-/tmp}/ytdlp_merge_err_XXXXXX")"
+    local merge_err
+    if ! merge_err="$(mktemp "${TMPDIR:-/tmp}/ytdlp_merge_err_XXXXXX")"; then
+        log_error "Не удалось создать временный файл диагностики мержа. Исходник сохранён."
+        rm -rf "$temp_dir"
+        return 1
+    fi
     _register_tmp_path "$merge_err"
     # Трёхбуквенные коды и handler_name: в mp4 per-stream `title` не пишется вовсе,
     # а имя дорожки плееры (VLC, mpv) берут из handler_name. Без него обе дорожки

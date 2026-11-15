@@ -135,7 +135,8 @@ win_cfg=$(cygpath -w "$tmpcfg" 2>/dev/null || echo "$tmpcfg")
 # чтобы не бороться с bash-экранированием кавычек/скобок.
 harness=$(mktemp_suffix /tmp/test_ytps1_harness_ .ps1)
 win_harness=$(cygpath -w "$harness" 2>/dev/null || echo "$harness")
-cat > "$harness" << 'PS1EOF'
+printf '\xEF\xBB\xBF' > "$harness"
+cat >> "$harness" << 'PS1EOF'
 param([string]$Prod, [string]$Cfg)
 $ErrorActionPreference = 'Stop'
 $env:YTDLP_TEST = '1'
@@ -304,9 +305,39 @@ try {
     $ErrorActionPreference = 'Stop'
     Write-Output ('tr_headless=' + ($null -eq (Get-TranslationFile $trDir)))
 } finally { Remove-Item -LiteralPath $trRoot -Recurse -Force }
+# A faulted pipe must fail only its URL and always dispose the process.
+function New-FakeProcess {
+    $p = [pscustomobject]@{ ExitCode = 0; Disposed = $false }
+    $p | Add-Member ScriptMethod WaitForExit { param($Timeout); return $true }
+    $p | Add-Member ScriptMethod Dispose { $this.Disposed = $true }
+    return $p
+}
+$good = [System.Threading.Tasks.Task]::FromResult([string]'ok')
+$fault = New-Object 'System.Threading.Tasks.TaskCompletionSource[string]'
+$fault.SetException([System.IO.IOException]::new('broken pipe'))
+foreach ($tasks in @(@($fault.Task, $good), @($good, $fault.Task), @($good, $good))) {
+    $p = New-FakeProcess
+    Write-Output ('pipe_exit=' + (Complete-TranslationProcess $p $tasks[0] $tasks[1]))
+    Write-Output ('pipe_disposed=' + $p.Disposed)
+}
+$badProxyCfg = [System.IO.Path]::GetTempFileName()
+try {
+    $proxySecret = 'private-' + [guid]::NewGuid().ToString('N')
+    [System.IO.File]::WriteAllText($badProxyCfg, "[proxy]`nurl = badscheme://user:" + $proxySecret + '@example.invalid')
+    $env:YTDLP_CONFIG = $badProxyCfg
+    . $Prod
+    $warnText = $script:startupWarnings -join '|'
+    Write-Output ('proxy_warned=' + ($warnText -match 'Прокси'))
+    Write-Output ('proxy_secret_hidden=' + (-not $warnText.Contains($proxySecret)))
+} finally { Remove-Item -LiteralPath $badProxyCfg }
 PS1EOF
 
 out=$($PS_CMD -NoProfile -NonInteractive -File "$win_harness" -Prod "$win_prod" -Cfg "$win_cfg" 2>/dev/null | tr -d '\r')
+assert_eq "ошибка любого из двух пайпов локальна для перевода" "2" "$(printf '%s\n' "$out" | grep -c '^pipe_exit=-1$')"
+assert_contains "следующий URL с исправными пайпами успешен" "pipe_exit=0" "$out"
+assert_eq "все три процесса освобождены" "3" "$(printf '%s\n' "$out" | grep -c '^pipe_disposed=True$')"
+assert_contains "невалидный прокси объяснён" "proxy_warned=True" "$out"
+assert_contains "пароль не попадает в предупреждение" "proxy_secret_hidden=True" "$out"
 rm -f "$tmpcfg" "$harness"
 
 # ── Read-Config ───────────────────────────────────────────────

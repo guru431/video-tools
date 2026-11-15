@@ -886,4 +886,16 @@ CURL_BIN="$_saved_curl"
 rm -f "$_probe" "$_up"
 
 rm -f "$MOCK_CURL_LOG" "$_capture"
+suite "remote: невалидная пауза не превращает повторы в плотный цикл"
+_retry_out=$(
+    remote_http() { REMOTE_HTTP_CODE=503; }
+    sleep() { echo "SLEEP=$1"; }
+    REMOTE_HTTP_RETRIES=2 REMOTE_RETRY_SECONDS=oops remote_http_retry GET /health 2>&1
+)
+assert_contains "нечисловая пауза заменена на 3" "SLEEP=3" "$_retry_out"
+assert_contains "причина названа" "REMOTE_RETRY_SECONDS" "$_retry_out"
+REMOTE_RETRY_SECONDS=999999999999999999999 remote_retry_delay
+assert_eq "огромная пауза ограничена минутой" "60" "$REMOTE_RETRY_DELAY"
+REMOTE_RETRY_SECONDS=000 remote_retry_delay
+assert_eq "явный ноль допустим" "0" "$REMOTE_RETRY_DELAY"
 summary

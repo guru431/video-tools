@@ -962,7 +962,8 @@ purge_manifest_outputs() {
 }
 
 human_size() {
-	local bytes=$1
+	local bytes="${1:-0}"
+	case "$bytes" in *[!0-9]*) bytes=0 ;; esac
 	if [ "$bytes" -ge $((1024*1024*1024)) ] 2>/dev/null; then
 		awk "BEGIN {printf \"%.1f GB\", $bytes/1073741824}"
 	elif [ "$bytes" -ge $((1024*1024)) ] 2>/dev/null; then
@@ -1977,7 +1978,11 @@ encode_file() {
 			purge_manifest_outputs "$old_outputs" "$manifest" "$full_path" "$current_format_out" "$planned_outputs"
 		fi
 	elif [ "$any_fail" = "no" ] && [ ${#produced[@]} -gt 0 ]; then
-		manifest_write "$manifest" "$full_path" "$produced_src_sz" "$file_sig" "${produced[@]}"
+		if ! manifest_write "$manifest" "$full_path" "$produced_src_sz" "$file_sig" "${produced[@]}"; then
+			log_msg "FAIL" "Не удалось записать manifest: $manifest; выходы прошлого прогона сохранены"
+			put_result "fail"
+			return
+		fi
 		# D2/S11. Хвост прошлого прогона — только теперь, когда все части нового на
 		# месте: при провале любой части старые выходы не трогаются вовсе.
 		purge_manifest_outputs "$old_outputs" "$manifest" "$full_path" "$current_format_out" "$planned_outputs"

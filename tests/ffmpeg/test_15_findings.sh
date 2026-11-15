@@ -1030,6 +1030,13 @@ run_capture 'overwrite_existing="yes"' 'dry_run="yes"'
 d2_check "SH" dry "$OUT_TEXT"
 run_capture 'overwrite_existing="yes"'
 d2_check "SH" real "$OUT_TEXT"
+d2_setup posix
+mkdir -p "$DST/.ov.ffconv.tmp"
+run_capture 'dry_run="no"; overwrite_existing="yes"; format_files_in="mp4"'
+assert_file_exists "SH: ошибка manifest сохраняет старую часть" "$DST/ov (part.3).mp4"
+assert_contains "SH: ошибка manifest видна" "Не удалось записать manifest" "$OUT_TEXT"
+assert_contains "SH: старый manifest сохранён" "settings=old" "$(cat "$DST/.ov.ffconv")"
+rmdir "$DST/.ov.ffconv.tmp"
 d2_inplace posix
 run_capture 'folder_sources="$D2_IP"' 'folder_destination="$D2_IP"' 'start_coding=":+:00-00-10"' 'overwrite_existing="yes"' 'format_files_in="mp4"'
 assert_eq "SH in-place: входной файл, перечисленный в manifest, не удалён" "ORIGINAL" "$(cat "$D2_IP/ip.mp4" 2>/dev/null)"
@@ -1133,6 +1140,13 @@ else
     d2_part_check "PS1" fail "$D2_OUT" win
     d2_ps1 "$W_IN" "$W_DST" "\$start_coding=':+:00-00-10'"
     d2_part_check "PS1" ok "$D2_OUT" win
+    d2_setup win
+    mkdir -p "$DST/.ov.ffconv.tmp"
+    d2_ps1 "$W_IN" "$W_DST"
+    assert_file_exists "PS1: ошибка manifest сохраняет старую часть" "$DST/ov (part.3).mp4"
+    assert_contains "PS1: ошибка manifest видна" "Не удалось записать manifest" "$D2_OUT"
+    assert_contains "PS1: старый manifest сохранён" "settings=old" "$(cat "$DST/.ov.ffconv")"
+    rmdir "$DST/.ov.ffconv.tmp"
     # Метка языка meta — на sidecar (паритет с .sh): -map 0 кладёт встроенные субтитры первыми.
     MS_DIR="$WORK/ms_ps1"; rm -rf "$MS_DIR"; mkdir -p "$MS_DIR/in" "$MS_DIR/out"
     : > "$MS_DIR/in/sm.mp4"; printf '1\n00:00:00,000 --> 00:00:01,000\nX\n' > "$MS_DIR/in/sm.srt"
@@ -1247,6 +1261,13 @@ CSEOF
         d2_part_check "CMD" fail "$D2_OUT" win
         d2_cmd "$W_IN" "$W_DST" 'set "start_coding=:+:00-00-10"'
         d2_part_check "CMD" ok "$D2_OUT" win
+        d2_setup win
+        mkdir -p "$DST/.ov.ffconv.tmp"
+        d2_cmd "$W_IN" "$W_DST"
+        assert_file_exists "CMD: ошибка manifest сохраняет старую часть" "$DST/ov (part.3).mp4"
+        assert_contains "CMD: ошибка manifest видна" "Не удалось записать manifest" "$D2_OUT"
+        assert_contains "CMD: старый manifest сохранён" "settings=old" "$(cat "$DST/.ov.ffconv")"
+        rmdir "$DST/.ov.ffconv.tmp"
         # Битый выход, который не удаляется (только чтение; так же — открытый в плеере):
         # del печатал ошибку, ворота «выхода нет» оставались закрыты, и битый файл
         # молча засчитывался в «пропущено». SH и PS1 после удаления кодируют всегда —

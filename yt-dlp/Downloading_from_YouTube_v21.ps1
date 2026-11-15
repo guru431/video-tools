@@ -545,7 +545,9 @@ function Get-TranslationFile {
     param([string]$Directory)
     $files = @(Get-ChildItem -LiteralPath $Directory -Filter '*.mp3' -File)
     if ($files.Count -gt 1) {
-        Append-Output "AI-перевод: найдено несколько mp3 ($($files.Count)) — перевод пропущен." ([System.Drawing.Color]::Red)
+        if (Get-Command Append-Output -ErrorAction SilentlyContinue) {
+            Append-Output "AI-перевод: найдено несколько mp3 ($($files.Count)) — перевод пропущен." ([System.Drawing.Color]::Red)
+        }
         return $null
     }
     if ($files.Count -eq 1 -and $files[0].Length -gt 0) { return $files[0] }
@@ -2010,7 +2012,7 @@ $btnStart.Add_Click({
                                     $probe = @(& $ffprobeBin -v error -select_streams a `
                                         -show_entries stream=index -of csv=p=0 $latestVideo.FullName 2>$null |
                                         Where-Object { $_ -match '\S' })
-                                    if ($probe.Count -ge 1) { $origACount = $probe.Count }
+                                    if ($LASTEXITCODE -eq 0) { $origACount = $probe.Count }
                                 } catch { $origACount = 1 }
                                 # F4: -map 0:s? -map 0:t? + -c:s copy сохраняют субтитры/вложения
                                 # исходника — иначе встроенные субтитры исчезают после мержа перевода.
@@ -2018,7 +2020,7 @@ $btnStart.Add_Click({
                                 $transLang3 = ConvertTo-Iso6392 $transLang
                                 $ffArgs = switch ($transMode) {
                                     "dual_track" { @("-y", "-i", $latestVideo.FullName, "-i", $transFile.FullName,
-                                                     "-map", "0:v", "-map", "0:a", "-map", "1:a", "-map", "0:s?", "-map", "0:t?",
+                                                     "-map", "0:v", "-map", "0:a?", "-map", "1:a", "-map", "0:s?", "-map", "0:t?",
                                                      "-c:v", "copy", "-c:a", "copy",
                                                      "-c:a:$origACount", $mergeACodec, "-b:a:$origACount", "192k", "-c:s", "copy",
                                                      "-metadata:s:a:0", "language=$origLang3",

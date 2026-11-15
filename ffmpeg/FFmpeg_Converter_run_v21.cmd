@@ -181,8 +181,10 @@ set "_sic_base=!_val!"
 set "_sic_rest=!_val:~1!"
 if not defined _sic_rest goto :_sic_find
 if "!_val:~0,1!"=="!_dq!" set "_sic_after=!_sic_rest:*"=!"
+if "!_val:~0,1!"=="!_dq!" if "!_sic_after!"=="!_sic_rest!" exit /b
 if "!_val:~0,1!"=="!_dq!" if not "!_sic_after!"=="!_sic_rest!" set "_sic_base=!_sic_after!"
 if "!_val:~0,1!"=="'" set "_sic_after=!_sic_rest:*'=!"
+if "!_val:~0,1!"=="'" if "!_sic_after!"=="!_sic_rest!" exit /b
 if "!_val:~0,1!"=="'" if not "!_sic_after!"=="!_sic_rest!" set "_sic_base=!_sic_after!"
 :_sic_find
 if not defined _sic_base exit /b

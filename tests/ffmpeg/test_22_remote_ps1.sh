@@ -832,4 +832,15 @@ assert_contains "ненулевой ffmpeg с частичным файлом �
 assert_contains "пустой ролик с rc=0 — отказ до отправки" "SELFTEST_empty=1|0" "$_out"
 rm -f "$_harness"; rm -rf "$_validation_dir"
 
+suite "remote PS1: невалидная пауза повторов"
+_retry_out=$(run_ps '
+    function Invoke-RemoteHttp { return @{ Code=503 } }
+    function Start-Sleep { param($Seconds); Write-Host "SLEEP=$Seconds" }
+    $env:REMOTE_HTTP_RETRIES="2"; $env:REMOTE_RETRY_SECONDS="oops"
+    Invoke-RemoteHttpRetry GET /health | Out-Null
+    $env:REMOTE_RETRY_SECONDS="999999999999999999999"
+    Write-Output ("CAP=" + (Get-RemoteRetryDelay))
+')
+assert_contains "нечисловая пауза заменена на 3" "SLEEP=3" "$_retry_out"
+assert_contains "огромная пауза ограничена минутой" "CAP=60" "$_retry_out"
 summary

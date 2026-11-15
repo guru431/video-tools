@@ -184,5 +184,12 @@ for _bad_time in '05:30' 'N/A' '00::01' ''; do
     fi
 done
 
+suite "Размер в сводке: повреждённое значение безопасно"
+eval "$(sed -n '/^human_size() {/,/^}/p' "$SCRIPT")"
+for _bad_size in '' bad '-1'; do
+    assert_eq "размер '$_bad_size' → 0 KB без ошибок" "0 KB" "$(human_size "$_bad_size" 2>&1)"
+done
+assert_eq "размер 1 MiB" "1.0 MB" "$(human_size 1048576)"
+
 rm -rf "$EMPTY_DIR"
 summary

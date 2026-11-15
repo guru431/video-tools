@@ -321,6 +321,10 @@ assert_contains "оригинал помечен как eng" "language=eng" "$SM
 assert_contains "имя дорожки пишется в handler_name" "handler_name" "$SMOKE_LOG"
 # Две оригинальные дорожки → перевод садится на a:2, а не на a:1.
 assert_contains "перевод сел на a:2 при двух оригиналах" "-c:a:2" "$SMOKE_LOG"
+MOCK_ACOUNT=0 run_menu url="$YT_URL" quality=3 cookie=0 translate=1 audiofmt=0 sb=0 subsvid=0
+assert_eq "dual_track без оригинального звука → успех" "0" "$SMOKE_RC"
+assert_contains "исходное аудио необязательно" "0:a?" "$SMOKE_LOG"
+assert_contains "перевод — первая аудиодорожка" "-c:a:0" "$SMOKE_LOG"
 
 # ══════════════════════════════════════════════════════════════
 suite "CMD yt-dlp: перевод несовместим с режимом → отключается вслух"

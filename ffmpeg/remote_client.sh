@@ -341,8 +341,20 @@ remote_http() {
 # 502 от reverse-proxy, 429) на пакете в 200 файлов давала N провалов и N задач-сирот
 # на карте. Повторяем только то, что имеет смысл повторять (remote_retryable_code),
 # пауза растёт, `Retry-After` уважается.
+remote_retry_delay() {
+	REMOTE_RETRY_DELAY="${REMOTE_RETRY_SECONDS:-3}"
+	case "$REMOTE_RETRY_DELAY" in
+		*[!0-9]*)
+			echo "[ПРЕДУПРЕЖДЕНИЕ] REMOTE_RETRY_SECONDS: ожидается целое число секунд; используется 3." >&2
+			REMOTE_RETRY_DELAY=3 ;;
+	esac
+	while [ "${#REMOTE_RETRY_DELAY}" -gt 1 ] && [ "${REMOTE_RETRY_DELAY:0:1}" = 0 ]; do REMOTE_RETRY_DELAY="${REMOTE_RETRY_DELAY:1}"; done
+	if [ "${#REMOTE_RETRY_DELAY}" -gt 2 ] || [ "$REMOTE_RETRY_DELAY" -gt 60 ]; then REMOTE_RETRY_DELAY=60; fi
+}
+
 remote_http_retry() {
 	local tries="${REMOTE_HTTP_RETRIES:-4}" try=1 pause="${REMOTE_RETRY_SECONDS:-3}"
+	remote_retry_delay; pause="$REMOTE_RETRY_DELAY"
 	while :; do
 		remote_http "$@"
 		case "$REMOTE_HTTP_CODE" in 200|201|202|204) return 0 ;; esac
@@ -354,7 +366,7 @@ remote_http_retry() {
 		[ "$wait_s" -gt 60 ] 2>/dev/null && wait_s=60
 		echo "[ПРЕДУПРЕЖДЕНИЕ] Служба ответила HTTP $REMOTE_HTTP_CODE — повтор через ${wait_s}с (попытка $((try + 1)) из $tries)." >&2
 		sleep "$wait_s"
-		pause=$((pause * 2))
+		pause=$((wait_s * 2))
 		try=$((try + 1))
 	done
 }
@@ -997,6 +1009,7 @@ remote_upload() {
 		# Повтор отправки куска: разрыв на 90-м проценте трёхгигабайтного файла
 		# не должен стоить всего файла (спека, §8).
 		local try=1 sent="no" tries="${REMOTE_UPLOAD_RETRIES:-3}"
+		remote_retry_delay
 		while [ "$try" -le "$tries" ]; do
 			if remote_upload_chunk "$uid" "$file" "$offset" \
 				$((offset + this - 1)) "$size"; then sent="yes"; break; fi
@@ -1004,7 +1017,7 @@ remote_upload() {
 			try=$((try + 1))
 			if [ "$try" -le "$tries" ]; then
 				echo "[ПРЕДУПРЕЖДЕНИЕ] Повтор отправки куска ${offset} (попытка $try из $tries)." >&2
-				sleep "${REMOTE_RETRY_SECONDS:-3}"
+				sleep "$REMOTE_RETRY_DELAY"
 			fi
 		done
 		[ "$sent" = "yes" ] || return 1

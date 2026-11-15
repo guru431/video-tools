@@ -25,6 +25,10 @@ yt-dlp/channels.txt
 # ps2exe build artifacts
 _build_tmp.ps1
 
+# Local verification logs, caches and temporary task files.
+/.tmp/
+/output/
+
 # Claude Code / agent-side files
 .claude/
 AGENTS.md

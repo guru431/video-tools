@@ -300,6 +300,9 @@ try {
     Write-Output ('tr_multiple=' + ($null -eq (Get-TranslationFile $trDir)))
     Write-Output ('tr_warning=' + $script:trWarnings.Count)
     Write-Output ('tr_kept=' + (Get-ChildItem -LiteralPath $trDir -File).Count)
+    Remove-Item Function:Append-Output
+    $ErrorActionPreference = 'Stop'
+    Write-Output ('tr_headless=' + ($null -eq (Get-TranslationFile $trDir)))
 } finally { Remove-Item -LiteralPath $trRoot -Recurse -Force }
 PS1EOF
 
@@ -463,4 +466,5 @@ assert_eq "несколько mp3 → отказ" "True" "$(get_field "$out" tr_
 assert_eq "неоднозначность объяснена пользователю" "1" "$(get_field "$out" tr_warning)"
 assert_eq "селектор не переименовывает и не удаляет mp3" "2" "$(get_field "$out" tr_kept)"
 
+assert_contains "селектор нескольких mp3 работает без GUI" "tr_headless=True" "$out"
 summary

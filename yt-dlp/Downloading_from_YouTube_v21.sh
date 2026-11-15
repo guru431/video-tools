@@ -1148,10 +1148,14 @@ translate_audio() {
         return 1
     fi
 
-    local orig_a_count
-    orig_a_count=$("$FFPROBE" -v error -select_streams a -show_entries stream=index \
-        -of csv=p=0 "$video_file" 2>/dev/null | grep -c .)
-    [ "${orig_a_count:-0}" -ge 1 ] 2>/dev/null || orig_a_count=1
+    local orig_a_count=1 audio_streams audio_stream
+    if audio_streams=$("$FFPROBE" -v error -select_streams a -show_entries stream=index \
+        -of csv=p=0 "$video_file" 2>/dev/null); then
+        orig_a_count=0
+        while IFS= read -r audio_stream; do
+            [ -n "$audio_stream" ] && orig_a_count=$((orig_a_count + 1))
+        done <<< "$audio_streams"
+    fi
 
     log_info "Мерж аудиодорожек (режим: $mode)..."
 
@@ -1177,7 +1181,7 @@ translate_audio() {
     case "$mode" in
         dual_track)
             "$FFMPEG" -nostdin -y -i "$video_file" -i "$translation_file" \
-                -map 0:v -map 0:a -map 1:a -map 0:s? -map 0:t? \
+                -map 0:v -map 0:a? -map 1:a -map 0:s? -map 0:t? \
                 -c:v copy -c:a copy -c:a:$orig_a_count "$a_codec" -b:a:$orig_a_count 192k -c:s copy \
                 -metadata:s:a:0 language="$orig_lang3" -metadata:s:a:0 title="Original" \
                 -metadata:s:a:0 handler_name="Original" \
@@ -1244,6 +1248,12 @@ download_batch() {
     fi
 
     local total=0
+    local date_range sleep_req sleep_int max_sleep_int sleep_sub
+    date_range=$(read_config "date_range" "batch" "now-6months")
+    sleep_req=$(read_config "sleep_requests" "batch" "1.8")
+    sleep_int=$(read_config "sleep_interval" "batch" "8")
+    max_sleep_int=$(read_config "max_sleep_interval" "batch" "22")
+    sleep_sub=$(read_config "sleep_subtitles" "batch" "4")
     # Разбор строки channels.txt. Четыре прежние ловушки, все молчаливые:
     #   • комментарий с отступом («  # tech|x|videos») не отбрасывался — «# tech»
     #     становилось категорией, а yt-dlp получал несуществующий канал;
@@ -1326,16 +1336,9 @@ download_batch() {
         fi
 
         # Дата
-        local date_range
-        date_range=$(read_config "date_range" "batch" "now-6months")
         cmd+=(--dateafter "$date_range")
 
         # Задержки
-        local sleep_req sleep_int max_sleep_int sleep_sub
-        sleep_req=$(read_config "sleep_requests" "batch" "1.8")
-        sleep_int=$(read_config "sleep_interval" "batch" "8")
-        max_sleep_int=$(read_config "max_sleep_interval" "batch" "22")
-        sleep_sub=$(read_config "sleep_subtitles" "batch" "4")
         cmd+=(--sleep-requests "$sleep_req")
         cmd+=(--sleep-interval "$sleep_int")
         cmd+=(--max-sleep-interval "$max_sleep_int")

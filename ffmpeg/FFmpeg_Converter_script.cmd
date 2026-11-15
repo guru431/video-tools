@@ -514,7 +514,7 @@ if not "%merge_files%"=="yes" if not "%extract_audio_copy%"=="yes" if not "%crea
 		for %%Z in ("!_col_file!") do if %%~zZ GTR 0 (
 			echo [FAIL] Конфликт выходов: разные входы претендуют на один файл — они будут пропущены.
 			echo        Включите save_old_extension=yes либо разнесите файлы по папкам. Спорные выходы:
-			for /f "usebackq delims=" %%k in ("!_col_file!") do echo        %%k
+			type "!_col_file!"
 			call :log_msg "FAIL" "Обнаружены конфликты выходов - конфликтующие входы пропускаются"
 		)
 	)
@@ -836,7 +836,7 @@ rem а goto из тела for обрывал бы перечисление фа�
 		rem до кодирования). Обрабатывать нельзя: кто-то из группы затрёт чужой результат.
 		rem Ключи в карте — в нижнем регистре, findstr /i снимает разницу регистра.
 		if defined _col_file (
-			findstr /i /x /c:"!_canon_out!" "!_col_file!" >nul 2>&1 && (
+			findstr /l /i /x /c:"!_canon_out!" "!_col_file!" >nul 2>&1 && (
 				echo [FAIL] !pf_nx!: конфликт выходов — файл пропущен& call :log_msg "FAIL" "!full_path!: конфликт выходов - файл пропущен"
 				set /a "total_fail+=1"
 				goto :eof
@@ -1175,9 +1175,7 @@ rem а goto из тела for обрывал бы перечисление фа�
 						del "!_mf!.tmp" 2>nul
 					) else (
 						if exist "!_mf!.tmp" (
-							>>"!_mf!.tmp" echo state=complete
-							if defined _pg_new call :purge_manifest_outputs "!_mf!" "!full_path!" "!current_format_out!" "!_pg_new!"
-							move /y "!_mf!.tmp" "!_mf!" >nul 2>&1
+							call :commit_manifest "!_mf!" "!full_path!" "!current_format_out!" "!_pg_new!"
 						)
 					)
 				) else (
@@ -1349,8 +1347,12 @@ if "!_spd:~-1!"=="." exit /b 1
 for /f "tokens=1,2 delims=." %%a in ("%_spd%") do (set "_bi=%%a" & set "_bf=%%b")
 if not defined _bf set "_bf=0"
 rem Ведущие нули целой части снимаем: set /a читает их восьмеричными — «08» давало
-rem 0 и отказ, «010» молча становилось 8. Сплошные нули for /f не трогает ("00" = 0).
+rem 0 и отказ, «010» молча становилось 8. Сплошные нули for /f превращает в пусто.
 for /f "tokens=* delims=0" %%z in ("!_bi!") do set "_bi=%%z"
+if not defined _bi set "_bi=0"
+rem Диапазон целой части проверяется до 32-битного умножения: 4294968*1000 = 704.
+if not "!_bi:~3!"=="" exit /b 1
+if !_bi! gtr 100 exit /b 1
 rem Дробную часть нормализуем до 3 знаков (milli). Префикс "1" + вычет 1000 убирает
 rem октальную трактовку ведущих нулей в set /a (например "050" -> 50, а не ошибка).
 set "_bf3=!_bf!000"
@@ -1496,6 +1498,32 @@ rem выходов нового прогона - короткий каталог
 rem dry_run ничего не удаляет, а называет (D7). Паритет с .sh/.ps1.
 rem Аргументы: %1 = путь старого manifest, %2 = путь источника, %3 = расширение выхода,
 rem %4 = файл со списком выходов нового прогона (по одному на строку).
+:commit_manifest
+set "_cm_mf=%~1"
+set "_cm_old=%~1.previous.!RANDOM!!RANDOM!"
+set "_cm_saved="
+if exist "!_cm_old!" goto :_cm_fail
+>>"!_cm_mf!.tmp" echo state=complete
+if errorlevel 1 goto :_cm_fail
+if exist "!_cm_mf!" (
+	copy /y "!_cm_mf!" "!_cm_old!" >nul 2>&1
+	if errorlevel 1 goto :_cm_fail
+	set "_cm_saved=1"
+)
+move /y "!_cm_mf!.tmp" "!_cm_mf!" >nul 2>&1
+if errorlevel 1 goto :_cm_fail
+if exist "!_cm_old!" (
+	if not "%~4"=="" call :purge_manifest_outputs "!_cm_old!" "%~2" "%~3" "%~4"
+	del "!_cm_old!" 2>nul
+)
+exit /b 0
+:_cm_fail
+if defined _cm_saved del "!_cm_old!" 2>nul
+echo [FAIL] Не удалось записать manifest: !_cm_mf!; выходы прошлого прогона сохранены
+call :log_msg "FAIL" "Не удалось записать manifest: !_cm_mf!; выходы прошлого прогона сохранены"
+set /a "total_fail+=1"
+exit /b 1
+
 :purge_manifest_outputs
 set "_pg_mf=%~1"
 set "_pg_src=%~2"

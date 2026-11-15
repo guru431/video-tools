@@ -287,6 +287,11 @@ assert_contains "script.cmd не найден — причина" "не найд
 lone_src=$(grep -A4 'не найден FFmpeg_Converter_script.cmd' "$PROJECT_DIR/ffmpeg/FFmpeg_Converter_run_v21.cmd" | tr -d '\r')
 assert_contains "script.cmd не найден — пауза перед выходом" $'\tpause\n\texit /b 1' "$lone_src"
 
+suite "CMD: незакрытая кавычка сохраняет решётку в значении"
+printf '[other]\r\nsubtitles_style = "a #b\r\n' > "$TMP_DIR/config.ini"
+_unclosed=$(cmd //c "$WIN_RUN --print-config" < /dev/null 2>&1 | tr -d '\r')
+assert_contains "незакрытые кавычки — без потери хвоста" 'subtitles_style="a #b' "$_unclosed"
+
 rm -rf "$TMP_DIR"
 
 summary

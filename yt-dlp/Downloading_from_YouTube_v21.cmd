@@ -731,9 +731,13 @@ if not "%translate_lang%"=="" (
             rem их числу, а не единице: при двух оригиналах metadata для a:1 села бы на второй
             rem оригинал, а сам перевод (a:2) остался бы без языка и названия. Счётчик целый —
             rem set /a справляется (в отличие от float-арифметики, которой в CMD нет).
-            set /a orig_a_count=0
-            for /f "usebackq delims=" %%A in (`""!probe_cmd!" -v error -select_streams a -show_entries stream^=index -of csv^=p^=0 "!video_file!" ^<nul 2^>nul"`) do set /a orig_a_count+=1
-            if !orig_a_count! LSS 1 set /a orig_a_count=1
+            "!probe_cmd!" -v error -select_streams a -show_entries stream=index -of csv=p=0 "!video_file!" <nul >"!temp_dir!\audio-streams.txt" 2>nul
+            set "probe_rc=!errorlevel!"
+            set /a orig_a_count=1
+            if "!probe_rc!"=="0" (
+                set /a orig_a_count=0
+                for /f "usebackq delims=" %%A in ("!temp_dir!\audio-streams.txt") do set /a orig_a_count+=1
+            )
 
             rem F4: -map 0:s? -map 0:t? + -c:s copy сохраняют субтитры/вложения исходника
             rem (иначе встроенные субтитры исчезают после мержа перевода). ? — необязательный map.
@@ -741,7 +745,7 @@ if not "%translate_lang%"=="" (
             call :iso6392 "%translate_orig_lang%" _lang_orig3
             call :iso6392 "%translate_lang%" _lang_trans3
             if "%translate_mode%"=="dual_track" (
-                "!ff_cmd!" -y -i "!video_file!" -i "!trans_file!" -map 0:v -map 0:a -map 1:a -map 0:s? -map 0:t? -c:v copy -c:a copy -c:a:!orig_a_count! !a_codec! -b:a:!orig_a_count! 192k -c:s copy -metadata:s:a:0 language=!_lang_orig3! -metadata:s:a:0 title="Original" -metadata:s:a:0 handler_name="Original" -metadata:s:a:!orig_a_count! language=!_lang_trans3! -metadata:s:a:!orig_a_count! title="AI Translation" -metadata:s:a:!orig_a_count! handler_name="AI Translation" -disposition:a:0 default "!output_file!" 2>nul
+                "!ff_cmd!" -y -i "!video_file!" -i "!trans_file!" -map 0:v -map 0:a? -map 1:a -map 0:s? -map 0:t? -c:v copy -c:a copy -c:a:!orig_a_count! !a_codec! -b:a:!orig_a_count! 192k -c:s copy -metadata:s:a:0 language=!_lang_orig3! -metadata:s:a:0 title="Original" -metadata:s:a:0 handler_name="Original" -metadata:s:a:!orig_a_count! language=!_lang_trans3! -metadata:s:a:!orig_a_count! title="AI Translation" -metadata:s:a:!orig_a_count! handler_name="AI Translation" -disposition:a:0 default "!output_file!" 2>nul
             )
             if "%translate_mode%"=="replace" (
                 "!ff_cmd!" -y -i "!video_file!" -i "!trans_file!" -map 0:v -map 1:a -map 0:s? -map 0:t? -c:v copy -c:a !a_codec! -b:a 192k -c:s copy -metadata:s:a:0 language=!_lang_trans3! -metadata:s:a:0 title="AI Translation" -metadata:s:a:0 handler_name="AI Translation" "!output_file!" 2>nul

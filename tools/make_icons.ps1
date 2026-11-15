@@ -66,14 +66,20 @@ function Get-FilmGeometry([int]$Size) {
 function Add-FilmGlyph($G, $Brush, [int]$Size) {
     $m = Get-FilmGeometry $Size
     $p = New-Object System.Drawing.Drawing2D.GraphicsPath
+    try {
     $p.FillMode = 'Alternate'
     $f = $m.Frame
-    $p.AddPath((New-RoundRect $f[0] $f[1] $f[2] $f[3] $m.R), $false)
+    $shape = New-RoundRect $f[0] $f[1] $f[2] $f[3] $m.R
+    try { $p.AddPath($shape, $false) } finally { $shape.Dispose() }
     foreach ($y in $m.HoleY) {
-        foreach ($x in $m.HoleX) { $p.AddPath((New-RoundRect $x $y $m.HoleW $m.HoleH $m.HoleR), $false) }
+        foreach ($x in $m.HoleX) {
+            $shape = New-RoundRect $x $y $m.HoleW $m.HoleH $m.HoleR
+            try { $p.AddPath($shape, $false) } finally { $shape.Dispose() }
+        }
     }
     $p.AddPolygon([System.Drawing.PointF[]]$m.Play)
     $G.FillPath($Brush, $p)
+    } finally { $p.Dispose() }
 }
 
 # Загрузчик: стрелка вниз в кольце. Числа — в единицах мастера 256×256; у мелких
@@ -89,17 +95,23 @@ function Add-ArrowGlyph($G, $Brush, [int]$Size) {
     $s = $Size / 256.0
     $c = 128.0 * $s
     $ring = New-Object System.Drawing.Pen($Brush, [single]($ringW * $s))
-    $G.DrawEllipse($ring, [single]($c - $R * $s), [single]($c - $R * $s), [single](2 * $R * $s), [single](2 * $R * $s))
+    try { $G.DrawEllipse($ring, [single]($c - $R * $s), [single]($c - $R * $s), [single](2 * $R * $s), [single](2 * $R * $s)) }
+    finally { $ring.Dispose() }
     $pen = New-Object System.Drawing.Pen($Brush, [single]($arrowW * $s))
     $pen.StartCap = 'Round'; $pen.EndCap = 'Round'; $pen.LineJoin = 'Round'
     $tip = $c + $A * $s
     $wing = 0.8 * $A * $s
-    $G.DrawLine($pen, (Pt $c ($c - $A * $s)), (Pt $c $tip))
-    $G.DrawLines($pen, [System.Drawing.PointF[]]@((Pt ($c - $wing) ($tip - $wing)), (Pt $c $tip), (Pt ($c + $wing) ($tip - $wing))))
+    try {
+        $G.DrawLine($pen, (Pt $c ($c - $A * $s)), (Pt $c $tip))
+        $G.DrawLines($pen, [System.Drawing.PointF[]]@((Pt ($c - $wing) ($tip - $wing)), (Pt $c $tip), (Pt ($c + $wing) ($tip - $wing))))
+    } finally { $pen.Dispose() }
 }
 
 function New-IconFrame([string]$App, [int]$Size) {
     $bmp = New-Object System.Drawing.Bitmap($Size, $Size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $g = $null
+    $tile = $null; $white = $null; $shape = $null
+    try {
     $g = [System.Drawing.Graphics]::FromImage($bmp)
     $g.SmoothingMode = 'AntiAlias'
     # Half: целая координата — граница пикселя, и край плашки по сетке остаётся резким.
@@ -114,12 +126,21 @@ function New-IconFrame([string]$App, [int]$Size) {
         (Pt 0 0), (Pt $Size $Size),
         [System.Drawing.ColorTranslator]::FromHtml($colors[0]),
         [System.Drawing.ColorTranslator]::FromHtml($colors[1]))
-    $g.FillPath($tile, (New-RoundRect $margin $margin $side $side ($side * 0.22)))
+    $shape = New-RoundRect $margin $margin $side $side ($side * 0.22)
+    $g.FillPath($tile, $shape)
 
     $white = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)
     if ($App -eq 'converter') { Add-FilmGlyph $g $white $Size } else { Add-ArrowGlyph $g $white $Size }
-    $g.Dispose()
     return $bmp
+    } catch {
+        $bmp.Dispose()
+        throw
+    } finally {
+        if ($shape) { $shape.Dispose() }
+        if ($white) { $white.Dispose() }
+        if ($tile) { $tile.Dispose() }
+        if ($g) { $g.Dispose() }
+    }
 }
 
 # Кадр как DIB внутри ICO: BITMAPINFOHEADER с удвоенной высотой, строки BGRA снизу

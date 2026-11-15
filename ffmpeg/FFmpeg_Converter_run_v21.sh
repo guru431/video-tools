@@ -79,6 +79,7 @@ read_config() {
 				'"'*'"'*|"'"*"'"*)
 					_q="${value:0:1}"; value="${value:1}"
 					_qhead="${_q}${value%%"$_q"*}${_q}"; value="${value#*"$_q"}" ;;
+				'"'*|"'"*) _qhead="$value"; value="" ;;
 			esac
 			if [[ "$value" == *" #"* ]]; then
 				value="${value%% #*}"
@@ -259,7 +260,7 @@ ffconv_doctor() {
 	echo "  -------------- -------- -------------------------------------------"
 
 	local rc=0 p v
-	if p="$(command -v "$ffmpeg" 2>/dev/null)"; then
+	if p="$(command -v "$ffmpeg" 2>/dev/null)" || { [ -f "$ffmpeg" ] && p="$ffmpeg"; }; then
 		v="$("$ffmpeg" -version 2>/dev/null | head -1)"
 		printf '  %-14s %-8s %s\n' "ffmpeg" "есть" "${v:-$p}"
 	else

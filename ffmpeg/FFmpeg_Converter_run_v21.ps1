@@ -39,6 +39,7 @@ function Remove-ConfigComment {
 	param([string]$Value)
 	$m = [regex]::Match($Value, '^("[^"]*"|''[^'']*'')')
 	if ($m.Success) { return $m.Value + ($Value.Substring($m.Length) -replace '\s+#.*', '') }
+	if ($Value -match '^["'']') { return $Value }
 	return ($Value -replace '\s+#.*', '')
 }
 

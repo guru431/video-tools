@@ -422,7 +422,7 @@ function Invoke-RemoteHttpRetry {
 		[int]$TimeoutMs = 60000
 	)
 	$tries = if ($env:REMOTE_HTTP_RETRIES) { [int]$env:REMOTE_HTTP_RETRIES } else { 4 }
-	$pause = if ($env:REMOTE_RETRY_SECONDS) { [int]$env:REMOTE_RETRY_SECONDS } else { 3 }
+	$pause = Get-RemoteRetryDelay
 	for ($try = 1; ; $try++) {
 		$r = Invoke-RemoteHttp $Method $Path $Body $Headers $OutFile $InBytes $TimeoutMs
 		if ($r.Code -ge 200 -and $r.Code -le 204) { return $r }
@@ -431,8 +431,21 @@ function Invoke-RemoteHttpRetry {
 		$waitS = [Math]::Min($pause, 60)
 		Write-Host "[ПРЕДУПРЕЖДЕНИЕ] Служба ответила HTTP $($r.Code) — повтор через ${waitS}с (попытка $($try + 1) из $tries)."
 		Start-Sleep -Seconds $waitS
-		$pause = $pause * 2
+		$pause = $waitS * 2
 	}
+}
+
+function Get-RemoteRetryDelay {
+	$value = $env:REMOTE_RETRY_SECONDS
+	if (-not $value) { return 3 }
+	if ($value -cnotmatch '^[0-9]+$') {
+		Write-Host '[ПРЕДУПРЕЖДЕНИЕ] REMOTE_RETRY_SECONDS: ожидается целое число секунд; используется 3.'
+		return 3
+	}
+	$value = $value.TrimStart('0')
+	if (-not $value) { return 0 }
+	if ($value.Length -gt 2) { return 60 }
+	return [Math]::Min([int]$value, 60)
 }
 
 function Invoke-RemotePreflight {
@@ -823,7 +836,7 @@ function Send-RemoteUpload {
 				if (-not (Test-RemoteRetryableCode $r.Code)) { break }
 				if ($try -lt $tries) {
 					Write-Host "[ПРЕДУПРЕЖДЕНИЕ] Повтор отправки куска $offset (попытка $($try + 1) из $tries)."
-					Start-Sleep -Seconds $(if ($env:REMOTE_RETRY_SECONDS) { [int]$env:REMOTE_RETRY_SECONDS } else { 3 })
+					Start-Sleep -Seconds (Get-RemoteRetryDelay)
 				}
 			}
 			if (-not $sent) {

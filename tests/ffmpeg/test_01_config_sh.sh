@@ -213,6 +213,17 @@ assert_contains "пауза — только при интерактивном s
     'if [ -t 0 ]; then read -r -p "Нажмите [Enter], чтобы выйти..." _; fi' "$src_run"
 
 # ── Cleanup ───────────────────────────────────────────────────
+suite "doctor: выбранный локальный ffmpeg.exe найден без command -v"
+_doctor_file="$(mktemp "${TMPDIR:-/tmp}/doctor_exe_XXXXXX")"
+_doctor_out=$(
+    ffmpeg="$_doctor_file"; remote_enabled=no
+    command() { return 1; }
+    ffconv_doctor
+); _doctor_rc=$?
+assert_eq "локальный файл — код 0" "0" "$_doctor_rc"
+assert_not_contains "ffmpeg не объявлен отсутствующим" "КОНВЕРТАЦИЯ НЕВОЗМОЖНА" "$_doctor_out"
+rm -f "$_doctor_file"
+
 rm -f "$CONFIG_FILE"
 
 summary

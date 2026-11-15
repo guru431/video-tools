@@ -101,6 +101,7 @@ exit 0
 VOTEOF
 cat > "$W9/bin/ffmpeg" <<'FFEOF'
 #!/bin/bash
+[ -n "${MOCK_AUDIO_LOG:-}" ] && printf '%s\n' "$*" >> "$MOCK_AUDIO_LOG"
 for last in "$@"; do :; done
 touch "$last" 2>/dev/null
 exit 0
@@ -115,7 +116,7 @@ run_tr_f9() {
         source "$SH_SCRIPT"
         export PATH="$W9/bin:$PATH"
         VOT_BIN="$W9/bin/vot"
-        FFPROBE="$W9/bin/ffprobe_missing_$$"   # не существует
+        FFPROBE="${TEST_AUDIO_PROBE:-$W9/bin/ffprobe_missing_$$}"
         translate_audio "$W9/vid/clip.mp4" "http://u" ru live "$mode" en 0.3 1.0 "" 2>&1
     )
 }
@@ -129,6 +130,12 @@ OUT=$(MOCK_VOT_MULTI=1 run_tr_f9 mix); RC=$?
 assert_eq "SH: несколько mp3 → отказ" "1" "$RC"
 assert_contains "SH: объяснён неоднозначный перевод" "найдено несколько mp3" "$OUT"
 assert_not_contains "SH: несколько mp3 не выдаются за успех" "Перевод добавлен" "$OUT"
+printf '#!/bin/bash\nexit 0\n' > "$W9/bin/ffprobe"
+chmod +x "$W9/bin/ffprobe"
+OUT=$(TEST_AUDIO_PROBE="$W9/bin/ffprobe" MOCK_AUDIO_LOG="$W9/audio.log" run_tr_f9 dual_track); RC=$?
+assert_eq "SH: dual_track без оригинального звука → успех" "0" "$RC"
+assert_contains "SH: исходное аудио необязательно" "-map 0:a?" "$(cat "$W9/audio.log")"
+assert_contains "SH: перевод — первая аудиодорожка" "-c:a:0 aac" "$(cat "$W9/audio.log")"
 rm -rf "$W9"
 
 # ══════════════════════════════════════════════════════════════

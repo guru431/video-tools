@@ -911,8 +911,12 @@ function Write-Manifest {
 	$tmp = "$ManifestPath.tmp"
 	try {
 		[System.IO.File]::WriteAllLines($tmp, $lines)
-		Move-Item -LiteralPath $tmp -Destination $ManifestPath -Force
-	} catch {}
+		Move-Item -LiteralPath $tmp -Destination $ManifestPath -Force -ErrorAction Stop
+		return $true
+	} catch {
+		Log-Msg "FAIL" "Не удалось записать manifest: $ManifestPath; выходы прошлого прогона сохранены: $_"
+		return $false
+	}
 }
 
 # Помимо результата ставит $script:ManifestStale = $true, когда manifest законченный,
@@ -1921,7 +1925,10 @@ function Encode-File {
 	if ($dry_run -eq "yes") {
 		if (-not $script:anyFail) { Remove-ManifestOutputs $oldOutputs $manifest $full_path $current_format_out $plannedOutputs }
 	} elseif (-not $script:anyFail -and $script:produced.Count -gt 0) {
-		Write-Manifest $manifest $full_path $file_sig $script:produced
+		if (-not (Write-Manifest $manifest $full_path $file_sig $script:produced)) {
+			$script:anyFail = $true; $script:countFail++
+			return
+		}
 		# D2/S11. Хвост прошлого прогона — только теперь, когда все части нового на
 		# месте: при провале любой части старые выходы не трогаются вовсе.
 		Remove-ManifestOutputs $oldOutputs $manifest $full_path $current_format_out $plannedOutputs

@@ -88,6 +88,8 @@ Mixed_Case = mc
 quoted_hash = "C:/video #1" # комментарий
 quoted_hash_sq = 'a #b.log'
 quoted_tail = "x" y # z
+unclosed_dq = "C:/video #1
+unclosed_sq = 'a #b.log
 no_eq
 no_eq = after
 EOCONFIG
@@ -113,7 +115,7 @@ export MY_AMP_VAR="a=1&b=2"
 # mixed_case: ключ `Mixed_Case` в файле — SH сравнивает через =~ под nocasematch,
 # и bash применяет эту опцию и к =~ (ревью 2026-09-26 утверждало обратное).
 KEYS=(embed_eq inline_cmt hash_val spaced var_ref quoted_dq quoted_sq dup_key bad_name digit_name amp_ref mixed_case
-      quoted_hash quoted_hash_sq quoted_tail no_eq)
+      quoted_hash quoted_hash_sq quoted_tail unclosed_dq unclosed_sq no_eq)
 
 # ══════════════════════════════════════════════════════════════
 suite "Кросс-парсерный паритет: SH read_config vs PS1 Read-Config"
@@ -164,6 +166,8 @@ assert_eq "quoted_hash: ' #' в кавычках сохранён, коммен�
 assert_eq "quoted_hash_sq: то же в одинарных кавычках" "a #b.log" "$(read_config quoted_hash_sq tricky '')"
 # Хвост после закрывающей кавычки — обычный текст: кавычки не снимаются, комментарий режется.
 assert_eq "quoted_tail: текст после кавычек остаётся как есть" '"x" y' "$(read_config quoted_tail tricky '')"
+assert_eq "незакрытые двойные кавычки: значение целиком" '"C:/video #1' "$(read_config unclosed_dq tricky '')"
+assert_eq "незакрытые одинарные кавычки: значение целиком" "'a #b.log" "$(read_config unclosed_sq tricky '')"
 # Строка без '=' не присваивает и не «занимает» ключ: действует следующая.
 assert_eq "no_eq: строка без '=' пропущена" "after" "$(read_config no_eq tricky '')"
 # patsub_replacement выключается только на время разбора и возвращается как был.
@@ -210,7 +214,7 @@ PSEOF
     _rcc_out=$($PS_CMD -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$_rcc_ps_w" \
         -Cli "$RUN_PS1_WIN" -Gui "$_rcc_gui_w" 2>&1 | tr -d '\r')
     rm -f "$_rcc_ps"
-    _rcc_want='"C:/video #1"|'"'a #b.log'"'|"x" y|value|my#file|"open'
+    _rcc_want='"C:/video #1"|'"'a #b.log'"'|"x" y|value|my#file|"open #x'
     assert_contains "CLI: комментарий вне кавычек" "CLI=$_rcc_want" "$_rcc_out"
     assert_contains "GUI: тот же результат"        "GUI=$_rcc_want" "$_rcc_out"
 else

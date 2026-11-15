@@ -263,7 +263,7 @@ assert_contains "atempo 1.5 (in-range) → atempo=1.5"  "af=atempo=1.5"  "$resul
 
 # F15: невалидная скорость отвергается (errorlevel 1), а не вешает :_bt_hi/:_bt_lo.
 # Без валидации 0 делится в 0, а отрицательное расходится — цикл не сходится никогда.
-for bad in 0 -1 abc 150; do
+for bad in 0 -1 abc 150 4294968.0; do
     result=$(atempo_cmd "$bad")
     assert_contains "atempo '$bad' → REJECTED (F15)" "af=REJECTED" "$result"
 done

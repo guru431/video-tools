@@ -467,8 +467,7 @@ assert_contains "-f использует muxer_out"  '-f !muxer_out!'  "$src_cmd
 assert_contains "split_by_silence fallback warn"  "split_by_silence недоступен"  "$src_cmd"
 # validity-check существующего выхода
 assert_contains "validity-check -f null"  '-f null - >nul 2>&1'  "$src_cmd"
-# extract_audio: первая строка Audio (if not defined audio_line)
-assert_contains "extract_audio первая строка"  'if not defined audio_line set "audio_line=%%c"'  "$src_cmd"
+# Выбор первой настоящей аудиодорожки проверяет CMD smoke-тест с несколькими потоками.
 # субтитры: backslash → forward slash (нет ошибочного \'\:)
 assert_not_contains "нет ошибочного экранирования \\'\\:"  ":=\\'\\:"  "$src_cmd"
 # octal-защита %time% (replace space->0)

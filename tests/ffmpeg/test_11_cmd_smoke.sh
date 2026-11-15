@@ -2,7 +2,7 @@
 # ============================================================
 # test_11_cmd_smoke.sh — End-to-end smoke-тест FFmpeg_Converter_script.cmd
 # Полный прогон script.cmd (dry_run=yes) на временной папке с фейковым
-# sample.mp4 и мок-ffmpeg.bat. Ловит фатальные parse errors CMD
+# sample.mp4 и мок-ffmpeg.exe. Ловит фатальные parse errors CMD
 # (":: внутри блоков", label внутри for /r), из-за которых скрипт
 # умирал с ". was unexpected at this time." до обработки первого файла.
 # ============================================================
@@ -36,7 +36,7 @@ printf 'fake video data' > "$TMP_DIR/src/50% off.mp4"
 # без call, а вызов батника без call в CMD обрывает вызывающий скрипт.
 # Собираем крошечный exe через PowerShell Add-Type (.NET csc).
 WIN_BIN_FOR_PS=$(cygpath -w "$TMP_DIR/bin")
-powershell -NoProfile -Command "Add-Type -TypeDefinition 'public class M{public static int Main(string[] a){System.Console.Error.WriteLine(\"    title: Audio: not_a_stream\");System.Console.Error.WriteLine(\"  Duration: 00:00:10.00, start: 0.000000, bitrate: 1000 kb/s\");System.Console.Error.WriteLine(\"    Stream #0:1(und): Audio: aac (LC), 48000 Hz, stereo, fltp, 128 kb/s\");System.Console.WriteLine(\"ffmpeg version 6.0-mock\");return 0;}}' -OutputAssembly '$WIN_BIN_FOR_PS\\ffmpeg.exe' -OutputType ConsoleApplication" >/dev/null 2>&1
+powershell -NoProfile -Command "Add-Type -TypeDefinition 'public class M{public static int Main(string[] a){System.Console.Error.WriteLine(\"    title: Audio: not_a_stream\");System.Console.Error.WriteLine(\"  Duration: 00:00:10.00, start: 0.000000, bitrate: 1000 kb/s\");System.Console.Error.WriteLine(\"    Stream #0:1(und): Audio: aac (LC), 48000 Hz, stereo, fltp, 128 kb/s\");System.Console.Error.WriteLine(\"    Stream #0:2(eng): Audio: mp3, 48000 Hz, stereo, fltp, 128 kb/s\");System.Console.WriteLine(\"ffmpeg version 6.0-mock\");return 0;}}' -OutputAssembly '$WIN_BIN_FOR_PS\\ffmpeg.exe' -OutputType ConsoleApplication" >/dev/null 2>&1
 if [ ! -f "$TMP_DIR/bin/ffmpeg.exe" ]; then
     skip "Все CMD smoke-тесты" "не удалось собрать мок ffmpeg.exe (Add-Type)"
     rm -rf "$TMP_DIR"
@@ -164,7 +164,7 @@ assert_contains "extract dry-run: -c:a copy" "-c:a copy" "$SMOKE_OUT"
 # Расширение — по кодеку из строки Audio. PATH здесь унаследован от Git Bash, где
 # первым стоит MSYS find (так же у пользователя с «Unix tools» Git в PATH): голый
 # `find "Audio:"` искал ФАЙЛ с таким именем, строка терялась, и выход шёл в .mka.
-assert_contains "extract dry-run: Audio в метаданных пропущен, aac → .m4a" "sample.m4a" "$SMOKE_OUT"
+assert_contains "extract dry-run: первая Audio-дорожка aac → .m4a, метаданные пропущены" "sample.m4a" "$SMOKE_OUT"
 
 # F7: overwrite_existing=yes — блок удаления парсится, обработка доходит
 build_and_run 'set "overwrite_existing=yes"'

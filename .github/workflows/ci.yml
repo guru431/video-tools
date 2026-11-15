@@ -57,10 +57,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # STRICT_SKIP=1: падаем, только если ЦЕЛЫЙ suite пропущен (значит cmd/powershell
-      # недоступен — реальный риск потери SH/CMD/PS1 паритета). Частичные окружения-скипы
-      # (напр. интеграционный тест без реального ffmpeg) — допустимы.
-      - name: Run full suite (whole CMD/PS1 suite skipped = failure)
+      - name: Install FFmpeg for integration fixtures
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          choco install ffmpeg --yes --no-progress --limit-output
+          if ($LASTEXITCODE -ne 0) { throw "FFmpeg installation failed (rc=$LASTEXITCODE)" }
+          ffmpeg -version
+          if ($LASTEXITCODE -ne 0) { throw "FFmpeg is not available (rc=$LASTEXITCODE)" }
+
+      # STRICT_SKIP=1: отсутствующий cmd/powershell/ffmpeg означает неполное покрытие.
+      # Ограничения ФС (например перевод строки в имени на Windows) допустимы.
+      - name: Run full suite (missing test tools = failure)
         shell: bash
         env:
           STRICT_SKIP: "1"
@@ -101,8 +109,8 @@ jobs:
           }
           if ($rc -ne 0) { exit 1 }
 
-      # Smoke-сборка: обе PS1-GUI собираются в EXE без ошибок (в отдельную папку,
-      # чтобы не трогать закоммиченные артефакты). $LASTEXITCODE проверяем после КАЖДОЙ
+      # Smoke-сборка: обе PS1-GUI собираются в EXE без ошибок. Закоммиченные артефакты
+      # проверены выше; smoke перезаписывает их рабочие копии. $LASTEXITCODE — после КАЖДОЙ
       # сборки: иначе провал первой маскируется успехом второй (rc перетирается).
       - name: Build EXEs (smoke)
         shell: pwsh

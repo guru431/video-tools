@@ -132,4 +132,23 @@ _bad_temp_rc=$?
 assert_eq "недоступный TMPDIR — отказ при старте" "1" "$_bad_temp_rc"
 assert_contains "недоступный TMPDIR — явный провал раннеру" "TESTS_RESULT pass=0 fail=1 skip=0" "$_bad_temp"
 
+suite "STRICT_SKIP: частичный пропуск инструмента — провал"
+# Execute the actual runner branch, including its early return and counters.
+_strict_block=$(sed -n '/^    if .*STRICT_SKIP.*skip.*-gt 0/,/^    fi/p' "$TESTS_DIR/run_tests.sh")
+exercise_strict_skip() {
+    local output="$1" skip=1 pass=2 suite_name=probe
+    eval "$_strict_block"
+}
+STRICT_SKIP=1
+TOTAL_FAIL=0; TOTAL_PASS=0; TOTAL_SKIP=0; SUITE_RESULTS=()
+exercise_strict_skip '  ○ PS1 (пропущен: PowerShell не найден)'
+assert_eq "нет инструмента при частичном покрытии → провал" "1" "$TOTAL_FAIL"
+assert_eq "успешные проверки учтены" "2" "$TOTAL_PASS"
+TOTAL_FAIL=0; TOTAL_PASS=0; TOTAL_SKIP=0; SUITE_RESULTS=()
+exercise_strict_skip '  ○ имя файла (пропущен: ФС не хранит перевод строки в имени)'
+assert_eq "ограничение файловой системы разрешено" "0" "$TOTAL_FAIL"
+exercise_strict_skip '  ✓ инструмент не найден в ожидаемом отрицательном сценарии'
+assert_eq "слова вне строки пропуска не влияют" "0" "$TOTAL_FAIL"
+unset STRICT_SKIP
+
 summary

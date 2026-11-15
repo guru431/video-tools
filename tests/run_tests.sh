@@ -194,9 +194,7 @@ run_suite() {
     # framework печатает их рядом с ○.
     if [ "${STRICT_SKIP:-0}" = "1" ] && [ "$skip" -gt 0 ]; then
         local why
-        why=$(printf '%s' "$output" | grep -oE '○[^
-]*(не найден|недоступен|не установлен|не был вызван)[^
-]*' | head -3)
+        why=$(printf '%s' "$output" | grep -oE '○.*(не найден|недоступен|не установлен|не был вызван).*' | head -3)
         if [ -n "$why" ]; then
             TOTAL_FAIL=$((TOTAL_FAIL + 1))
             SUITE_RESULTS+=("${RED}✗${NC} $suite_name (STRICT_SKIP: пропуск из-за отсутствующего инструмента)")

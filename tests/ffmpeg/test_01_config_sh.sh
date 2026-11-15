@@ -216,7 +216,11 @@ assert_contains "пауза — только при интерактивном s
 suite "doctor: выбранный локальный ffmpeg.exe найден без command -v"
 _doctor_file="$(mktemp "${TMPDIR:-/tmp}/doctor_exe_XXXXXX")"
 _doctor_out=$(
-    ffmpeg="$_doctor_file"; remote_enabled=no
+    # Эти значения читает ffconv_doctor из дот-сорснутого production-скрипта.
+    # shellcheck disable=SC2034
+    ffmpeg="$_doctor_file"
+    # shellcheck disable=SC2034
+    remote_enabled=no
     command() { return 1; }
     ffconv_doctor
 ); _doctor_rc=$?

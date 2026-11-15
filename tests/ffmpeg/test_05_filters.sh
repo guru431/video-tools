@@ -199,12 +199,16 @@ assert_eq "дробь Duration уже отсекается до ASR" "01:02:03" 
 
 suite "Сводка размеров: рост и округление"
 _size_block=$(sed -n '/^if \[ "$total_in_bytes" -gt 0 \]; then/,/^fi/p' "$SCRIPT")
+# Счётчики читает извлечённый из production блок сводки через eval.
+# shellcheck disable=SC2034
 total_in_bytes=1000; total_out_bytes=1156
 _size_out=$(eval "$_size_block")
 assert_contains "рост объёма назван увеличением" "увеличение 16%" "$_size_out"
+# shellcheck disable=SC2034
 total_out_bytes=756
 _size_out=$(eval "$_size_block")
 assert_contains "сжатие округляется" "сжатие 24%" "$_size_out"
+# shellcheck disable=SC2034
 total_out_bytes=744
 _size_out=$(eval "$_size_block")
 assert_contains "дробь больше половины округляется вверх" "сжатие 26%" "$_size_out"

@@ -1193,6 +1193,8 @@ else
     cat > "$D2_BIN/mock.cs" << 'CSEOF'
 public class M {
     public static int Main(string[] a) {
+        // Metadata deliberately precedes the real audio stream.
+        System.Console.Error.WriteLine("    title: Audio: not_a_stream");
         System.Console.Error.WriteLine("  Duration: 00:00:10.00, start: 0.000000, bitrate: 1000 kb/s");
         string log = System.Environment.GetEnvironmentVariable("MOCK_FFMPEG_LOG");
         if (log != null) System.IO.File.AppendAllText(log, string.Join(" ", a) + System.Environment.NewLine);

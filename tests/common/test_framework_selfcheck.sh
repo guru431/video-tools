@@ -116,4 +116,20 @@ _fail_out=$(TESTS_RESULT_FILE=/dev/null; fail "зонд" 'C:\vsc\x' 'D:\vsc\vide
 assert_contains "ожидаемое печатается буквально" 'C:\vsc\x'       "$_fail_out"
 assert_contains "полученное печатается буквально" 'D:\vsc\video\n' "$_fail_out"
 
+suite "Временные файлы: явный /tmp подчиняется TMPDIR"
+_temp_root=$(mktemp -d "${TMPDIR:-/tmp}/fw_local_XXXXXX")
+_temp_plain=$(TMPDIR="$_temp_root" mktemp /tmp/plain_XXXXXX)
+_temp_suffix=$(TMPDIR="$_temp_root" mktemp_suffix /tmp/suffix_ .txt)
+assert_eq "mktemp — в выбранном каталоге" "$_temp_root" "${_temp_plain%/*}"
+assert_eq "mktemp_suffix — в выбранном каталоге" "$_temp_root" "${_temp_suffix%/*}"
+assert_file_exists "mktemp создал файл" "$_temp_plain"
+assert_file_exists "mktemp_suffix создал файл" "$_temp_suffix"
+rm -f "$_temp_plain" "$_temp_suffix"
+rmdir "$_temp_root"
+
+_bad_temp=$(TMPDIR="${TMPDIR:-/tmp}/missing-fw-$$" bash -c 'source "$1"' _ "$TESTS_DIR/lib/framework.sh" 2>&1)
+_bad_temp_rc=$?
+assert_eq "недоступный TMPDIR — отказ при старте" "1" "$_bad_temp_rc"
+assert_contains "недоступный TMPDIR — явный провал раннеру" "TESTS_RESULT pass=0 fail=1 skip=0" "$_bad_temp"
+
 summary

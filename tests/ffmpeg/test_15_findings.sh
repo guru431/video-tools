@@ -711,7 +711,7 @@ assert_contains     "PS1: есть Test-ManifestComplete"           'function Te
 assert_contains     "PS1: manifest сверяет подпись настроек"    'settings=*'                        "$PS1_SRC2"
 assert_not_contains "PS1: (part.1) больше не признак готовности" 'Test-Path "$out_base (part.1).$current_format_out"' "$PS1_SRC2"
 assert_contains     "CMD: есть :manifest_is_complete"           ':manifest_is_complete'             "$CMD_SRC2"
-assert_contains     "CMD: state=complete дописывается последней" '>>"!_mf!.tmp" echo state=complete' "$CMD_SRC2"
+assert_contains     "CMD: state=complete дописывается последней" '>>"!_cm_mf!.tmp" echo state=complete' "$CMD_SRC2"
 assert_not_contains "CMD: (part.1) больше не признак готовности" 'if not exist "%folder_destination%!file_path!!file_name! (part.1).!current_format_out!" (' "$CMD_SRC2"
 
 # --- merge: -nostdin -y + temp + валидация (F23 был закрыт только в SH) ---
@@ -883,7 +883,7 @@ assert_contains "PS1: merge/extract/frame исключены"  '$merge_files -ne
 
 assert_contains "CMD: карта коллизий строится"        '_col_file'                "$src_cmd_col"
 assert_contains "CMD: группа конфликта помечается"    'Конфликт выходов'         "$src_cmd_col"
-assert_contains "CMD: проверка через findstr /x"      'findstr /i /x /c:"!_canon_out!"' "$src_cmd_col"
+assert_contains "CMD: проверка через findstr /x"      'findstr /l /i /x /c:"!_canon_find!"' "$src_cmd_col"
 assert_contains "CMD: temp-файл карты удаляется"      'if defined _col_file del' "$src_cmd_col"
 # Отсутствие PowerShell не должно молча выключать защиту.
 assert_contains "CMD: нет PowerShell → явный WARN"    'Не удалось построить карту конфликтов' "$src_cmd_col"
@@ -1268,6 +1268,13 @@ CSEOF
         assert_contains "CMD: ошибка manifest видна" "Не удалось записать manifest" "$D2_OUT"
         assert_contains "CMD: старый manifest сохранён" "settings=old" "$(cat "$DST/.ov.ffconv")"
         rmdir "$DST/.ov.ffconv.tmp"
+        d2_setup win
+        printf 'state=complete\r\n' > "$DST/.ov.ffconv.tmp"
+        d2_cmd "$W_IN" "$W_DST" "attrib +R \"$W_DST\\.ov.ffconv.tmp\""
+        cmd //c attrib -R "$W_DST\\.ov.ffconv.tmp" > /dev/null 2>&1
+        assert_file_exists "CMD: readonly manifest сохраняет старую часть" "$DST/ov (part.3).mp4"
+        assert_contains "CMD: readonly manifest — явный отказ" "Не удалось записать manifest" "$D2_OUT"
+        assert_contains "CMD: readonly manifest не подменяет старый" "settings=old" "$(cat "$DST/.ov.ffconv")"
         # Битый выход, который не удаляется (только чтение; так же — открытый в плеере):
         # del печатал ошибку, ворота «выхода нет» оставались закрыты, и битый файл
         # молча засчитывался в «пропущено». SH и PS1 после удаления кодируют всегда —

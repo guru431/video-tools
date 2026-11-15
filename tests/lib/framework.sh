@@ -11,12 +11,31 @@ TESTS_FAIL=0
 TESTS_SKIP=0
 CURRENT_SUITE=""
 
+# Явный /tmp в старых тестах тоже подчиняется TMPDIR: у Git Bash он может
+# отображаться в другой Windows TEMP при соседнем прогоне. Возвращаем абсолютный
+# путь из выбранного каталога, чтобы mktemp и cygpath видели один и тот же файл.
+mktemp() {
+    local arg
+    local -a args=()
+    for arg in "$@"; do
+        case "$arg" in
+            /tmp/*) arg="${TMPDIR:-/tmp}/${arg#/tmp/}" ;;
+            /tmp) arg="${TMPDIR:-/tmp}" ;;
+        esac
+        args+=("$arg")
+    done
+    command mktemp "${args[@]}"
+}
+
 # Счётчики держим в файле, а не в переменных. Тесты, которым нужна изоляция,
 # зовут pass/fail внутри `( ... )` — это subshell, и инкремент переменной там
 # умирает вместе с ним: файл печатал ✗, а summary честно рапортовал 0 провалов
 # и exit 0. Обычный subshell наследует переменную, поэтому дописывает в тот же
 # файл; export не нужен и вреден — иначе разные test-файлы слили бы счётчики.
-TESTS_RESULT_FILE="$(mktemp "${TMPDIR:-/tmp}/tests_counter_XXXXXX")"
+if ! TESTS_RESULT_FILE="$(mktemp "${TMPDIR:-/tmp}/tests_counter_XXXXXX")"; then
+    echo "TESTS_RESULT pass=0 fail=1 skip=0" >&2
+    exit 1
+fi
 TESTS_RESULT_OWNER=$$
 trap '[ "${TESTS_RESULT_OWNER:-}" = "$$" ] && rm -f "$TESTS_RESULT_FILE"' EXIT
 
@@ -38,6 +57,7 @@ _tally() { printf '%s\n' "$1" >> "$TESTS_RESULT_FILE"; }
 # стоили двух процессов на каждый из сотен вызовов набора.
 mktemp_suffix() {
     local prefix="$1" ext="${2:-}" f n=0 set_c=""
+    case "$prefix" in /tmp/*) prefix="${TMPDIR:-/tmp}/${prefix#/tmp/}" ;; esac
     case "$-" in *C*) ;; *) set -C; set_c=1 ;; esac
     while [ "$n" -lt 100 ]; do
         f="${prefix}${RANDOM}${RANDOM}${ext}"
@@ -63,7 +83,10 @@ mktemp_suffix() {
 # сетевого вызова, и наблюдающий тест провалится. Легитимные тесты перевода передают
 # мок через VOT_BIN/YTDLP_BIN и prepend'ят mocks-каталог — те имеют приоритет.
 if [ -z "${TEST_NET_GUARD_DIR:-}" ]; then
-    TEST_NET_GUARD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/tests_netguard_XXXXXX")"
+    if ! TEST_NET_GUARD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/tests_netguard_XXXXXX")"; then
+        echo "TESTS_RESULT pass=0 fail=1 skip=0" >&2
+        exit 1
+    fi
     TEST_NET_GUARD_OWNER=$$
     # printf, а не `cat <<`, и один chmod на все заглушки: это начало КАЖДОГО
     # тест-файла, а каждый лишний процесс здесь стоит десятки миллисекунд.

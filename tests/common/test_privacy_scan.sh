@@ -203,7 +203,10 @@ NOREPO=$(mktemp -d /tmp/test_pscan_norepo_XXXXXX)
 mkdir -p "$NOREPO/tools"
 cp "$SCANNER" "$NOREPO/tools/privacy-scan.sh"
 printf 'server = 10.1.2.3\n' > "$NOREPO/leak.txt"
-OUT=$(cd "$NOREPO" && bash tools/privacy-scan.sh 2>&1; printf 'EXIT=%s\n' "$?")
+# TMPDIR может лежать внутри проекта: запрещаем Git подхватить его родительский
+# репозиторий, иначе это уже не сценарий «вне git».
+_ceiling=$(cygpath -m "$PROJECT_DIR" 2>/dev/null || printf '%s' "$PROJECT_DIR")
+OUT=$(cd "$NOREPO" && GIT_CEILING_DIRECTORIES="$_ceiling" bash tools/privacy-scan.sh 2>&1; printf 'EXIT=%s\n' "$?")
 assert_not_contains "вне git-репозитория сканер НЕ печатает «чисто»" "privacy-scan: чисто" "$OUT"
 assert_not_contains "вне git-репозитория сканер НЕ возвращает 0" "EXIT=0" "$OUT"
 assert_contains "вне git-репозитория сказано, что проверка не выполнена" "ПРОВЕРКА НЕ ВЫПОЛНЕНА" "$OUT"

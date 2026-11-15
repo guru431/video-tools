@@ -836,7 +836,9 @@ rem а goto из тела for обрывал бы перечисление фа�
 		rem до кодирования). Обрабатывать нельзя: кто-то из группы затрёт чужой результат.
 		rem Ключи в карте — в нижнем регистре, findstr /i снимает разницу регистра.
 		if defined _col_file (
-			findstr /l /i /x /c:"!_canon_out!" "!_col_file!" >nul 2>&1 && (
+			rem FINDSTR разбирает обратные слеши даже с /l — шаблон требует удвоения.
+			set "_canon_find=!_canon_out:\=\\!"
+			findstr /l /i /x /c:"!_canon_find!" "!_col_file!" >nul 2>&1 && (
 				echo [FAIL] !pf_nx!: конфликт выходов — файл пропущен& call :log_msg "FAIL" "!full_path!: конфликт выходов - файл пропущен"
 				set /a "total_fail+=1"
 				goto :eof
@@ -1503,7 +1505,13 @@ set "_cm_mf=%~1"
 set "_cm_old=%~1.previous.!RANDOM!!RANDOM!"
 set "_cm_saved="
 if exist "!_cm_old!" goto :_cm_fail
->>"!_cm_mf!.tmp" echo state=complete
+rem Перенаправление в каталог может не установить errorlevel. Нельзя передавать
+rem такой путь в move: каталог заменил бы manifest, после чего ушли бы старые выходы.
+if exist "!_cm_mf!.tmp\" goto :_cm_fail
+if exist "!_cm_mf!\" goto :_cm_fail
+rem Пробел перед || попал бы в саму строку echo и сломал точную проверку ниже.
+>>"!_cm_mf!.tmp" echo state=complete|| goto :_cm_fail
+findstr /l /x /c:"state=complete" "!_cm_mf!.tmp" >nul 2>&1
 if errorlevel 1 goto :_cm_fail
 if exist "!_cm_mf!" (
 	copy /y "!_cm_mf!" "!_cm_old!" >nul 2>&1
